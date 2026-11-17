@@ -26,10 +26,10 @@ libssh2 from the packages feed.
   If enabled, firewall restrictions are the operator's responsibility.
 - `HTTP_200_TUNNEL=0` by default. A non-CONNECT HTTP 200 response is not
   treated as an SSH tunnel unless the legacy behavior is explicitly enabled.
-- `VERIFY_TLS=0` remains the compatibility default. TLS is encrypted but
-  certificate and hostname validation are not performed in this mode. Set
-  `VERIFY_TLS=1` when the endpoint has a valid certificate and the OpenWrt
-  CA store is installed.
+- `VERIFY_TLS=1` is the secure default. TLS certificate-chain and hostname
+  validation are enabled using the OpenWrt CA store. The profile option
+  `AllowInsecure` must explicitly map to `VERIFY_TLS=0`; TLS encryption remains
+  enabled, but certificate identity validation is skipped.
 - `HOSTKEY` optionally pins the SSH host-key fingerprint. Without a pin, the
   fingerprint is informational; server rotation is not blocked by a known_hosts
   database.

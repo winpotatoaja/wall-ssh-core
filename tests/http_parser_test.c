@@ -52,8 +52,182 @@ static int run_case(const char *name, const char *response,
     return failed;
 }
 
+static int run_followup_case(const char *name, const char *wire) {
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        fprintf(stderr, "[FAIL] %s: socketpair: %s\n", name, strerror(errno));
+        return 1;
+    }
+    upstream_ctx_t u = {.fd = sv[0]};
+    size_t len = strlen(wire);
+    if (len > sizeof(u.pre_buf)) {
+        fprintf(stderr, "[FAIL] %s: fixture too large\n", name);
+        close(sv[0]);
+        close(sv[1]);
+        return 1;
+    }
+    memcpy(u.pre_buf, wire, len);
+    u.pre_len = len;
+    int first = consume_one_http_response(&u, 0);
+    int failed = (first != 0 || u.tunnel_established);
+    int second = failed ? first : consume_one_http_response(&u, 0);
+    if (second != -1 || u.tunnel_established) failed = 1;
+    if (failed) {
+        fprintf(stderr, "[FAIL] %s: first_rc=%d second_rc=%d tunnel=%d\n",
+                name, first, second, u.tunnel_established);
+    } else {
+        printf("[PASS] %s\n", name);
+    }
+    close(sv[0]);
+    close(sv[1]);
+    return failed;
+}
+
+static int send_test_bytes(int fd, const char *data, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = send(fd, data + off, len - off, MSG_NOSIGNAL);
+        if (n > 0) off += (size_t)n;
+        else if (n < 0 && errno == EINTR) continue;
+        else return -1;
+    }
+    return 0;
+}
+
+static int run_fragmented_followup_case(const char *name,
+                                        const char *first_part,
+                                        const char *second_part) {
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        fprintf(stderr, "[FAIL] %s: socketpair: %s\n", name, strerror(errno));
+        return 1;
+    }
+    int flags = fcntl(sv[0], F_GETFL, 0);
+    if (flags < 0 || fcntl(sv[0], F_SETFL, flags | O_NONBLOCK) < 0) {
+        fprintf(stderr, "[FAIL] %s: nonblocking setup\n", name);
+        close(sv[0]);
+        close(sv[1]);
+        return 1;
+    }
+
+    upstream_ctx_t u = {.fd = sv[0]};
+    int failed = 0;
+    size_t first_len = strlen(first_part);
+    if (send_test_bytes(sv[1], first_part, first_len) < 0) {
+        fprintf(stderr, "[FAIL] %s: first write: %s\n", name, strerror(errno));
+        failed = 1;
+    }
+    int first_rc = failed ? -1 : consume_one_http_response(&u, 0);
+    if (!failed && (first_rc != -2 || u.tunnel_established)) {
+        fprintf(stderr, "[FAIL] %s: expected EAGAIN mid-body, rc=%d tunnel=%d\n",
+                name, first_rc, u.tunnel_established);
+        failed = 1;
+    }
+
+    if (!failed && send_test_bytes(sv[1], second_part, strlen(second_part)) < 0) {
+        fprintf(stderr, "[FAIL] %s: second write: %s\n", name, strerror(errno));
+        failed = 1;
+    }
+    int second_rc = failed ? -1 : consume_one_http_response(&u, 0);
+    if (!failed && (second_rc != 0 || u.tunnel_established)) {
+        fprintf(stderr, "[FAIL] %s: expected complete non-tunnel response, rc=%d tunnel=%d\n",
+                name, second_rc, u.tunnel_established);
+        failed = 1;
+    }
+
+    int third_rc = failed ? -1 : consume_one_http_response(&u, 0);
+    if (!failed && (third_rc != -1 || u.tunnel_established)) {
+        fprintf(stderr, "[FAIL] %s: trailing SSH bytes must be rejected, rc=%d tunnel=%d\n",
+                name, third_rc, u.tunnel_established);
+        failed = 1;
+    }
+
+    if (!failed) printf("[PASS] %s (EAGAIN -> body complete -> trailing data rejected)\n", name);
+    close(sv[0]);
+    close(sv[1]);
+    return failed;
+}
+
+static int run_ipv6_dial_regression(void) {
+    int listener = socket(AF_INET6, SOCK_STREAM, 0);
+    if (listener < 0) {
+        puts("[SKIP] IPv6 loopback unavailable for destination dial test");
+        return 0;
+    }
+    int one = 1;
+    setsockopt(listener, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one));
+    struct sockaddr_in6 addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin6_family = AF_INET6;
+    addr.sin6_addr = in6addr_loopback;
+    if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
+        listen(listener, 1) < 0) {
+        close(listener);
+        puts("[SKIP] IPv6 loopback is not configured in this test environment");
+        return 0;
+    }
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(listener, (struct sockaddr *)&addr, &addr_len) < 0) {
+        close(listener);
+        fprintf(stderr, "[FAIL] IPv6 dial test: getsockname: %s\n", strerror(errno));
+        return 1;
+    }
+    char port[16];
+    snprintf(port, sizeof(port), "%u", (unsigned)ntohs(addr.sin6_port));
+    int client = tcp_connect_host("::1", port);
+    if (client < 0) {
+        close(listener);
+        fprintf(stderr, "[FAIL] IPv6 SOCKS destination dialing failed\n");
+        return 1;
+    }
+    int accepted = accept(listener, NULL, NULL);
+    int failed = accepted < 0;
+    if (failed) fprintf(stderr, "[FAIL] IPv6 dial accept: %s\n", strerror(errno));
+    else puts("[PASS] SOCKS IPv6 destination dialing");
+    if (accepted >= 0) close(accepted);
+    close(client);
+    close(listener);
+    return failed;
+}
+
 static int run_core_state_regressions(void) {
     int failures = 0;
+
+    size_t parsed_hex = 0;
+    if (parse_strict_hex_size("10", &parsed_hex, MAX_HTTP_SKIP_BODY) != 0 || parsed_hex != 16 ||
+        parse_strict_hex_size("10 garbage", &parsed_hex, MAX_HTTP_SKIP_BODY) == 0) {
+        fprintf(stderr, "[FAIL] chunk-size parser rejects non-hex suffixes\n");
+        failures++;
+    } else {
+        puts("[PASS] chunk-size parser rejects non-hex suffixes");
+    }
+
+    upstream_ctx_t chunk_guard = {0};
+    if (http_chunk_total_add(&chunk_guard, MAX_HTTP_SKIP_BODY - 1U) != 0 ||
+        http_chunk_total_add(&chunk_guard, 1U) != 0 ||
+        http_chunk_total_add(&chunk_guard, 1U) == 0) {
+        fprintf(stderr, "[FAIL] cumulative chunked-body limit is enforced\n");
+        failures++;
+    } else {
+        puts("[PASS] cumulative chunked-body limit is enforced");
+    }
+
+    uint8_t socks_req[4] = {0x05, 0x01, 0x00, 0x01};
+    uint8_t domain_req_ok[10] = {0x05, 0x01, 0x00, 0x03, 0x03, 'a', 'b', 'c', 0x00, 0x50};
+    uint8_t domain_req_short[5] = {0x05, 0x01, 0x00, 0x03, 0x03};
+    uint8_t domain_req_nul[10] = {0x05, 0x01, 0x00, 0x03, 0x03, 'a', 0x00, 'c', 0x00, 0x50};
+    if (!socks5_reserved_valid(socks_req, sizeof(socks_req)) ||
+        socks5_reserved_valid((uint8_t[]){0x05,0x01,0x01,0x01}, 4) ||
+        !socks5_domain_valid(domain_req_ok, sizeof(domain_req_ok)) ||
+        socks5_domain_valid(domain_req_short, sizeof(domain_req_short)) ||
+        socks5_domain_valid(domain_req_nul, sizeof(domain_req_nul))) {
+        fprintf(stderr, "[FAIL] SOCKS5 RSV and domain validation\n");
+        failures++;
+    } else {
+        puts("[PASS] SOCKS5 RSV and domain validation");
+    }
+
+    failures += run_ipv6_dial_regression();
 
     upstream_ctx_t peek = {
         .ssl_want_events = EPOLLOUT,
@@ -136,10 +310,42 @@ int main(void) {
         "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
         0, 0, 0, 0, 0);
 
+    failures += run_followup_case(
+        "GET 200 Content-Length zero followed by SSH is rejected",
+        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\nSSH-2.0-should-not-be-a-tunnel\r\n");
+
+    failures += run_followup_case(
+        "GET 200 framed body followed by SSH is rejected",
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhelloSSH-2.0-should-not-be-a-tunnel\r\n");
+
+    failures += run_followup_case(
+        "GET 200 chunked body followed by SSH is rejected",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\nSSH-2.0-should-not-be-a-tunnel\r\n");
+
+    failures += run_fragmented_followup_case(
+        "fragmented Content-Length body preserves parser state across EAGAIN",
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhe",
+        "lloSSH-2.0-should-not-be-a-tunnel\r\n");
+
+    failures += run_fragmented_followup_case(
+        "fragmented chunked body preserves parser state across EAGAIN",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhe",
+        "llo\r\n0\r\n\r\nSSH-2.0-should-not-be-a-tunnel\r\n");
+
     failures += run_case(
         "GET 200 chunked body is drained, not a tunnel",
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n",
         0, 0, 0, 0, 0);
+
+    failures += run_case(
+        "malformed chunk-size suffix is rejected",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10 garbage\r\n",
+        0, 0, 0, -1, 0);
+
+    failures += run_case(
+        "single chunk above the body limit is rejected",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1000001\r\n",
+        0, 0, 0, -1, 0);
 
     failures += run_case(
         "GET 200 close-delimited body fails closed at EOF",
@@ -177,6 +383,11 @@ int main(void) {
         0, 1, 0, 0, 1);
 
     failures += run_case(
+        "bare SSH banner without an HTTP response is accepted",
+        "SSH-2.0-direct-server\r\n",
+        0, 0, 0, 0, 1);
+
+    failures += run_case(
         "malformed HTTP version is rejected",
         "HTTP/1.X 200 OK\r\nContent-Length: 0\r\n\r\n",
         0, 0, 1, -1, 0);
@@ -200,6 +411,6 @@ int main(void) {
         fprintf(stderr, "HTTP parser regression tests failed: %d\n", failures);
         return 1;
     }
-    puts("All HTTP parser and core state regression tests passed.");
+    puts("All HTTP parser, SOCKS validation, IPv6 and core state regression tests passed.");
     return 0;
 }

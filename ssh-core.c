@@ -89,6 +89,7 @@ typedef struct {
     int      http_in_chunked;
     int      http_chunk_state; /* 0=size, 1=data, 2=delim, 3=trailers */
     size_t   http_chunk_rem;
+    size_t   http_chunk_total;
     time_t   last_activity;
 } upstream_ctx_t;
 
@@ -473,19 +474,16 @@ static int parse_strict_dec_size(const char *s, size_t *out, size_t max_val) {
 }
 
 static int parse_strict_hex_size(const char *s, size_t *out, size_t max_val) {
-    if (!s || !isxdigit((unsigned char)s[0])) return -1;
+    if (!s || !isxdigit((unsigned char)s[0]) || !out) return -1;
     size_t val = 0;
     for (const char *p = s; *p; p++) {
         unsigned char ch = (unsigned char)*p;
-        if (!isxdigit(ch)) {
-            if (ch == ';' || ch == ' ' || ch == '\t') break;
-            return -1;
-        }
+        if (!isxdigit(ch)) return -1;
         size_t d;
         if (ch >= '0' && ch <= '9') d = (size_t)(ch - '0');
         else if (ch >= 'a' && ch <= 'f') d = (size_t)(ch - 'a' + 10);
         else d = (size_t)(ch - 'A' + 10);
-        if (val > (max_val - d) / 16U) return -1;
+        if (d > max_val || val > (max_val - d) / 16U) return -1;
         val = val * 16U + d;
     }
     *out = val;
@@ -1147,6 +1145,24 @@ static int http_header_has_token(const char *value,const char *token) {
     } return 0;
 }
 /* 0 parsed/non-tunnel, -2 EAGAIN, -1 malformed or closed. */
+static int http_chunk_total_add(upstream_ctx_t *u, size_t chunk_size) {
+    if (!u || u->http_chunk_total > MAX_HTTP_SKIP_BODY ||
+        chunk_size > MAX_HTTP_SKIP_BODY - u->http_chunk_total) return -1;
+    u->http_chunk_total += chunk_size;
+    return 0;
+}
+
+static int socks5_reserved_valid(const uint8_t *request, size_t len) {
+    return request && len >= 3 && request[2] == 0;
+}
+
+static int socks5_domain_valid(const uint8_t *request, size_t request_len) {
+    if (!request || request_len < 5) return 0;
+    size_t domain_len = request[4];
+    if (domain_len == 0 || request_len < 5U + domain_len + 2U) return 0;
+    return memchr(request + 5, '\0', domain_len) == NULL;
+}
+
 static int consume_one_http_response(upstream_ctx_t *u,int allow_non_tunnel) {
     if(u->tunnel_established)return 0;
     while(1){
@@ -1164,6 +1180,7 @@ static int consume_one_http_response(upstream_ctx_t *u,int allow_non_tunnel) {
                 char line[256];memcpy(line,u->pre_buf+u->pre_off,len);line[len]='\0';if(len&&line[len-1]=='\r')line[len-1]='\0';
                 char *semi=strchr(line,';');if(semi)*semi='\0';trim_ws(line);
                 size_t chunk=0;if(parse_strict_hex_size(line,&chunk,MAX_HTTP_SKIP_BODY)<0)return -1;
+                if(chunk>0 && http_chunk_total_add(u,chunk)<0)return -1;
                 u->pre_off+=len+1;if(chunk==0)u->http_chunk_state=3;else{u->http_chunk_rem=chunk;u->http_chunk_state=1;}
             } else if(u->http_chunk_state==1){
                 size_t a=u->pre_len-u->pre_off;if(a){size_t n=a<u->http_chunk_rem?a:u->http_chunk_rem;u->pre_off+=n;u->http_chunk_rem-=n;if(!u->http_chunk_rem)u->http_chunk_state=2;}
@@ -1181,16 +1198,17 @@ static int consume_one_http_response(upstream_ctx_t *u,int allow_non_tunnel) {
                 const uint8_t *nl=find_bytes(u->pre_buf+u->pre_off,u->pre_len-u->pre_off,"\n",1);
                 if(!nl){if(u->pre_len-u->pre_off>4096)return -1;ssize_t r=pre_read_more(u);if(r==-2)return -2;if(r<=0)return -1;continue;}
                 size_t len=(size_t)(nl-(u->pre_buf+u->pre_off));int empty=!len||(len==1&&u->pre_buf[u->pre_off]=='\r');u->pre_off+=len+1;
-                if(empty){u->http_in_chunked=0;u->http_chunk_state=0;if(u->http_pending_tunnel){u->http_pending_tunnel=0;u->tunnel_established=1;}return 0;}
+                if(empty){u->http_in_chunked=0;u->http_chunk_state=0;u->http_chunk_total=0;if(u->http_pending_tunnel){u->http_pending_tunnel=0;u->tunnel_established=1;}return 0;}
             } continue;
         }
         while(1){
             size_t a=u->pre_len-u->pre_off;const uint8_t *cur=u->pre_buf+u->pre_off;
             if(a){size_t n=a<5?a:5;if(memcmp(cur,"HTTP/",n)!=0){
+                if(!allow_non_tunnel && u->last_http_code >= 100 && u->last_http_code < 300) return -1;
                 if(!allow_non_tunnel&&u->last_http_code>=300){size_t sn=a<4?a:4;if(memcmp(cur,"SSH-",sn)!=0)return -1;if(a>=4){u->tunnel_established=1;return 0;}}
                 else{u->tunnel_established=1;return 0;}
             }else if(a>=5)break;}
-            ssize_t r=pre_read_more(u);if(r==-2)return -2;if(r==0){if(u->pre_len>u->pre_off&&(allow_non_tunnel||u->last_http_code<300)){u->tunnel_established=1;return 0;}return -1;}if(r<0)return -1;
+            ssize_t r=pre_read_more(u);if(r==-2)return -2;if(r==0){if(u->pre_len>u->pre_off&&(allow_non_tunnel||u->last_http_code==0)){u->tunnel_established=1;return 0;}return -1;}if(r<0)return -1;
         }
         const uint8_t *start=u->pre_buf+u->pre_off;size_t avail=u->pre_len-u->pre_off,delim=0;
         const uint8_t *endp=find_bytes(start,avail,"\r\n\r\n",4);if(endp)delim=4;else{endp=find_bytes(start,avail,"\n\n",2);if(endp)delim=2;}
@@ -1227,6 +1245,7 @@ static int consume_one_http_response(upstream_ctx_t *u,int allow_non_tunnel) {
          * never leak into the SSH stream. */
         int legacy_200_tunnel=(code==200&&u->allow_http_200_tunnel);
         if(chunked){
+            u->http_chunk_total=0;
             u->http_in_chunked=1;
             u->http_chunk_state=0;
             u->http_pending_tunnel=legacy_200_tunnel;
@@ -1371,41 +1390,97 @@ static int wait_ssh_nb(LIBSSH2_SESSION *session, upstream_ctx_t *u, long long de
 /* ============================================================
  * DIAL UPSTREAM (NON-BLOCKING CONNECT DENGAN TIMEOUT 10 DETIK)
  * ============================================================ */
+static int poll_tcp_connect_until(int fd, long long deadline_ms) {
+    while (!g_stop) {
+        long long remaining = deadline_ms - now_ms();
+        if (remaining <= 0) return 0;
+        int timeout_ms = remaining > 60000 ? 60000 : (int)remaining;
+        struct pollfd pfd = {.fd = fd, .events = POLLOUT};
+        int rc = poll(&pfd, 1, timeout_ms);
+        if (rc < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (rc == 0) continue;
+        if (pfd.revents & POLLNVAL) {
+            errno = EBADF;
+            return -1;
+        }
+        if (pfd.revents & (POLLERR | POLLHUP)) {
+            int so_error = 0;
+            socklen_t so_len = sizeof(so_error);
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) == 0 &&
+                so_error != 0) errno = so_error;
+            else errno = ECONNRESET;
+            return -1;
+        }
+        if (pfd.revents & POLLOUT) {
+            int so_error = 0;
+            socklen_t so_len = sizeof(so_error);
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) < 0) return -1;
+            if (so_error != 0) {
+                errno = so_error;
+                return -1;
+            }
+            return 1;
+        }
+    }
+    return -1;
+}
+
+static void close_connect_fd(int *fd) {
+    if (!fd || *fd < 0) return;
+    int old_fd = *fd;
+    *fd = -1;
+    (void)close(old_fd);
+}
+
+/*
+ * The single 10-second deadline covers all address connect attempts.
+ * getaddrinfo() is synchronous and completes before this deadline starts.
+ */
 static int tcp_connect_host(const char *host, const char *port) {
     struct addrinfo hints = {0}, *res = NULL;
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     int rc = getaddrinfo(host, port, &hints, &res);
     if (rc != 0 || !res) return -1;
 
     int fd = -1;
-    for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
-        fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (fd < 0) continue;
+    long long deadline = now_ms() + 10000;
+    /* Preserve IPv4-first behavior, then use any remaining time for IPv6. */
+    for (int pass = 0; pass < 2 && fd < 0 && !g_stop; pass++) {
+        for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
+            int is_ipv4 = (rp->ai_family == AF_INET);
+            if ((pass == 0 && !is_ipv4) || (pass == 1 && is_ipv4)) continue;
+            if (now_ms() >= deadline) goto connect_done;
 
-        tune_tcp_socket(fd);
-        if (set_nonblock(fd, 1) < 0) {
-            close(fd);
-            fd = -1;
-            continue;
-        }
+            fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+            if (fd < 0) continue;
 
-        int cr = connect(fd, rp->ai_addr, rp->ai_addrlen);
-        if (cr == 0) break;
-        if (errno == EINPROGRESS) {
-            long long deadline = now_ms() + 10000;
-            int pr = poll_fd_until(fd, POLLOUT, deadline);
-            if (pr > 0) {
-                int so_err = 0;
-                socklen_t slen = sizeof(so_err);
-                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_err, &slen) == 0 && so_err == 0) {
-                    break;
-                }
+            tune_tcp_socket(fd);
+            if (set_nonblock(fd, 1) < 0) {
+                close_connect_fd(&fd);
+                continue;
             }
+
+            int cr = connect(fd, rp->ai_addr, rp->ai_addrlen);
+            if (cr == 0) break;
+
+            int connect_errno = errno;
+            if (connect_errno == EINPROGRESS || connect_errno == EALREADY ||
+                connect_errno == EINTR || connect_errno == EWOULDBLOCK) {
+                int wait_rc = poll_tcp_connect_until(fd, deadline);
+                if (wait_rc > 0) break;
+                close_connect_fd(&fd);
+                if (wait_rc == 0) goto connect_done;
+                continue;
+            }
+
+            close_connect_fd(&fd);
         }
-        close(fd);
-        fd = -1;
     }
+connect_done:
     freeaddrinfo(res);
     return fd;
 }
@@ -1766,6 +1841,10 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
             send_socks_err_and_close(epfd, c, 0x07);
             return;
         }
+        if (!socks5_reserved_valid(c->req_buf, c->req_len)) {
+            send_socks_err_and_close(epfd, c, 0x01);
+            return;
+        }
         uint8_t atyp = c->req_buf[3];
         size_t need = 0;
         if (atyp == 0x01) {
@@ -1789,6 +1868,11 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
 
         if (c->req_len < need) {
             if (eof_hit || (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP))) remove_client(epfd, c);
+            return;
+        }
+
+        if (atyp == 0x03 && !socks5_domain_valid(c->req_buf, c->req_len)) {
+            send_socks_err_and_close(epfd, c, 0x01);
             return;
         }
 
@@ -2622,7 +2706,7 @@ int main(int argc, char **argv) {
         .fix_crlf = 1,
         .socks_addr = "127.0.0.1:1080",
         .keepalive_sec = 15,
-        .verify_tls = 0,
+        .verify_tls = 1,
         .allow_remote_socks = 0,
         .allow_http_200_tunnel = 0,
         .idle_timeout_sec = DEFAULT_IDLE_TIMEOUT,

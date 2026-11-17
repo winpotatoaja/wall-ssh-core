@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Reject unexpected non-HTTP bytes after a non-CONNECT HTTP 1xx/2xx response so
+  a completed HTTP 200 response cannot silently become an SSH tunnel when
+  HTTP_200_TUNNEL=0.
+- Parse chunk-size fields strictly and cap the aggregate chunked response body
+  at the same 16 MiB limit used for Content-Length bodies.
+- Validate the SOCKS5 request RSV byte and reject truncated or embedded-NUL
+  domain names only after the complete SOCKS5 request frame has arrived.
+- Enable IPv6 destination dialing for SOCKS5 IPv6 requests while preferring
+  IPv4 and bounding the total address-attempt period to 10 seconds.
+- Default TLS certificate and hostname verification to enabled
+  (VERIFY_TLS=1); profiles must explicitly opt into AllowInsecure.
+- Add native regressions for HTTP response sequencing, fragmented Content-Length
+  and chunked bodies across EAGAIN, strict chunk framing, cumulative chunk limits,
+  SOCKS request validation, and IPv6 dialing.
+- Use a connect-specific poller that rejects POLLERR/POLLHUP as connection
+  completion, closes failed descriptors on every path, and shares one 10-second
+  deadline across IPv4-first and IPv6 fallback attempts.
+- Bump the OpenWrt package release to r8.
+
 - Retry TLS EOF peeks on the readiness event requested by OpenSSL, without interleaving another libssh2 operation while the peek is pending; this prevents a writable-socket spin on `SSL_ERROR_WANT_WRITE`.
 - Suppress repeated idle-timeout handling while a relay is already marked `abort_on_pending` and waiting for a libssh2 operation to unwind.
 - Keep `DELAY` waits alive across the 60-second poll slices until the configured deadline expires.
