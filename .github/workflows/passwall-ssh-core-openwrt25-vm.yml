@@ -284,6 +284,8 @@ jobs:
           sha256sum /tmp/ssh-core-http/payload-1MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/payload-1MiB.sha256
           dd if=/dev/urandom of=/tmp/ssh-core-http/slow-download-32MiB.bin bs=1M count=32 status=none
           sha256sum /tmp/ssh-core-http/slow-download-32MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/slow-download-32MiB.sha256
+          dd if=/dev/urandom of=/tmp/ssh-core-http/half-close-upload-8MiB.bin bs=1M count=8 status=none
+          sha256sum /tmp/ssh-core-http/half-close-upload-8MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/half-close-upload-8MiB.sha256
 
           cat > /tmp/ssh-core-http-server.py <<'PY_SERVER'
           from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -310,6 +312,40 @@ jobs:
                       with open(os.path.join(ROOT, "slow-download-32MiB.bin"), "rb") as f:
                           body = f.read()
                       self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32768)
+                  elif self.path == "/half-close-server-eof-large":
+                      body = b"server-half-close-large-ok\n"
+                      expected_size = 8 * 1024 * 1024
+                      expected_sha = open(os.path.join(ROOT, "half-close-upload-8MiB.sha256")).read().strip()
+                      self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32768)
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(len(body)))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      self.wfile.write(body)
+                      self.wfile.flush()
+                      self.connection.shutdown(socket.SHUT_WR)
+                      print("[HALFCLOSE-LARGE] remote FIN sent; pausing reads to exhaust SSH window", flush=True)
+                      time.sleep(8.0)
+                      self.connection.settimeout(45.0)
+                      digest = hashlib.sha256()
+                      received = 0
+                      try:
+                          while received < expected_size:
+                              part = self.connection.recv(min(16384, expected_size - received))
+                              if not part:
+                                  break
+                              digest.update(part)
+                              received += len(part)
+                      except (TimeoutError, OSError):
+                          pass
+                      actual_sha = digest.hexdigest()
+                      if received == expected_size and actual_sha == expected_sha:
+                          print("[HALFCLOSE-LARGE] PASS received exact 8388608-byte upload SHA-256=%s" % actual_sha, flush=True)
+                      else:
+                          print("[HALFCLOSE-LARGE] FAIL received=%d expected=%d SHA-256=%s expected_sha=%s" %
+                                (received, expected_size, actual_sha, expected_sha), flush=True)
+                      self.close_connection = True
+                      return
                   elif self.path == "/half-close-server-eof":
                       body = b"server-half-close-ok\n"
                       self.send_response(200)
@@ -493,6 +529,7 @@ jobs:
           test -n "$APK"
           sudo install -m 0644 "$APK" "$ROOT/root/passwall-ssh-core.apk"
           sudo install -m 0755 "$GITHUB_WORKSPACE/test-results/socks-halfclose" "$ROOT/root/socks-halfclose"
+          sudo install -m 0644 /tmp/ssh-core-http/half-close-upload-8MiB.bin "$ROOT/root/half-close-upload-8MiB.bin"
           EXPECTED_SHA="$(cat /tmp/ssh-core-http/payload-1MiB.sha256)"
           printf '%s\n' "$EXPECTED_SHA" | sudo tee "$ROOT/root/expected-payload.sha256" >/dev/null
           EXPECTED_S2C_SHA="$(cat /tmp/ssh-core-http/slow-download-32MiB.sha256)"
@@ -595,10 +632,10 @@ jobs:
             if grep -q "SOCKS5 Listening" "$LOGDIR/ssh-core.log" 2>/dev/null; then
               pass "SSH password authentication completed and SOCKS5 listener started"
               echo "========== TWO-DIRECTION TCP HALF-CLOSE TEST =========="
-              if /root/socks-halfclose; then
-                pass "client-FIN-first and server-FIN-first half-close paths both completed"
+              if /root/socks-halfclose /root/half-close-upload-8MiB.bin; then
+                pass "client-FIN-first, server-FIN-first and 8 MiB post-EOF upload half-close paths completed"
               else
-                fail "one or both TCP half-close directions failed"
+                fail "one or more TCP half-close paths failed, including 8 MiB post-EOF upload"
               fi
             else
               fail "SSH authentication/listener startup timeout"
@@ -1016,14 +1053,15 @@ jobs:
           BOTH_HALFCLOSE_SEEN=0
           for attempt in $(seq 1 10); do
             if grep -qF "[HALFCLOSE] client FIN observed after complete request body" /tmp/ssh-core-http-server.log &&
-              grep -qF "[HALFCLOSE] server FIN path received exact client trailer" /tmp/ssh-core-http-server.log; then
+              grep -qF "[HALFCLOSE] server FIN path received exact client trailer" /tmp/ssh-core-http-server.log &&
+              grep -qF "[HALFCLOSE-LARGE] PASS received exact 8388608-byte upload SHA-256=" /tmp/ssh-core-http-server.log; then
               BOTH_HALFCLOSE_SEEN=1
               break
             fi
             sleep 1
           done
           test "$BOTH_HALFCLOSE_SEEN" -eq 1
-          echo "Both half-close FIN directions were observed by the host HTTP fixture."
+          echo "Both half-close FIN directions and exact 8 MiB upload after remote EOF were verified by the host HTTP fixture."
 
       - name: Collect OpenWrt guest logs and build manifests
         if: always() && (inputs.stage == 'vm' || github.event_name == 'push')
