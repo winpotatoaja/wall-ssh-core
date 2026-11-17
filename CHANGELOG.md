@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Retry TLS EOF peeks on the readiness event requested by OpenSSL, without interleaving another libssh2 operation while the peek is pending; this prevents a writable-socket spin on `SSL_ERROR_WANT_WRITE`.
+- Suppress repeated idle-timeout handling while a relay is already marked `abort_on_pending` and waiting for a libssh2 operation to unwind.
+- Keep `DELAY` waits alive across the 60-second poll slices until the configured deadline expires.
+- Add native regressions for TLS peek readiness, pending-abort idle timeout, and delay deadlines spanning multiple poll slices.
+- Bump the OpenWrt package release to r7.
+
 - Fix C2S half-close stalls when an SSH channel write window reaches zero. Keep upstream reads armed while a channel is waiting for `WINDOW_ADJUST`, retry the pinned write when upstream data becomes readable (including already-decrypted TLS data), and preserve the window-wait state when resuming a pending write.
 - Bump the OpenWrt package release to r6.
 

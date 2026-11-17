@@ -1,3 +1,4 @@
+#define DELAY_WAIT_POLL_MAX_MS 10
 #define SSH_CORE_PARSER_TEST 1
 #include "../ssh-core.c"
 
@@ -51,9 +52,79 @@ static int run_case(const char *name, const char *response,
     return failed;
 }
 
+static int run_core_state_regressions(void) {
+    int failures = 0;
+
+    upstream_ctx_t peek = {
+        .ssl_want_events = EPOLLOUT,
+        .eof_peek_pending = 1
+    };
+    if (upstream_peek_retry_ready(&peek, EPOLLIN) ||
+        !upstream_peek_retry_ready(&peek, EPOLLOUT)) {
+        fprintf(stderr, "[FAIL] TLS EOF peek retries only on requested EPOLLOUT readiness\n");
+        failures++;
+    } else {
+        puts("[PASS] TLS EOF peek retries only on requested EPOLLOUT readiness");
+    }
+    peek.ssl_want_events = EPOLLIN;
+    if (upstream_peek_retry_ready(&peek, EPOLLOUT) ||
+        !upstream_peek_retry_ready(&peek, EPOLLIN)) {
+        fprintf(stderr, "[FAIL] TLS EOF peek switches retry interest to EPOLLIN after WANT_READ\n");
+        failures++;
+    } else {
+        puts("[PASS] TLS EOF peek switches retry interest to EPOLLIN after WANT_READ");
+    }
+    peek.eof_peek_pending = 0;
+    if (upstream_peek_retry_ready(&peek, EPOLLIN | EPOLLOUT)) {
+        fprintf(stderr, "[FAIL] completed TLS EOF peek is not retried\n");
+        failures++;
+    } else {
+        puts("[PASS] completed TLS EOF peek is not retried");
+    }
+
+    client_conn_t idle = {
+        .state = ST_RELAY,
+        .last_activity_ms = 1000
+    };
+    if (!relay_idle_timeout_due(&idle, 1, 2000)) {
+        fprintf(stderr, "[FAIL] expired relay idle timeout is detected\n");
+        failures++;
+    } else {
+        puts("[PASS] expired relay idle timeout is detected");
+    }
+    idle.abort_on_pending = 1;
+    if (relay_idle_timeout_due(&idle, 1, 3000)) {
+        fprintf(stderr, "[FAIL] pending-abort relay does not repeat idle-timeout handling\n");
+        failures++;
+    } else {
+        puts("[PASS] pending-abort relay does not repeat idle-timeout handling");
+    }
+
+    int sv[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        fprintf(stderr, "[FAIL] delay wait deadline: socketpair: %s\n", strerror(errno));
+        failures++;
+    } else {
+        upstream_ctx_t u = {.fd = sv[0]};
+        long long start = now_ms();
+        delay_wait_and_drain(&u, 45);
+        long long elapsed = now_ms() - start;
+        if (elapsed < 35) {
+            fprintf(stderr, "[FAIL] delay wait stopped at the poll slice timeout (%lld ms)\n", elapsed);
+            failures++;
+        } else {
+            printf("[PASS] delay wait respects full deadline across poll time slices (%lld ms)\n", elapsed);
+        }
+        close(sv[0]);
+        close(sv[1]);
+    }
+
+    return failures;
+}
+
 int main(void) {
     g_log_path = "-";
-    int failures = 0;
+    int failures = run_core_state_regressions();
 
     failures += run_case(
         "GET 200 Content-Length body is not a tunnel",
@@ -129,6 +200,6 @@ int main(void) {
         fprintf(stderr, "HTTP parser regression tests failed: %d\n", failures);
         return 1;
     }
-    puts("All HTTP parser regression tests passed.");
+    puts("All HTTP parser and core state regression tests passed.");
     return 0;
 }

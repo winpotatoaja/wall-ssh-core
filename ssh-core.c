@@ -46,6 +46,9 @@
 #define SOCKS_HS_TIMEOUT_SEC   15
 #define SSH_OPEN_SOFT_TO_MS    15000
 #define SSH_OPEN_HARD_TO_MS    30000
+#ifndef DELAY_WAIT_POLL_MAX_MS
+#define DELAY_WAIT_POLL_MAX_MS 60000
+#endif
 
 static volatile sig_atomic_t g_stop = 0;
 static const char *g_log_path = DEFAULT_LOG_PATH;
@@ -69,6 +72,7 @@ typedef struct {
     int      fd;
     SSL     *ssl;
     uint32_t ssl_want_events; /* EPOLLIN / EPOLLOUT jika OpenSSL WANT_READ/WANT_WRITE */
+    int      eof_peek_pending; /* SSL_peek harus diulang setelah readiness yang diminta */
     uint64_t rx_seq;
     size_t   skip_ssh_banner_bytes;
     int      expect_connect_resp;
@@ -170,6 +174,15 @@ static int            g_client_count = 0;
 static client_conn_t *g_opening_client = NULL;
 static client_conn_t *g_pending_client = NULL;
 static pending_op_t   g_pending_op = PENDING_NONE;
+
+static int relay_idle_timeout_due(const client_conn_t *c, int timeout_sec,
+                                  long long now_msec) {
+    if (!c || c->state != ST_RELAY || c->abort_on_pending ||
+        timeout_sec <= 0 || c->last_activity_ms <= 0) {
+        return 0;
+    }
+    return now_msec - c->last_activity_ms >= (long long)timeout_sec * 1000LL;
+}
 
 /* ============================================================
  * RING BUFFER (ZERO MEMMOVE, LAZY ALLOCATION)
@@ -1105,7 +1118,7 @@ static void delay_wait_and_drain(upstream_ctx_t *u, int delay_ms) {
     while (!g_stop) {
         long long rem = deadline - now_ms();
         if (rem <= 0) break;
-        int to = (rem > 60000) ? 60000 : (int)rem;
+        int to = (rem > DELAY_WAIT_POLL_MAX_MS) ? DELAY_WAIT_POLL_MAX_MS : (int)rem;
         short want = POLLIN;
         if (u->ssl && u->ssl_want_events == EPOLLOUT) want = POLLOUT;
         if (u->pre_len >= sizeof(u->pre_buf)) want = 0;
@@ -1115,7 +1128,7 @@ static void delay_wait_and_drain(upstream_ctx_t *u, int delay_ms) {
             if (errno == EINTR) continue;
             break;
         }
-        if (rc == 0) break;
+        if (rc == 0) continue;
         if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) break;
         if (want && (pfd.revents & want)) {
             ssize_t r = pre_read_more(u);
@@ -2556,14 +2569,33 @@ static void retry_window_waiters(void) {
     }
 }
 
+static int upstream_peek_retry_ready(const upstream_ctx_t *u, uint32_t events) {
+    if (!u || !u->eof_peek_pending) return 0;
+    if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) return 1;
+    return u->ssl_want_events != 0 && (events & u->ssl_want_events) != 0;
+}
+
 static int check_upstream_eof_peek(upstream_ctx_t *u) {
     uint8_t tmp[1];
     if (u->ssl) {
         int r = SSL_peek(u->ssl, tmp, 1);
-        if (r > 0) { u->ssl_want_events = 0; return 1; }
+        if (r > 0) {
+            u->ssl_want_events = 0;
+            u->eof_peek_pending = 0;
+            return 1;
+        }
         int err = SSL_get_error(u->ssl, r);
-        if (err == SSL_ERROR_WANT_READ) { u->ssl_want_events = EPOLLIN; return -2; }
-        if (err == SSL_ERROR_WANT_WRITE) { u->ssl_want_events = EPOLLOUT; return -2; }
+        if (err == SSL_ERROR_WANT_READ) {
+            u->ssl_want_events = EPOLLIN;
+            u->eof_peek_pending = 1;
+            return -2;
+        }
+        if (err == SSL_ERROR_WANT_WRITE) {
+            u->ssl_want_events = EPOLLOUT;
+            u->eof_peek_pending = 1;
+            return -2;
+        }
+        u->eof_peek_pending = 0;
         return -1;
     }
     ssize_t n;
@@ -3029,6 +3061,7 @@ int main(int argc, char **argv) {
         }
 
         int upstream_readable = 0;
+        uint32_t upstream_events = 0;
 
         for (int i = 0; i < nfds; i++) {
             void *ptr = events[i].data.ptr;
@@ -3079,6 +3112,7 @@ int main(int argc, char **argv) {
                     g_client_count++;
                 }
             } else if (ptr == &g_upstream_tag) {
+                upstream_events |= e;
                 if(e&EPOLLERR){
                     int so_err=0;socklen_t so_len=sizeof(so_err);
                     if(getsockopt(upstream_fd,SOL_SOCKET,SO_ERROR,&so_err,&so_len)==0&&so_err){
@@ -3095,6 +3129,28 @@ int main(int argc, char **argv) {
         }
 
         if (g_stop) break;
+
+        /*
+         * SSL_peek returning WANT_READ/WANT_WRITE must be retried as the same
+         * TLS operation after the requested readiness event. Do this before
+         * any libssh2 operation can use the shared SSL object.
+         */
+        int retried_eof_peek = 0;
+        if (uctx.eof_peek_pending &&
+            upstream_peek_retry_ready(&uctx, upstream_events)) {
+            int pk = check_upstream_eof_peek(&uctx);
+            retried_eof_peek = 1;
+            if (pk == -1) {
+                log_red("Koneksi upstream ditutup oleh server");
+                write_marker(NEED_RESTART_FILE, "upstream eof");
+                exit_code = 1;
+                g_stop = 1;
+                break;
+            } else if (pk == 1) {
+                idle_rx_paused = 1;
+            }
+        }
+        int tls_peek_waiting = uctx.eof_peek_pending;
 
         /*
          * SSH WINDOW_ADJUST arrives on the upstream transport. A local client
@@ -3118,9 +3174,7 @@ int main(int argc, char **argv) {
             if ((c->state == ST_SOCKS_GREETING || c->state == ST_SOCKS_REQUEST) &&
                 (now_sec - c->accepted_at) >= SOCKS_HS_TIMEOUT_SEC) {
                 start_closing_client(epfd, c);
-            } else if (c->state == ST_RELAY && cfg.idle_timeout_sec > 0 &&
-                       c->last_activity_ms > 0 &&
-                       now_msec-c->last_activity_ms >= (long long)cfg.idle_timeout_sec*1000LL) {
+            } else if (relay_idle_timeout_due(c, cfg.idle_timeout_sec, now_msec)) {
                 log_yellow("Menutup relay idle (%s:%u) setelah %d detik",c->target_host,(unsigned)c->target_port,cfg.idle_timeout_sec);
                 start_closing_client(epfd,c);
             } else if (c->state == ST_SSH_OPENING && c == g_opening_client && c->open_started_ms > 0) {
@@ -3146,7 +3200,7 @@ int main(int argc, char **argv) {
         int did_ssh_read = 0;
         force_next_tick = 0;
 
-        while (!g_stop && rounds < 16) {
+        while (!g_stop && !tls_peek_waiting && rounds < 16) {
             int round_dirs = 0;
             int round_read = 0;
             int pump_rc = pump_ssh_channels(epfd, session, &uctx, &round_dirs, &round_read);
@@ -3165,7 +3219,8 @@ int main(int argc, char **argv) {
 
         if (g_stop) break;
 
-        if (upstream_readable && !did_ssh_read && g_opening_client == NULL && g_pending_op == PENDING_NONE) {
+        if (!tls_peek_waiting && !retried_eof_peek && upstream_readable &&
+            !did_ssh_read && g_opening_client == NULL && g_pending_op == PENDING_NONE) {
             int pk = check_upstream_eof_peek(&uctx);
             if (pk == -1) {
                 log_red("Koneksi upstream ditutup oleh server");
@@ -3180,7 +3235,7 @@ int main(int argc, char **argv) {
             idle_rx_paused = 0;
         }
 
-        if (g_pending_op == PENDING_NONE &&
+        if (!uctx.eof_peek_pending && g_pending_op == PENDING_NONE &&
             cfg.keepalive_sec > 0 &&
             (now_sec - uctx.last_activity) >= cfg.keepalive_sec &&
             (now_sec - last_ka_try) >= 1) {
@@ -3204,7 +3259,7 @@ int main(int argc, char **argv) {
         }
 
         if (rounds == 16 ||
-            (uctx.ssl && SSL_pending(uctx.ssl) > 0 &&
+            (!uctx.eof_peek_pending && uctx.ssl && SSL_pending(uctx.ssl) > 0 &&
              (uctx.ssl_want_events & EPOLLOUT) == 0 &&
              (g_opening_client != NULL || has_readable_relay_channel() ||
               has_window_waiter()))) {
