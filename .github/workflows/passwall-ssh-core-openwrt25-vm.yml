@@ -1,7 +1,15 @@
-name: Passwall SSH core - OpenWrt 25.12.5 staged tests
-run-name: Passwall SSH Core / ${{ inputs.stage }}
+name: Passwall SSH core - OpenWrt 25.12.5 automatic push pipeline
+run-name: ${{ github.event_name == 'push' && 'Passwall SSH Core / full push pipeline' || format('Passwall SSH Core / {0}', inputs.stage) }}
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'ssh-core.c'
+      - 'Makefile'
+      - 'tests/**'
+      - '.github/workflows/passwall-ssh-core-openwrt25-vm.yml'
   workflow_dispatch:
     inputs:
       stage:
@@ -43,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          case "${{ inputs.stage }}" in
+          case "${{ inputs.stage || 'all' }}" in
             parser)
               sudo apt-get install -y --no-install-recommends \
                 build-essential libssh2-1-dev libssl-dev
@@ -58,6 +66,12 @@ jobs:
                 qemu-system-x86 qemu-utils expect e2fsprogs openssh-server \
                 python3 curl ca-certificates
               ;;
+            all)
+              sudo apt-get install -y --no-install-recommends \
+                build-essential libssh2-1-dev libssl-dev clang flex bison gawk gettext git \
+                libncurses-dev python3 rsync unzip wget zstd curl ca-certificates \
+                qemu-system-x86 qemu-utils expect e2fsprogs openssh-server
+              ;;
             *)
               echo "Unknown stage"
               false
@@ -65,7 +79,7 @@ jobs:
           esac
 
       - name: Run native HTTP parser regression tests
-        if: inputs.stage == 'parser'
+        if: inputs.stage == 'parser' || github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -79,7 +93,7 @@ jobs:
           /tmp/http-parser-test | tee test-results/http-parser-test.log
 
       - name: Download and configure OpenWrt 25.12.5 x86_64 SDK
-        if: inputs.stage == 'sdk'
+        if: inputs.stage == 'sdk' || github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -148,7 +162,7 @@ jobs:
           test -e "$TARGET_STAGING/usr/lib/libssh2.so"
 
       - name: Compile ssh-core using the repository OpenWrt package recipe
-        if: inputs.stage == 'sdk'
+        if: inputs.stage == 'sdk' || github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -174,7 +188,7 @@ jobs:
           find staging_dir/target-* -name 'libssh2.so*' -o -name 'libssl.so*' -o -name 'libcrypto.so*' | head -30
 
       - name: Save OpenWrt APK for the separate VM stage
-        if: inputs.stage == 'sdk'
+        if: inputs.stage == 'sdk' || github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: passwall-ssh-core-openwrt-apk
@@ -186,7 +200,7 @@ jobs:
           retention-days: 7
 
       - name: Show SDK run ID for the VM stage
-        if: inputs.stage == 'sdk'
+        if: inputs.stage == 'sdk' || github.event_name == 'push'
         shell: bash
         run: |
           {
@@ -197,10 +211,10 @@ jobs:
             printf '`%s`\n' "$GITHUB_RUN_ID"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Validate SDK run ID for the VM stage
-        if: inputs.stage == 'vm'
+        if: inputs.stage == 'vm' || github.event_name == 'push'
         shell: bash
         env:
-          SDK_RUN_ID: ${{ inputs.sdk_run_id }}
+          SDK_RUN_ID: ${{ inputs.sdk_run_id || github.run_id }}
         run: |
           test -n "$SDK_RUN_ID"
           case "$SDK_RUN_ID" in
@@ -211,17 +225,17 @@ jobs:
           esac
 
       - name: Download APK from the successful SDK stage
-        if: inputs.stage == 'vm'
+        if: inputs.stage == 'vm' || github.event_name == 'push'
         uses: actions/download-artifact@v4
         with:
           name: passwall-ssh-core-openwrt-apk
-          run-id: ${{ inputs.sdk_run_id }}
+          run-id: ${{ inputs.sdk_run_id || github.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           path: test-results
 
       - name: Verify APK and package source match current branch
-        if: inputs.stage == 'vm'
+        if: inputs.stage == 'vm' || github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -239,13 +253,15 @@ jobs:
           fi
           (cd test-results && sha256sum -c apk.sha256)
       - name: Prepare host-side SSH and HTTP forwarding targets
-        if: inputs.stage == 'vm'
+        if: inputs.stage == 'vm' || github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p /tmp/ssh-core-http
           dd if=/dev/urandom of=/tmp/ssh-core-http/payload-1MiB.bin bs=1M count=1 status=none
           sha256sum /tmp/ssh-core-http/payload-1MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/payload-1MiB.sha256
+          dd if=/dev/urandom of=/tmp/ssh-core-http/slow-download-8MiB.bin bs=1M count=8 status=none
+          sha256sum /tmp/ssh-core-http/slow-download-8MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/slow-download-8MiB.sha256
 
           cat > /tmp/ssh-core-http-server.py <<'PY_SERVER'
           from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -268,6 +284,12 @@ jobs:
                   elif self.path == "/payload":
                       with open(os.path.join(ROOT, "payload-1MiB.bin"), "rb") as f:
                           body = f.read()
+                  elif self.path == "/slow-download":
+                      with open(os.path.join(ROOT, "slow-download-8MiB.bin"), "rb") as f:
+                          body = f.read()
+                      self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32768)
+                  elif self.path == "/abort-stream":
+                      body = b"A" * (16 * 1024 * 1024)
                   else:
                       self.send_error(404)
                       return
@@ -275,11 +297,15 @@ jobs:
                   self.send_header("Content-Length", str(len(body)))
                   self.send_header("Connection", "close")
                   self.end_headers()
-                  self.wfile.write(body)
+                  try:
+                      self.wfile.write(body)
+                  except (BrokenPipeError, ConnectionResetError, OSError):
+                      if self.path == "/abort-stream":
+                          print("[ABORT] client disconnected during streaming response", flush=True)
                   self.close_connection = True
 
               def do_POST(self):
-                  if self.path != "/slow-upload":
+                  if self.path != "/slow-upload" and not self.path.startswith("/parallel-upload/"):
                       self.send_error(404)
                       return
                   # Constrain the host-side TCP receive window and pause reads
@@ -327,6 +353,7 @@ jobs:
 
           ThreadingHTTPServer(("127.0.0.1", 18080), Handler).serve_forever()
           PY_SERVER
+          python3 -m py_compile /tmp/ssh-core-http-server.py
           python3 /tmp/ssh-core-http-server.py >/tmp/ssh-core-http-server.log 2>&1 &
           echo "$!" >/tmp/ssh-core-http-server.pid
 
@@ -372,7 +399,7 @@ jobs:
           sudo ss -lntp | grep -E ':2222|:18080'
 
       - name: Download and prepare OpenWrt 25.12.5 x86_64 VM rootfs
-        if: inputs.stage == 'vm'
+        if: inputs.stage == 'vm' || github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -397,6 +424,8 @@ jobs:
           sudo install -m 0644 "$APK" "$ROOT/root/passwall-ssh-core.apk"
           EXPECTED_SHA="$(cat /tmp/ssh-core-http/payload-1MiB.sha256)"
           printf '%s\n' "$EXPECTED_SHA" | sudo tee "$ROOT/root/expected-payload.sha256" >/dev/null
+          EXPECTED_S2C_SHA="$(cat /tmp/ssh-core-http/slow-download-8MiB.sha256)"
+          printf '%s\n' "$EXPECTED_S2C_SHA" | sudo tee "$ROOT/root/expected-s2c.sha256" >/dev/null
 
           sudo mkdir -p "$ROOT/root/ssh-core-test-logs" "$ROOT/etc/uci-defaults"
           sudo tee "$ROOT/etc/uci-defaults/99-qemu-ci-network" >/dev/null <<'GUEST_NET'
@@ -436,6 +465,10 @@ jobs:
             "$BIN" -h
             if [ "$?" -eq 0 ]; then pass "ssh-core starts and prints usage"; else fail "ssh-core -h"; fi
             ldd "$BIN" 2>&1 | tee "$LOGDIR/ldd.log"
+            echo "========== LIMIT GUEST TCP SEND QUEUES FOR S2C TEST =========="
+            sysctl -w net.core.wmem_max=16384
+            sysctl -w net.core.wmem_default=16384
+            sysctl -w net.ipv4.tcp_wmem="4096 8192 16384"
 
             echo "========== SOCKS BIND SAFETY =========="
             if "$BIN" -host 127.0.0.1 -user ci -socks 0.0.0.0:1081 -log - >"$LOGDIR/bind-guard.log" 2>&1; then
@@ -574,6 +607,50 @@ jobs:
             else
               fail "forced upload through SSH SOCKS failed"
             fi
+            if [ "$STATUS" -eq 0 ]; then
+              echo "========== FOUR CONCURRENT 8 MiB UPLOADS =========="
+              dd if=/dev/urandom of=/tmp/parallel-upload-8MiB.bin bs=1M count=8 2>/dev/null
+              PARALLEL_SHA="$(sha256sum /tmp/parallel-upload-8MiB.bin | awk '{print $1}')"
+              I=1
+              UPLOAD_PIDS=""
+              while [ "$I" -le 4 ]; do
+                (
+                  if RESPONSE="$(curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
+                    --connect-timeout 20 --max-time 180 \
+                    --data-binary @/tmp/parallel-upload-8MiB.bin \
+                    "http://127.0.0.1:18080/parallel-upload/$I")"; then
+                    printf '%s\n' "$RESPONSE" > "/tmp/parallel-upload-$I.response"
+                    if echo "$RESPONSE" | grep -q "size=8388608 sha256=$PARALLEL_SHA"; then
+                      echo PASS > "/tmp/parallel-upload-$I.status"
+                    else
+                      echo FAIL > "/tmp/parallel-upload-$I.status"
+                    fi
+                  else
+                    echo FAIL > "/tmp/parallel-upload-$I.status"
+                  fi
+                ) &
+                UPLOAD_PIDS="$UPLOAD_PIDS $!"
+                I=$((I + 1))
+              done
+              for UPLOAD_PID in $UPLOAD_PIDS; do
+                wait "$UPLOAD_PID" || true
+              done
+              I=1
+              PARALLEL_UPLOAD_OK=1
+              while [ "$I" -le 4 ]; do
+                if [ ! -f "/tmp/parallel-upload-$I.status" ] || [ "$(cat "/tmp/parallel-upload-$I.status")" != "PASS" ]; then
+                  PARALLEL_UPLOAD_OK=0
+                  cat "/tmp/parallel-upload-$I.response" 2>/dev/null || true
+                fi
+                I=$((I + 1))
+              done
+              if [ "$PARALLEL_UPLOAD_OK" -eq 1 ]; then
+                pass "four simultaneous 8 MiB uploads returned matching remote size and SHA-256"
+              else
+                fail "one or more simultaneous uploads failed or returned corrupt data"
+              fi
+            fi
+
             WINDOW_FULL_COUNT="$(grep -c "SSH channel window penuh" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
             WINDOW_RECOVERED_COUNT="$(grep -c "SSH channel window recovered; write resumed" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
             WINDOW_EAGAIN_COUNT="$(grep -c "write_window=0" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
@@ -594,15 +671,108 @@ jobs:
               fail "forced upload did not exercise the EAGAIN zero-window path"
             fi
             if [ "$BUFFER_DRAINED_COUNT" -gt 0 ] && [ "$BUFFER_NOT_DRAINED_COUNT" -eq 0 ]; then
-              BUFFER_LINE="$(grep "SSH channel buffer drained after window recovery" "$LOGDIR/ssh-core.log" | tail -n 1)"
-              BUFFER_PEAK="$(printf '%s\n' "$BUFFER_LINE" | sed -n 's/.*peak=\([0-9][0-9]*\)\/32768.*/\1/p')"
-              if [ -n "$BUFFER_PEAK" ] && [ "$BUFFER_PEAK" -le 32768 ]; then
-                pass "c2s ring buffer drained to zero and peak stayed within its 32 KiB bound"
+              if grep "SSH channel buffer drained after window recovery" "$LOGDIR/ssh-core.log" | \
+                sed -n 's/.*peak=\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1 \2/p' | \
+                awk '$1 > $2 { bad=1 } END { if (NR == 0 || bad) exit 1 }'; then
+                pass "all c2s ring buffers drained to zero and every peak stayed within its configured bound"
               else
-                fail "c2s ring buffer high-water mark was missing or exceeded 32 KiB"
+                fail "one or more c2s ring-buffer high-water marks were missing or exceeded capacity"
               fi
             else
               fail "c2s ring buffer was not confirmed empty at channel close"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== S2C SLOW-READER BACKPRESSURE (8 MiB DOWNLOAD) =========="
+            if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
+              --connect-timeout 20 --max-time 180 --limit-rate 128K \
+              http://127.0.0.1:18080/slow-download -o /tmp/slow-download-8MiB.bin; then
+              S2C_SIZE="$(wc -c </tmp/slow-download-8MiB.bin | tr -d ' ')"
+              S2C_EXPECTED_SHA="$(cat /root/expected-s2c.sha256)"
+              S2C_ACTUAL_SHA="$(sha256sum /tmp/slow-download-8MiB.bin | awk '{print $1}')"
+              if [ "$S2C_SIZE" = "8388608" ] && [ "$S2C_ACTUAL_SHA" = "$S2C_EXPECTED_SHA" ]; then
+                pass "slow 8 MiB S2C download retained exact length and SHA-256"
+              else
+                fail "S2C slow download size/hash mismatch: size=$S2C_SIZE sha=$S2C_ACTUAL_SHA"
+              fi
+            else
+              fail "S2C slow-reader download failed or exceeded its 180-second limit"
+            fi
+            S2C_FULL_COUNT="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+            S2C_DRAINED_COUNT="$(grep -c "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+            S2C_NOT_DRAINED_COUNT="$(grep -c "SSH channel s2c buffer not drained at close" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+            echo "S2C full-buffer events: $S2C_FULL_COUNT"
+            echo "S2C drained-buffer reports: $S2C_DRAINED_COUNT"
+            echo "S2C not-drained reports: $S2C_NOT_DRAINED_COUNT"
+            if [ "$S2C_FULL_COUNT" -gt 0 ] && [ "$S2C_DRAINED_COUNT" -gt 0 ] && [ "$S2C_NOT_DRAINED_COUNT" -eq 0 ]; then
+              if grep "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core.log" | \
+                sed -n 's/.*peak=\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1 \2/p' | \
+                awk '$1 > $2 || $1 != 32768 { bad=1 } END { if (NR == 0 || bad) exit 1 }'; then
+                pass "S2C ring buffer reached 32 KiB, then drained to zero after the client resumed reading"
+              else
+                fail "S2C ring-buffer capacity or peak report was invalid"
+              fi
+            else
+              fail "S2C slow-reader backpressure did not fill and cleanly drain the 32 KiB ring buffer"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== CLIENT DISCONNECT / CHANNEL CLEANUP =========="
+            curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
+              --connect-timeout 10 --max-time 2 --limit-rate 2K \
+              http://127.0.0.1:18080/abort-stream -o /tmp/abort-stream.bin
+            ABORT_RC=$?
+            if [ "$ABORT_RC" -eq 28 ]; then
+              pass "client-side timeout closed an in-flight SOCKS channel as expected"
+            else
+              fail "abort-stream returned unexpected curl status $ABORT_RC"
+            fi
+            sleep 2
+            if kill -0 "$APP_PID" 2>/dev/null && \
+              curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
+                --connect-timeout 15 --max-time 30 \
+                http://127.0.0.1:18080/payload -o /tmp/post-abort.bin; then
+              POST_ABORT_SHA="$(sha256sum /tmp/post-abort.bin | awk '{print $1}')"
+              EXPECTED_SHA="$(cat /root/expected-payload.sha256)"
+              if [ "$POST_ABORT_SHA" = "$EXPECTED_SHA" ]; then
+                pass "SSH core remained alive and a new SOCKS channel worked after client disconnect"
+              else
+                fail "post-disconnect SOCKS channel returned corrupted data"
+              fi
+            else
+              fail "SSH core did not recover after a client-side disconnect"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== REPEATED CONNECTION / FD / RSS STABILITY =========="
+            RSS_BEFORE="$(awk '/VmRSS:/ {print $2}' "/proc/$APP_PID/status" 2>/dev/null)"
+            FD_BEFORE="$(ls "/proc/$APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
+            I=1
+            REPEAT_OK=1
+            while [ "$I" -le 12 ]; do
+              if ! curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
+                --connect-timeout 15 --max-time 30 \
+                http://127.0.0.1:18080/payload -o /dev/null; then
+                REPEAT_OK=0
+                break
+              fi
+              I=$((I + 1))
+            done
+            sleep 2
+            RSS_AFTER="$(awk '/VmRSS:/ {print $2}' "/proc/$APP_PID/status" 2>/dev/null)"
+            FD_AFTER="$(ls "/proc/$APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
+            [ -n "$RSS_BEFORE" ] || RSS_BEFORE=0
+            [ -n "$RSS_AFTER" ] || RSS_AFTER=0
+            [ -n "$FD_BEFORE" ] || FD_BEFORE=0
+            [ -n "$FD_AFTER" ] || FD_AFTER=0
+            if [ "$REPEAT_OK" -eq 1 ] && [ "$RSS_AFTER" -le $((RSS_BEFORE + 16384)) ] && \
+              [ "$FD_AFTER" -le $((FD_BEFORE + 4)) ]; then
+              pass "12 repeated SOCKS connections completed without material RSS or FD growth (RSS $RSS_BEFORE->$RSS_AFTER KiB; FD $FD_BEFORE->$FD_AFTER)"
+            else
+              fail "repeated connections showed errors or possible RSS/FD growth (RSS $RSS_BEFORE->$RSS_AFTER KiB; FD $FD_BEFORE->$FD_AFTER)"
             fi
           fi
 
@@ -642,7 +812,7 @@ jobs:
           sudo umount "$ROOT"
 
       - name: Boot OpenWrt 25.12.5 VM and run SOCKS / SSH channel tests
-        if: inputs.stage == 'vm'
+        if: inputs.stage == 'vm' || github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -679,7 +849,7 @@ jobs:
           expect /tmp/passwall-ssh-core-openwrt.exp
 
       - name: Collect OpenWrt guest logs and build manifests
-        if: always() && inputs.stage == 'vm'
+        if: always() && (inputs.stage == 'vm' || github.event_name == 'push')
         shell: bash
         run: |
           set +e
@@ -699,7 +869,7 @@ jobs:
           ls -lh test-results test-results/openwrt-guest || true
 
       - name: Upload OpenWrt guest test logs
-        if: always() && inputs.stage == 'vm'
+        if: always() && (inputs.stage == 'vm' || github.event_name == 'push')
         uses: actions/upload-artifact@v4
         with:
           name: passwall-ssh-core-openwrt-25.12.5-x86_64-vm

@@ -148,6 +148,9 @@ typedef struct client_conn {
     int            write_window_eagain_logged;
     int            write_window_final_logged;
     size_t         c2s_peak_used;
+    size_t         s2c_peak_used;
+    int            s2c_saturated;
+    int            s2c_final_logged;
 
     int            read_pending;
     uint8_t       *read_pending_ptr;
@@ -313,6 +316,32 @@ static void log_red(const char *fmt, ...) {
 static void note_c2s_buffer_peak(client_conn_t *c) {
     if (c && c->c2s.used > c->c2s_peak_used)
         c->c2s_peak_used = c->c2s.used;
+}
+
+static void note_s2c_buffer_peak(client_conn_t *c) {
+    if (!c) return;
+    if (c->s2c.used > c->s2c_peak_used)
+        c->s2c_peak_used = c->s2c.used;
+    if (!c->s2c_saturated && c->s2c.cap > 0 && c->s2c.used == c->s2c.cap) {
+        c->s2c_saturated = 1;
+        log_yellow("SSH channel s2c buffer full; local client is applying backpressure (%s:%u; queued=%zu/%zu)",
+                   c->target_host, (unsigned)c->target_port, c->s2c.used, c->s2c.cap);
+    }
+}
+
+static void log_s2c_buffer_final(client_conn_t *c) {
+    if (!c || !c->s2c_saturated || c->s2c_final_logged) return;
+    note_s2c_buffer_peak(c);
+    if (c->s2c.used == 0) {
+        log_blue("SSH channel s2c buffer drained after client resumed reading (%s:%u; queued=0/%zu; peak=%zu/%zu)",
+                 c->target_host, (unsigned)c->target_port,
+                 c->s2c.cap, c->s2c_peak_used, c->s2c.cap);
+    } else {
+        log_yellow("SSH channel s2c buffer not drained at close (%s:%u; queued=%zu/%zu; peak=%zu/%zu)",
+                   c->target_host, (unsigned)c->target_port,
+                   c->s2c.used, c->s2c.cap, c->s2c_peak_used, c->s2c.cap);
+    }
+    c->s2c_final_logged = 1;
 }
 
 /* Keep diagnostic state separate from write_waiting_window, which is reset
@@ -1452,6 +1481,7 @@ static void start_closing_client(int epfd, client_conn_t *c) {
     c->read_pending_ptr = NULL;
     c->read_pending_len = 0;
     log_channel_buffer_final(c);
+    log_s2c_buffer_final(c);
     rb_free(&c->c2s);
     rb_free(&c->s2c);
     c->state = ST_CLOSING;
@@ -2121,6 +2151,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             c->read_pending_ptr = NULL;
             c->read_pending_len = 0;
             rb_commit_write(&c->s2c, (size_t)r);
+            note_s2c_buffer_peak(c);
             c->last_activity_ms=now_ms();
             *did_ssh_read_out = 1;
             g_pending_op = PENDING_NONE;
@@ -2392,6 +2423,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         c->read_pending_len = 0;
                         did_ssh_read = 1;
                         rb_commit_write(&c->s2c, (size_t)r);
+            note_s2c_buffer_peak(c);
                         c->last_activity_ms=now_ms();
                         any_progress = 1;
                         if (c->abort_on_pending ||

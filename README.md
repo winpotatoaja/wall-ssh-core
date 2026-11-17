@@ -29,47 +29,36 @@ libssh2 from the packages feed.
 - `MAX_CLIENTS` defaults to 64 and is capped at 256.
 - `IDLE_TIMEOUT` defaults to 600 seconds; set it to 0 to disable idle expiry.
 
-## Tests: run one stage at a time
+## Continuous integration tests
 
-The native HTTP parser regression test is
-`tests/http_parser_test.c`.
+Pushes to `main` that change `ssh-core.c`, the package `Makefile`, tests, or this
+workflow automatically run the full pipeline in order:
 
-Use the GitHub Actions workflow
-`.github/workflows/passwall-ssh-core-openwrt25-vm.yml`. The dispatcher is also
-present on the repository default branch so GitHub exposes the manual trigger.
-In **Run workflow**, select branch `passwall-ssh-core`, then choose exactly one
-stage from the `workflow_dispatch` input:
+1. **Parser regression** — compile and run `tests/http_parser_test.c` on Debian.
+2. **OpenWrt SDK build** — build the package using the official OpenWrt 25.12.5
+   x86_64 SDK, including the OpenWrt OpenSSL/zlib sources and packages-feed
+   libssh2. The APK is uploaded as an artifact in the same workflow run.
+3. **QEMU VM integration tests** — install that APK in the official OpenWrt
+   25.12.5 x86_64 guest, then exercise SSH authentication, SOCKS bind safety,
+   strict numeric parsing, single and concurrent direct-tcpip transfers.
+4. **Backpressure and recovery** — force a 32 MiB c2s upload through a stalled,
+   small-window receiver; run four simultaneous 8 MiB uploads; then throttle
+   the S2C reader during an 8 MiB download. Both directions verify exact
+   lengths and SHA-256. The tests assert that c2s and s2c buffers never exceed
+   their 32 KiB capacity and drain to zero after the receiver resumes.
+5. **Disconnect and repeated-connection checks** — abort an in-flight client
+   request, verify that the service remains usable, then open and close 12
+   more SOCKS connections while checking process RSS and file-descriptor
+   counts for material growth.
 
-1. **parser** — compiles and runs the HTTP parser tests on Debian. This is the
-   first, inexpensive gate.
-2. **sdk** — cross-compiles the C client into an OpenWrt APK. On success, the
-   workflow uploads `passwall-ssh-core-openwrt-apk` for seven days and prints
-   its workflow run ID.
-3. **vm** — enter the successful SDK run ID in `sdk_run_id`. The workflow
-   downloads that APK, verifies the APK checksum and confirms that the compiled
-   `ssh-core.c` and package `Makefile` match the selected branch, then boots the
-   official OpenWrt 25.12.5 x86_64 guest in QEMU TCG and exercises
-   the SSH/SOCKS relay. The workflow prepares the host-side OpenSSH privilege
-   separation directory (/run/sshd) before starting its temporary test server.
+The workflow is a single sequential job for push-triggered runs: SDK build
+must finish successfully before the VM stage downloads and installs its APK.
+The guest test script is syntax-checked before the VM boots, and the host HTTP
+fixture is Python-compiled before it starts. The job has a 60-minute hard
+timeout; individual transfers also have explicit curl timeouts.
 
-The VM checks SSH password authentication, the SOCKS non-loopback bind guard,
-numeric configuration overflow rejection, a 1 MiB download, and four concurrent
-channels. Its backpressure fixture caps the host sshd TCP send buffers,
-constrains the HTTP receiver's TCP receive buffer/window, pauses reads after
-request headers, and drains a 32 MiB upload slowly. The client checks
-`libssh2_channel_window_write_ex()` when `libssh2_channel_write()` returns
-`LIBSSH2_ERROR_EAGAIN`; it records a true zero-window event only when the
-reported writable channel window is zero, then waits for inbound SSH window
-adjustment data before retrying the pinned write. The VM requires at least one
-such event and verifies the complete remote SHA-256. Window-block messages are
-transition-logged (not repeated on every EAGAIN); a recovery message is emitted
-only after a channel write succeeds again. The VM checks that each logged block
-has a matching recovery, that the c2s ring is empty when the channel closes,
-and that its high-water mark never exceeds the fixed 32 KiB buffer capacity.
-The concurrent test waits only for its curl worker PIDs; it must not wait on
-the long-running `ssh-core` service process.
-
-The workflow is manual-only: ordinary pushes do not start Actions. Run
-`parser` first; only proceed to `sdk` after it passes, then run `vm` with
-the successful SDK run ID. A build or VM test is only considered passed when
-its corresponding stage completes successfully.
+For diagnosis, the workflow still exposes a manual `workflow_dispatch` route
+for running one isolated stage (`parser`, `sdk`, or `vm`). The manual VM
+stage requires the run ID of a successful SDK-stage artifact from the same
+repository. A green workflow result means all stages and all guest assertions
+completed successfully; a timeout or skipped test is not considered a pass.
