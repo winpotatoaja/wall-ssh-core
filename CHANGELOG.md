@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Treat HUP/RDHUP as drain hints rather than EOF: EAGAIN keeps the drain
+  pending, and only recv()==0 confirms the client's write-side EOF.
+- Validate ring-buffer state and commit lengths/contiguous slices. Replace
+  retained libssh2 buffer pointers with ring offsets and generation checks.
+- Defer client unlink/free to the channel pump, avoiding destruction from
+  start_closing_client() while callers may still hold a client pointer.
+- Retry channel_free() on EAGAIN in the pump; final teardown delegates remaining
+  channels to session cleanup instead of ignoring a one-shot channel_free().
+- Interleave IPv4/IPv6 candidates with a 1.2-second per-address budget under one
+  10-second total dial deadline.
+- Add bracketed IPv6 SOCKS listener support, for example [::1]:1080, while
+  retaining the IPv4 loopback default and remote-bind safety guard.
+- Use the destination host rather than the proxy as default TLS SNI and
+  hostname-verification identity. Reject ambiguous unframed non-CONNECT HTTP
+  200 unless HTTP_200_TUNNEL is explicitly enabled.
+- Add regressions for ring invariants, HUP/RDHUP EAGAIN, deferred cleanup, IPv6
+  listener parsing, strict HTTP status lines, and unframed HTTP 200 responses.
+- Bump the OpenWrt package release to r9.
+
 - Reject unexpected non-HTTP bytes after a non-CONNECT HTTP 1xx/2xx response so
   a completed HTTP 200 response cannot silently become an SSH tunnel when
   HTTP_200_TUNNEL=0.

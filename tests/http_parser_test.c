@@ -190,8 +190,94 @@ static int run_ipv6_dial_regression(void) {
     return failed;
 }
 
+
+static int run_ring_buffer_regressions(void) {
+    rb_t r = {0};
+    if (rb_init(&r, 8) < 0) return 1;
+    int failed = 0;
+    if (rb_commit_read(&r, 1, 0) == 0) failed = 1;
+    if (rb_push(&r, (const uint8_t *)"abcdef", 6) < 0) failed = 1;
+    size_t used_before = r.used, tail_before = r.tail;
+    if (rb_commit_write(&r, 3) == 0 || r.used != used_before || r.tail != tail_before) failed = 1;
+    if (rb_commit_read(&r, 7, 0) == 0 || r.used != used_before || r.tail != tail_before) failed = 1;
+    if (rb_commit_read(&r, 4, 0) < 0 || rb_push(&r, (const uint8_t *)"gh", 2) < 0 ||
+        rb_commit_read(&r, 4, 0) < 0 || !rb_state_valid(&r) || r.used != 0) failed = 1;
+    if (rb_push(&r, (const uint8_t *)"xyz", 3) < 0) failed = 1;
+    const uint8_t *pin = rb_read_slice_pinned(&r, r.head, r.generation, 3);
+    if (!pin || memcmp(pin, "xyz", 3) != 0) failed = 1;
+    if (rb_commit_read(&r, 1, 1) < 0 || rb_read_slice_pinned(&r, 0, r.generation, 3) != NULL) failed = 1;
+    rb_free(&r);
+    if (failed) { fprintf(stderr, "[FAIL] ring-buffer invariant checks\\n"); return 1; }
+    puts("[PASS] ring-buffer invariant checks");
+    return 0;
+}
+
+static int run_eof_drain_regression(void) {
+    int sv[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return 1;
+    int flags = fcntl(sv[0], F_GETFL, 0);
+    if (flags < 0 || fcntl(sv[0], F_SETFL, flags | O_NONBLOCK) < 0) {
+        close(sv[0]); close(sv[1]); return 1;
+    }
+    client_conn_t c = {.fd = sv[0], .rdhup_pending = 1};
+    int failed = rb_init(&c.c2s, 64) < 0;
+    if (!failed) {
+        int rc = drain_pending_eof_to_c2s(-1, &c);
+        if (rc != 0 || c.client_eof || c.need_send_eof || !c.rdhup_pending) failed = 1;
+        if (send_test_bytes(sv[1], "abc", 3) < 0) failed = 1;
+        rc = failed ? -1 : drain_pending_eof_to_c2s(-1, &c);
+        if (!failed && (rc != 1 || c.c2s.used != 3 || c.client_eof || c.need_send_eof || !c.rdhup_pending)) failed = 1;
+        if (shutdown(sv[1], SHUT_WR) < 0) failed = 1;
+        rc = failed ? -1 : drain_pending_eof_to_c2s(-1, &c);
+        if (!failed && (rc != 1 || !c.client_eof || !c.need_send_eof || c.rdhup_pending || c.c2s.used != 3)) failed = 1;
+    }
+    rb_free(&c.c2s); close(sv[0]); close(sv[1]);
+    if (failed) { fprintf(stderr, "[FAIL] HUP/RDHUP EAGAIN semantics\\n"); return 1; }
+    puts("[PASS] HUP/RDHUP EAGAIN semantics");
+    return 0;
+}
+
+static int run_deferred_client_cleanup_regression(void) {
+    client_conn_t *c = calloc(1, sizeof(*c));
+    if (!c) return 1;
+    c->fd = -1; c->state = ST_SOCKS_GREETING;
+    g_clients = c; g_client_count = 1; g_opening_client = NULL;
+    clear_pending_operation();
+    start_closing_client(-1, c);
+    int failed = (g_clients != c || c->state != ST_CLOSING);
+    upstream_ctx_t u = {.fd = -1};
+    int dirs = 0, did_read = 0;
+    int pump_rc = failed ? -1 : pump_ssh_channels(-1, NULL, &u, &dirs, &did_read);
+    if (pump_rc != 1 || g_clients != NULL || g_client_count != 0) failed = 1;
+    if (g_clients) while (g_clients) remove_client(-1, g_clients);
+    if (failed) { fprintf(stderr, "[FAIL] deferred client cleanup\\n"); return 1; }
+    puts("[PASS] deferred client cleanup");
+    return 0;
+}
+
+static int run_socks_listener_address_regression(void) {
+    struct sockaddr_storage ss;
+    socklen_t slen = 0;
+    char host[INET6_ADDRSTRLEN + 1];
+    int port = 0, loopback = 0, failed = 0;
+    if (parse_socks_listen_addr("127.0.0.2:1081", &ss, &slen, host, sizeof(host), &port, &loopback) < 0 ||
+        ss.ss_family != AF_INET || port != 1081 || !loopback) failed = 1;
+    if (parse_socks_listen_addr("[::1]:1082", &ss, &slen, host, sizeof(host), &port, &loopback) < 0 ||
+        ss.ss_family != AF_INET6 || port != 1082 || !loopback) failed = 1;
+    if (parse_socks_listen_addr("[2001:db8::1]:1083", &ss, &slen, host, sizeof(host), &port, &loopback) < 0 ||
+        ss.ss_family != AF_INET6 || loopback) failed = 1;
+    if (parse_socks_listen_addr("2001:db8::1:1083", &ss, &slen, host, sizeof(host), &port, &loopback) == 0) failed = 1;
+    if (failed) { fprintf(stderr, "[FAIL] IPv4/IPv6 SOCKS listener parsing\\n"); return 1; }
+    puts("[PASS] IPv4/IPv6 SOCKS listener parsing");
+    return 0;
+}
+
 static int run_core_state_regressions(void) {
     int failures = 0;
+    failures += run_ring_buffer_regressions();
+    failures += run_eof_drain_regression();
+    failures += run_deferred_client_cleanup_regression();
+    failures += run_socks_listener_address_regression();
 
     size_t parsed_hex = 0;
     if (parse_strict_hex_size("10", &parsed_hex, MAX_HTTP_SKIP_BODY) != 0 || parsed_hex != 16 ||
@@ -353,9 +439,13 @@ int main(void) {
         0, 0, 1, -1, 0);
 
     failures += run_case(
-        "GET 200 close-delimited waits for EOF",
+        "unframed non-CONNECT HTTP 200 fails closed",
         "HTTP/1.1 200 OK\r\n\r\nbody",
-        0, 0, 0, -2, 0);
+        0, 0, 0, -1, 0);
+    failures += run_case(
+        "HTTP status line with repeated separator spaces is rejected",
+        "HTTP/1.1  200 OK\r\nContent-Length: 0\r\n\r\n",
+        0, 0, 0, -1, 0);
 
     failures += run_case(
         "CONNECT 2xx establishes tunnel",

@@ -43,6 +43,8 @@
 #define MAX_CLIENTS_LIMIT      256
 #define DEFAULT_IDLE_TIMEOUT   600
 #define HANDSHAKE_TIMEOUT_MS   15000
+#define TCP_CONNECT_TIMEOUT_MS 10000
+#define TCP_CONNECT_ADDRESS_TIMEOUT_MS 1200
 #define SOCKS_HS_TIMEOUT_SEC   15
 #define SSH_OPEN_SOFT_TO_MS    15000
 #define SSH_OPEN_HARD_TO_MS    30000
@@ -66,6 +68,7 @@ typedef struct {
     size_t   head;
     size_t   tail;
     size_t   used;
+    uint64_t generation;
 } rb_t;
 
 typedef struct {
@@ -146,7 +149,8 @@ typedef struct client_conn {
 
     /* Pin argumen (ptr, len) per-channel saat EAGAIN */
     int            write_pending;
-    const uint8_t *write_pending_ptr;
+    size_t         write_pending_head;
+    uint64_t       write_pending_generation;
     size_t         write_pending_len;
     int            write_waiting_window;
     uint64_t       write_wait_rx_seq;
@@ -160,7 +164,8 @@ typedef struct client_conn {
     int            s2c_final_logged;
 
     int            read_pending;
-    uint8_t       *read_pending_ptr;
+    size_t         read_pending_tail;
+    uint64_t       read_pending_generation;
     size_t         read_pending_len;
 
     rb_t c2s;
@@ -176,6 +181,79 @@ static client_conn_t *g_opening_client = NULL;
 static client_conn_t *g_pending_client = NULL;
 static pending_op_t   g_pending_op = PENDING_NONE;
 
+static void clear_pending_operation(void) {
+    g_pending_client = NULL;
+    g_pending_op = PENDING_NONE;
+}
+static void set_pending_operation(client_conn_t *c, pending_op_t op) {
+    g_pending_client = c;
+    g_pending_op = op;
+}
+
+static int parse_socks_listen_addr(const char *text,
+                                     struct sockaddr_storage *out,
+                                     socklen_t *out_len,
+                                     char *host_out, size_t host_out_sz,
+                                     int *port_out, int *loopback_out) {
+    if (!text || !*text || !out || !out_len || !host_out ||
+        host_out_sz == 0 || !port_out || !loopback_out) return -1;
+    const char *spec = text;
+    const char *port_text = NULL;
+    size_t host_len = 0;
+    int bracketed = (spec[0] == '[');
+    if (bracketed) {
+        const char *close_bracket = strchr(spec, ']');
+        if (!close_bracket) return -1;
+        host_len = (size_t)(close_bracket - spec + 1);
+        if (close_bracket[1] == ':') port_text = close_bracket + 2;
+        else if (close_bracket[1] != '\0') return -1;
+    } else {
+        const char *colon = strrchr(spec, ':');
+        if (colon) {
+            if (memchr(spec, ':', (size_t)(colon - spec))) return -1;
+            host_len = (size_t)(colon - spec);
+            port_text = colon + 1;
+        } else host_len = strlen(spec);
+    }
+    long port = 1080;
+    if (port_text) {
+        char *end = NULL;
+        errno = 0;
+        port = strtol(port_text, &end, 10);
+        if (errno || end == port_text || *end != '\0' || port < 1 || port > 65535)
+            return -1;
+    }
+    const char *host_start = spec + (bracketed ? 1 : 0);
+    if (bracketed) host_len -= 2;
+    if (host_len == 0 || host_len >= host_out_sz || host_len >= INET6_ADDRSTRLEN + 1)
+        return -1;
+    char host[INET6_ADDRSTRLEN + 1];
+    memcpy(host, host_start, host_len);
+    host[host_len] = '\0';
+    memset(out, 0, sizeof(*out));
+    struct sockaddr_in a4;
+    memset(&a4, 0, sizeof(a4));
+    if (!bracketed && inet_pton(AF_INET, host, &a4.sin_addr) == 1) {
+        a4.sin_family = AF_INET;
+        a4.sin_port = htons((uint16_t)port);
+        memcpy(out, &a4, sizeof(a4));
+        *out_len = sizeof(a4);
+        *loopback_out = (ntohl(a4.sin_addr.s_addr) >> 24) == 127U;
+    } else {
+        struct sockaddr_in6 a6;
+        memset(&a6, 0, sizeof(a6));
+        if (!bracketed || inet_pton(AF_INET6, host, &a6.sin6_addr) != 1) return -1;
+        a6.sin6_family = AF_INET6;
+        a6.sin6_port = htons((uint16_t)port);
+        memcpy(out, &a6, sizeof(a6));
+        *out_len = sizeof(a6);
+        *loopback_out = IN6_IS_ADDR_LOOPBACK(&a6.sin6_addr) ? 1 : 0;
+    }
+    snprintf(host_out, host_out_sz, "%s", host);
+    *port_out = (int)port;
+    return 0;
+}
+
 static int relay_idle_timeout_due(const client_conn_t *c, int timeout_sec,
                                   long long now_msec) {
     if (!c || c->state != ST_RELAY || c->abort_on_pending ||
@@ -188,73 +266,91 @@ static int relay_idle_timeout_due(const client_conn_t *c, int timeout_sec,
 /* ============================================================
  * RING BUFFER (ZERO MEMMOVE, LAZY ALLOCATION)
  * ============================================================ */
+static uint64_t g_rb_generation = 1;
+static uint64_t rb_next_generation(void) {
+    g_rb_generation++;
+    if (g_rb_generation == 0) g_rb_generation++;
+    return g_rb_generation;
+}
+static int rb_state_valid(const rb_t *r) {
+    if (!r || !r->data || r->cap == 0) return 0;
+    if (r->head >= r->cap || r->tail >= r->cap || r->used > r->cap) return 0;
+    size_t until_wrap = r->cap - r->head;
+    size_t expected_tail = r->used < until_wrap ? r->head + r->used : r->used - until_wrap;
+    if (expected_tail == r->cap) expected_tail = 0;
+    return expected_tail == r->tail;
+}
 static int rb_init(rb_t *r, size_t cap) {
-    if (r->data) return 0;
-    r->data = malloc(cap);
-    if (!r->data) return -1;
+    if (!r || cap == 0) return -1;
+    if (r->data) return rb_state_valid(r) ? 0 : -1;
+    uint8_t *data = malloc(cap);
+    if (!data) return -1;
+    r->data = data;
     r->cap = cap;
-    r->head = 0;
-    r->tail = 0;
-    r->used = 0;
+    r->head = r->tail = r->used = 0;
+    r->generation = rb_next_generation();
     return 0;
 }
-
 static void rb_free(rb_t *r) {
+    if (!r) return;
     free(r->data);
     r->data = NULL;
-    r->cap = 0;
-    r->head = 0;
-    r->tail = 0;
-    r->used = 0;
+    r->cap = r->head = r->tail = r->used = 0;
+    r->generation = rb_next_generation();
 }
-
 static inline size_t rb_free_space(const rb_t *r) {
-    return r->cap - r->used;
+    return rb_state_valid(r) ? r->cap - r->used : 0;
 }
-
 static uint8_t *rb_write_slice(rb_t *r, size_t *avail) {
-    if (!r->data || r->used >= r->cap) {
-        *avail = 0;
-        return NULL;
-    }
-    if (r->tail >= r->head) {
-        *avail = r->cap - r->tail;
-    } else {
-        *avail = r->head - r->tail;
-    }
-    return r->data + r->tail;
+    if (!avail) return NULL;
+    *avail = 0;
+    if (!rb_state_valid(r) || r->used == r->cap) return NULL;
+    *avail = r->tail >= r->head ? r->cap - r->tail : r->head - r->tail;
+    return *avail ? r->data + r->tail : NULL;
 }
-
-static void rb_commit_write(rb_t *r, size_t n) {
+static const uint8_t *rb_read_slice(const rb_t *r, size_t *avail) {
+    if (!avail) return NULL;
+    *avail = 0;
+    if (!rb_state_valid(r) || r->used == 0) return NULL;
+    *avail = r->head < r->tail ? r->tail - r->head : r->cap - r->head;
+    return *avail ? r->data + r->head : NULL;
+}
+static const uint8_t *rb_read_slice_pinned(const rb_t *r, size_t head,
+                                           uint64_t generation, size_t len) {
+    size_t avail = 0;
+    if (!rb_state_valid(r) || r->generation != generation || r->head != head || len == 0)
+        return NULL;
+    const uint8_t *ptr = rb_read_slice(r, &avail);
+    return ptr && len <= avail ? ptr : NULL;
+}
+static uint8_t *rb_write_slice_pinned(rb_t *r, size_t tail,
+                                      uint64_t generation, size_t len) {
+    size_t avail = 0;
+    if (!rb_state_valid(r) || r->generation != generation || r->tail != tail || len == 0)
+        return NULL;
+    uint8_t *ptr = rb_write_slice(r, &avail);
+    return ptr && len <= avail ? ptr : NULL;
+}
+static int rb_commit_write(rb_t *r, size_t n) {
+    if (!rb_state_valid(r) || n > r->cap - r->used) return -1;
+    size_t contiguous = r->tail >= r->head ? r->cap - r->tail : r->head - r->tail;
+    if (n > contiguous) return -1;
     r->tail = (r->tail + n) % r->cap;
     r->used += n;
+    return rb_state_valid(r) ? 0 : -1;
 }
-
-static const uint8_t *rb_read_slice(const rb_t *r, size_t *avail) {
-    if (!r->data || r->used == 0) {
-        *avail = 0;
-        return NULL;
-    }
-    if (r->head < r->tail) {
-        *avail = r->tail - r->head;
-    } else {
-        *avail = r->cap - r->head;
-    }
-    return r->data + r->head;
-}
-
-static void rb_commit_read(rb_t *r, size_t n, int keep_pos) {
+static int rb_commit_read(rb_t *r, size_t n, int keep_pos) {
+    if (!rb_state_valid(r) || n > r->used) return -1;
+    size_t contiguous = r->head < r->tail ? r->tail - r->head : r->cap - r->head;
+    if (n > contiguous) return -1;
     r->head = (r->head + n) % r->cap;
     r->used -= n;
-    if (r->used == 0 && !keep_pos) {
-        r->head = 0;
-        r->tail = 0;
-    }
+    if (r->used == 0 && !keep_pos) r->head = r->tail = 0;
+    return rb_state_valid(r) ? 0 : -1;
 }
-
 static int rb_push(rb_t *r, const uint8_t *src, size_t len) {
     if (len == 0) return 0;
-    if (rb_free_space(r) < len) return -1;
+    if (!src || !rb_state_valid(r) || rb_free_space(r) < len) return -1;
     size_t left = len;
     const uint8_t *p = src;
     while (left > 0) {
@@ -263,7 +359,7 @@ static int rb_push(rb_t *r, const uint8_t *src, size_t len) {
         if (!dst || avail == 0) return -1;
         size_t take = left < avail ? left : avail;
         memcpy(dst, p, take);
-        rb_commit_write(r, take);
+        if (rb_commit_write(r, take) < 0) return -1;
         p += take;
         left -= take;
     }
@@ -1260,11 +1356,15 @@ static int consume_one_http_response(upstream_ctx_t *u,int allow_non_tunnel) {
             u->http_pending_tunnel=legacy_200_tunnel;
             continue;
         }
-        if(legacy_200_tunnel){
-            u->tunnel_established=1;
+        if (legacy_200_tunnel) {
+            u->tunnel_established = 1;
             return 0;
         }
-        /* Without explicit framing, an ordinary HTTP response ends at EOF. */
+        if (code == 200) {
+            /* Do not mistake a raw SSH tunnel for a close-delimited HTTP body. */
+            return -1;
+        }
+        /* Other ordinary HTTP responses may be close-delimited and end at EOF. */
         u->http_close_delimited=1;
     }
 }
@@ -1439,49 +1539,62 @@ static void close_connect_fd(int *fd) {
  * The single 10-second deadline covers all address connect attempts.
  * getaddrinfo() is synchronous and completes before this deadline starts.
  */
+static int tcp_connect_one_address(const struct addrinfo *rp,
+                                    long long total_deadline_ms) {
+    int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+    if (fd < 0) return -1;
+    tune_tcp_socket(fd);
+    if (set_nonblock(fd, 1) < 0) {
+        close_connect_fd(&fd);
+        return -1;
+    }
+    int cr = connect(fd, rp->ai_addr, rp->ai_addrlen);
+    if (cr == 0) return fd;
+    int connect_errno = errno;
+    if (connect_errno != EINPROGRESS && connect_errno != EALREADY &&
+        connect_errno != EINTR && connect_errno != EWOULDBLOCK) {
+        close_connect_fd(&fd);
+        return -1;
+    }
+    long long deadline = now_ms() + TCP_CONNECT_ADDRESS_TIMEOUT_MS;
+    if (deadline > total_deadline_ms) deadline = total_deadline_ms;
+    int wait_rc = poll_tcp_connect_until(fd, deadline);
+    if (wait_rc > 0) return fd;
+    close_connect_fd(&fd);
+    return -1;
+}
 static int tcp_connect_host(const char *host, const char *port) {
     struct addrinfo hints = {0}, *res = NULL;
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     int rc = getaddrinfo(host, port, &hints, &res);
     if (rc != 0 || !res) return -1;
-
-    int fd = -1;
-    long long deadline = now_ms() + 10000;
-    /* Preserve IPv4-first behavior, then use any remaining time for IPv6. */
-    for (int pass = 0; pass < 2 && fd < 0 && !g_stop; pass++) {
-        for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
-            int is_ipv4 = (rp->ai_family == AF_INET);
-            if ((pass == 0 && !is_ipv4) || (pass == 1 && is_ipv4)) continue;
-            if (now_ms() >= deadline) goto connect_done;
-
-            fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-            if (fd < 0) continue;
-
-            tune_tcp_socket(fd);
-            if (set_nonblock(fd, 1) < 0) {
-                close_connect_fd(&fd);
-                continue;
-            }
-
-            int cr = connect(fd, rp->ai_addr, rp->ai_addrlen);
-            if (cr == 0) break;
-
-            int connect_errno = errno;
-            if (connect_errno == EINPROGRESS || connect_errno == EALREADY ||
-                connect_errno == EINTR || connect_errno == EWOULDBLOCK) {
-                int wait_rc = poll_tcp_connect_until(fd, deadline);
-                if (wait_rc > 0) break;
-                close_connect_fd(&fd);
-                if (wait_rc == 0) goto connect_done;
-                continue;
-            }
-
-            close_connect_fd(&fd);
-        }
+    size_t n4 = 0, n6 = 0;
+    for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
+        if (rp->ai_family == AF_INET) n4++;
+        else if (rp->ai_family == AF_INET6) n6++;
     }
-connect_done:
-    freeaddrinfo(res);
+    struct addrinfo **v4 = n4 ? calloc(n4, sizeof(*v4)) : NULL;
+    struct addrinfo **v6 = n6 ? calloc(n6, sizeof(*v6)) : NULL;
+    if ((n4 && !v4) || (n6 && !v6)) {
+        free(v4); free(v6); freeaddrinfo(res);
+        return -1;
+    }
+    size_t i4 = 0, i6 = 0;
+    for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
+        if (rp->ai_family == AF_INET) v4[i4++] = rp;
+        else if (rp->ai_family == AF_INET6) v6[i6++] = rp;
+    }
+    long long total_deadline = now_ms() + TCP_CONNECT_TIMEOUT_MS;
+    size_t rounds = n4 > n6 ? n4 : n6;
+    int fd = -1;
+    for (size_t i = 0; i < rounds && fd < 0 && !g_stop; i++) {
+        if (i < n4 && now_ms() < total_deadline)
+            fd = tcp_connect_one_address(v4[i], total_deadline);
+        if (fd < 0 && i < n6 && now_ms() < total_deadline)
+            fd = tcp_connect_one_address(v6[i], total_deadline);
+    }
+    free(v4); free(v6); freeaddrinfo(res);
     return fd;
 }
 
@@ -1538,8 +1651,7 @@ static void detach_client_fd(int epfd, client_conn_t *c) {
 static void remove_client(int epfd, client_conn_t *c) {
     if (g_opening_client == c) g_opening_client = NULL;
     if (g_pending_client == c) {
-        g_pending_client = NULL;
-        g_pending_op = PENDING_NONE;
+        clear_pending_operation();
     }
     detach_client_fd(epfd, c);
     rb_free(&c->c2s);
@@ -1552,6 +1664,7 @@ static void remove_client(int epfd, client_conn_t *c) {
 }
 
 static void start_closing_client(int epfd, client_conn_t *c) {
+    if (!c) return;
     if (c == g_pending_client && g_pending_op != PENDING_NONE) {
         c->abort_on_pending = 1;
         detach_client_fd(epfd, c);
@@ -1562,21 +1675,21 @@ static void start_closing_client(int epfd, client_conn_t *c) {
         detach_client_fd(epfd, c);
         return;
     }
-    if (!c->channel) {
-        remove_client(epfd, c);
-        return;
-    }
     detach_client_fd(epfd, c);
-    c->write_pending = 0;
-    c->write_pending_ptr = NULL;
-    c->write_pending_len = 0;
-    c->write_waiting_window = 0;
-    c->write_wait_rx_seq = 0;
-    c->read_pending = 0;
-    c->read_pending_ptr = NULL;
-    c->read_pending_len = 0;
-    log_channel_buffer_final(c);
-    log_s2c_buffer_final(c);
+    if (c->channel) {
+        c->write_pending = 0;
+        c->write_pending_head = 0;
+        c->write_pending_generation = 0;
+        c->write_pending_len = 0;
+        c->write_waiting_window = 0;
+        c->write_wait_rx_seq = 0;
+        c->read_pending = 0;
+        c->read_pending_tail = 0;
+        c->read_pending_generation = 0;
+        c->read_pending_len = 0;
+        log_channel_buffer_final(c);
+        log_s2c_buffer_final(c);
+    }
     rb_free(&c->c2s);
     rb_free(&c->s2c);
     c->state = ST_CLOSING;
@@ -1675,7 +1788,7 @@ static int send_from_rb(int fd, rb_t *r, int keep_pos) {
         if (!ptr || avail == 0) break;
         ssize_t n = send(fd, ptr, avail, MSG_NOSIGNAL);
         if (n > 0) {
-            rb_commit_read(r, (size_t)n, keep_pos);
+            if (rb_commit_read(r, (size_t)n, keep_pos) < 0) return -1;
             if ((size_t)n < avail) break;
         } else if (n < 0 && errno == EINTR) {
             continue;
@@ -1698,7 +1811,7 @@ static int recv_to_rb(int fd, rb_t *r, int *eof_out, int *would_block_out) {
         if (!ptr || avail == 0) break;
         ssize_t n = recv(fd, ptr, avail, 0);
         if (n > 0) {
-            rb_commit_write(r, (size_t)n);
+            if (rb_commit_write(r, (size_t)n) < 0) return -1;
             continue;
         }
         if (n == 0) {
@@ -1719,22 +1832,24 @@ static int recv_to_rb(int fd, rb_t *r, int *eof_out, int *would_block_out) {
 static int drain_pending_eof_to_c2s(int epfd, client_conn_t *c) {
     if (!(c->hup_pending || c->rdhup_pending) || c->client_eof || c->fd < 0) return 0;
     if (rb_free_space(&c->c2s) == 0) return 0;
-
     size_t before = c->c2s.used;
-    int eof_hit = 0;
-    int would_block = 0;
+    int eof_hit = 0, would_block = 0;
     int rc = recv_to_rb(c->fd, &c->c2s, &eof_hit, &would_block);
     note_c2s_buffer_peak(c);
-    if (c->c2s.used > before) c->last_activity_ms=now_ms();
-    if (rc < 0 || eof_hit || would_block) {
-        c->client_eof = 1;
-        c->need_send_eof = 1;
-        if (c->hup_pending || rc < 0) {
+    if (c->c2s.used > before) c->last_activity_ms = now_ms();
+    if (rc < 0) {
+        c->client_eof = 1; c->need_send_eof = 1; c->client_dead = 1;
+        c->hup_pending = 0; c->rdhup_pending = 0;
+        detach_client_fd(epfd, c);
+    } else if (eof_hit) {
+        c->client_eof = 1; c->need_send_eof = 1;
+        if (c->hup_pending) {
             c->client_dead = 1;
             detach_client_fd(epfd, c);
         }
-        c->hup_pending = 0;
-        c->rdhup_pending = 0;
+        c->hup_pending = 0; c->rdhup_pending = 0;
+    } else if (would_block) {
+        /* EAGAIN preserves pending drain, it is not EOF. */
     }
     return (c->c2s.used > before || c->client_eof) ? 1 : 0;
 }
@@ -1934,12 +2049,11 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
     if (c->state == ST_RELAY) {
         int eof_hit = 0;
         int would_block = 0;
-
-        /* Selalu coba kuras data socket saat EPOLLIN maupun EPOLLHUP/EPOLLRDHUP/EPOLLERR */
+        int recv_rc = 0;
         if ((events & (EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP)) &&
             !c->client_eof && rb_free_space(&c->c2s) > 0) {
             size_t c2s_before=c->c2s.used;
-            int recv_rc = recv_to_rb(c->fd, &c->c2s, &eof_hit, &would_block);
+            recv_rc = recv_to_rb(c->fd, &c->c2s, &eof_hit, &would_block);
             note_c2s_buffer_peak(c);
             if (recv_rc < 0) {
                 c->client_eof = 1;
@@ -1973,7 +2087,7 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
         }
 
         if (c->fd >= 0 && (events & (EPOLLERR | EPOLLHUP)) && !c->client_dead) {
-            if (c->client_eof || eof_hit || would_block) {
+            if (c->client_eof || eof_hit || recv_rc < 0) {
                 c->client_eof = 1;
                 c->need_send_eof = 1;
                 c->client_dead = 1;
@@ -1988,7 +2102,7 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
                 suspend_client_epoll(epfd, c);
             }
         } else if (c->fd >= 0 && (events & EPOLLRDHUP) && !c->client_eof) {
-            if (eof_hit || would_block) {
+            if (eof_hit || recv_rc < 0) {
                 c->client_eof = 1;
                 c->need_send_eof = 1;
                 c->rdhup_pending = 0;
@@ -2025,8 +2139,7 @@ static void record_eagain(LIBSSH2_SESSION *session, upstream_ctx_t *u,
     *agg_dirs_out |= d;
     int need_out = (d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && u->ssl_want_events == EPOLLOUT);
     if (need_out || op == PENDING_KEEPALIVE) {
-        g_pending_client = c;
-        g_pending_op = op;
+        set_pending_operation(c, op);
         *stop_loop_out = 1;
     }
 }
@@ -2100,8 +2213,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         int rc = libssh2_keepalive_send(session, &next_sec);
         if (rc == 0) {
             u->last_activity = time(NULL);
-            g_pending_op = PENDING_NONE;
-            g_pending_client = NULL;
+            clear_pending_operation();
             return 1;
         }
         if (rc == LIBSSH2_ERROR_EAGAIN) {
@@ -2112,7 +2224,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
     }
 
     if (!c) {
-        g_pending_op = PENDING_NONE;
+        clear_pending_operation();
         return 2;
     }
 
@@ -2120,8 +2232,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         LIBSSH2_CHANNEL *ch = libssh2_channel_direct_tcpip_ex(
             session, c->target_host, c->target_port, "127.0.0.1", 1080);
         if (ch) {
-            g_pending_op = PENDING_NONE;
-            g_pending_client = NULL;
+            clear_pending_operation();
             return finish_open_channel(epfd, c, ch);
         }
         int err = libssh2_session_last_errno(session);
@@ -2136,13 +2247,11 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 c->abort_on_open = 1;
                 c->abort_on_pending = 0;
             }
-            g_pending_op = PENDING_NONE;
-            g_pending_client = NULL;
+            clear_pending_operation();
             *retried_open_out = c;
             return 2;
         }
-        g_pending_op = PENDING_NONE;
-        g_pending_client = NULL;
+        clear_pending_operation();
         g_opening_client = NULL;
         if (!c->abort_on_open && !c->abort_on_pending && !c->close_after_ctrl && c->fd >= 0) {
             send_socks_err_and_close(epfd, c, 0x05);
@@ -2156,23 +2265,31 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
     }
 
     if (op == PENDING_WRITE) {
-        const uint8_t *ptr = c->write_pending_ptr;
-        size_t wlen = c->write_pending_len;
-        if (!c->write_pending || !ptr || wlen == 0) {
-            ptr = rb_read_slice(&c->c2s, &wlen);
+        size_t wlen = c->write_pending ? c->write_pending_len : 0;
+        const uint8_t *ptr = c->write_pending
+            ? rb_read_slice_pinned(&c->c2s, c->write_pending_head, c->write_pending_generation, wlen)
+            : rb_read_slice(&c->c2s, &wlen);
+        if (c->write_pending && !ptr) {
+            log_red("C2S pending write buffer identity changed before retry");
+            clear_pending_operation();
+            return -1;
         }
         ssize_t w = (ptr && wlen > 0) ? libssh2_channel_write(c->channel, (const char *)ptr, wlen) : 0;
         if (w > 0) {
-            rb_commit_read(&c->c2s, (size_t)w, 0);
+            if ((size_t)w > wlen || rb_commit_read(&c->c2s, (size_t)w, 0) < 0) {
+                log_red("C2S ring commit rejected after pending write");
+                clear_pending_operation();
+                return -1;
+            }
             note_channel_window_recovered(c);
             c->last_activity_ms=now_ms();
             c->write_pending = 0;
-            c->write_pending_ptr = NULL;
+            c->write_pending_head = 0;
+            c->write_pending_generation = 0;
             c->write_pending_len = 0;
             c->write_waiting_window = 0;
             c->write_wait_rx_seq = 0;
-            g_pending_op = PENDING_NONE;
-            g_pending_client = NULL;
+            clear_pending_operation();
             if (c->abort_on_pending) {
                 c->abort_on_pending = 0;
                 start_closing_client(epfd, c);
@@ -2183,10 +2300,15 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         }
         if (w == 0) {
             int d=libssh2_session_block_directions(session);*agg_dirs_out|=d;
-            c->write_pending=(ptr&&wlen>0);c->write_pending_ptr=ptr;c->write_pending_len=wlen;
+            c->write_pending = (ptr && wlen > 0);
+            if (c->write_pending) {
+                c->write_pending_head = c->c2s.head;
+                c->write_pending_generation = c->c2s.generation;
+                c->write_pending_len = wlen;
+            }
             c->write_waiting_window=1;c->write_wait_rx_seq=u->rx_seq;
             if (ptr && wlen > 0) note_channel_window_blocked(c, 0);
-            g_pending_op=PENDING_NONE;g_pending_client=NULL;
+            clear_pending_operation();
             if(c->abort_on_pending){c->abort_on_pending=0;start_closing_client(epfd,c);return 1;}
             return 2;
         }
@@ -2205,8 +2327,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             if ((d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && u->ssl_want_events == EPOLLOUT)) {
                 return 0;
             }
-            g_pending_op = PENDING_NONE;
-            g_pending_client = NULL;
+            clear_pending_operation();
             if (c->abort_on_pending) {
                 c->abort_on_pending = 0;
                 start_closing_client(epfd, c);
@@ -2215,12 +2336,12 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             return 2;
         }
         c->write_pending = 0;
-        c->write_pending_ptr = NULL;
+        c->write_pending_head = 0;
+        c->write_pending_generation = 0;
         c->write_pending_len = 0;
         c->write_waiting_window = 0;
         c->write_wait_rx_seq = 0;
-        g_pending_op = PENDING_NONE;
-        g_pending_client = NULL;
+        clear_pending_operation();
         c->abort_on_pending = 0;
         start_closing_client(epfd, c);
         return (w < 0 && is_libssh2_socket_fatal((int)w)) ? -1 : 1;
@@ -2230,8 +2351,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         int rc = libssh2_channel_send_eof(c->channel);
         if (rc == 0) {
             c->need_send_eof = 0;
-            g_pending_op = PENDING_NONE;
-            g_pending_client = NULL;
+            clear_pending_operation();
             if (c->abort_on_pending) {
                 c->abort_on_pending = 0;
                 start_closing_client(epfd, c);
@@ -2242,30 +2362,37 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             *agg_dirs_out |= libssh2_session_block_directions(session);
             return 0;
         }
-        g_pending_op = PENDING_NONE;
-        g_pending_client = NULL;
+        clear_pending_operation();
         c->abort_on_pending = 0;
         start_closing_client(epfd, c);
         return is_libssh2_socket_fatal(rc) ? -1 : 1;
     }
 
     if (op == PENDING_READ) {
-        uint8_t *ptr = c->read_pending_ptr;
-        size_t rlen = c->read_pending_len;
-        if (!c->read_pending || !ptr || rlen == 0) {
-            ptr = rb_write_slice(&c->s2c, &rlen);
+        size_t rlen = c->read_pending ? c->read_pending_len : 0;
+        uint8_t *ptr = c->read_pending
+            ? rb_write_slice_pinned(&c->s2c, c->read_pending_tail, c->read_pending_generation, rlen)
+            : rb_write_slice(&c->s2c, &rlen);
+        if (c->read_pending && !ptr) {
+            log_red("S2C pending read buffer identity changed before retry");
+            clear_pending_operation();
+            return -1;
         }
         ssize_t r = (ptr && rlen > 0) ? libssh2_channel_read(c->channel, (char *)ptr, rlen) : LIBSSH2_ERROR_EAGAIN;
         if (r > 0) {
             c->read_pending = 0;
-            c->read_pending_ptr = NULL;
+            c->read_pending_tail = 0;
+        c->read_pending_generation = 0;
             c->read_pending_len = 0;
-            rb_commit_write(&c->s2c, (size_t)r);
+            if ((size_t)r > rlen || rb_commit_write(&c->s2c, (size_t)r) < 0) {
+                log_red("S2C ring commit rejected after pending read");
+                clear_pending_operation();
+                return -1;
+            }
             note_s2c_buffer_peak(c);
             c->last_activity_ms=now_ms();
             *did_ssh_read_out = 1;
-            g_pending_op = PENDING_NONE;
-            g_pending_client = NULL;
+            clear_pending_operation();
             if (c->abort_on_pending ||
                 (c->fd >= 0 && c->ctrl_len == 0 && send_from_rb(c->fd, &c->s2c, 0) < 0)) {
                 c->abort_on_pending = 0;
@@ -2275,7 +2402,8 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         }
         if (r == 0) {
             c->read_pending = 0;
-            c->read_pending_ptr = NULL;
+            c->read_pending_tail = 0;
+        c->read_pending_generation = 0;
             c->read_pending_len = 0;
             if (c->s2c.used == 0) { c->s2c.head = 0; c->s2c.tail = 0; }
             if (libssh2_channel_eof(c->channel)) {
@@ -2283,8 +2411,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 *did_ssh_read_out = 1;
                 if (c->s2c.used == 0 && c->ctrl_len == 0 && c->fd >= 0) shutdown(c->fd, SHUT_WR);
             }
-            g_pending_op = PENDING_NONE;
-            g_pending_client = NULL;
+            clear_pending_operation();
             if (c->abort_on_pending) {
                 c->abort_on_pending = 0;
                 start_closing_client(epfd, c);
@@ -2298,8 +2425,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             if ((d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && u->ssl_want_events == EPOLLOUT)) {
                 return 0;
             }
-            g_pending_op = PENDING_NONE;
-            g_pending_client = NULL;
+            clear_pending_operation();
             if (c->abort_on_pending) {
                 c->abort_on_pending = 0;
                 start_closing_client(epfd, c);
@@ -2308,10 +2434,10 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             return 2;
         }
         c->read_pending = 0;
-        c->read_pending_ptr = NULL;
+        c->read_pending_tail = 0;
+        c->read_pending_generation = 0;
         c->read_pending_len = 0;
-        g_pending_op = PENDING_NONE;
-        g_pending_client = NULL;
+        clear_pending_operation();
         c->abort_on_pending = 0;
         start_closing_client(epfd, c);
         return is_libssh2_socket_fatal((int)r) ? -1 : 1;
@@ -2324,14 +2450,12 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             return 0;
         }
         c->channel = NULL;
-        g_pending_op = PENDING_NONE;
-        g_pending_client = NULL;
+        clear_pending_operation();
         remove_client(epfd, c);
         return 1;
     }
 
-    g_pending_op = PENDING_NONE;
-    g_pending_client = NULL;
+    clear_pending_operation();
     return 2;
 }
 
@@ -2412,8 +2536,15 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 const uint8_t *ptr = NULL;
                 size_t avail = 0;
                 if (c->write_pending) {
-                    ptr = c->write_pending_ptr;
                     avail = c->write_pending_len;
+                    ptr = rb_read_slice_pinned(&c->c2s, c->write_pending_head,
+                                               c->write_pending_generation, avail);
+                    if (!ptr) {
+                        log_red("C2S ring slice identity mismatch in relay pump");
+                        *agg_dirs_out = agg_dirs;
+                        *did_ssh_read_out = did_ssh_read;
+                        return -1;
+                    }
                 } else {
                     ptr = rb_read_slice(&c->c2s, &avail);
                 }
@@ -2421,12 +2552,18 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     ssize_t w = libssh2_channel_write(c->channel, (const char *)ptr, avail);
                     if (w > 0) {
                         c->write_pending = 0;
-                        c->write_pending_ptr = NULL;
+                        c->write_pending_head = 0;
+        c->write_pending_generation = 0;
                         c->write_pending_len = 0;
                         c->write_waiting_window = 0;
                         c->write_wait_rx_seq = 0;
                         c->last_activity_ms = now_ms();
-                        rb_commit_read(&c->c2s, (size_t)w, 0);
+                        if ((size_t)w > avail || rb_commit_read(&c->c2s, (size_t)w, 0) < 0) {
+                            log_red("C2S ring commit rejected in relay pump");
+                            *agg_dirs_out = agg_dirs;
+                            *did_ssh_read_out = did_ssh_read;
+                            return -1;
+                        }
                         note_channel_window_recovered(c);
                         any_progress = 1;
                         if (c->abort_on_pending) {
@@ -2438,14 +2575,18 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         (void)drain_pending_eof_to_c2s(epfd, c);
                     } else if (w == 0) {
                         int d=libssh2_session_block_directions(session);agg_dirs|=d;
-                        c->write_pending=1;c->write_pending_ptr=ptr;c->write_pending_len=avail;
+                        c->write_pending = 1;
+                        c->write_pending_head = c->c2s.head;
+                        c->write_pending_generation = c->c2s.generation;
+                        c->write_pending_len = avail;
                         c->write_waiting_window=1;c->write_wait_rx_seq=u->rx_seq;
                         note_channel_window_blocked(c, 0);
                         if(c->abort_on_pending){c->abort_on_pending=0;start_closing_client(epfd,c);c=next;continue;}
                     } else if (w == LIBSSH2_ERROR_EAGAIN) {
                         unsigned long write_window = libssh2_channel_window_write_ex(c->channel, NULL);
                         c->write_pending = 1;
-                        c->write_pending_ptr = ptr;
+                        c->write_pending_head = c->c2s.head;
+                        c->write_pending_generation = c->c2s.generation;
                         c->write_pending_len = avail;
                         if (write_window == 0) {
                             /*
@@ -2465,7 +2606,8 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         if (stop_loop) break;
                     } else {
                         c->write_pending = 0;
-                        c->write_pending_ptr = NULL;
+                        c->write_pending_head = 0;
+        c->write_pending_generation = 0;
                         c->write_pending_len = 0;
                         c->write_waiting_window = 0;
                         c->write_wait_rx_seq = 0;
@@ -2520,20 +2662,33 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 uint8_t *ptr = NULL;
                 size_t avail = 0;
                 if (c->read_pending) {
-                    ptr = c->read_pending_ptr;
                     avail = c->read_pending_len;
+                    ptr = rb_write_slice_pinned(&c->s2c, c->read_pending_tail,
+                                                c->read_pending_generation, avail);
+                    if (!ptr) {
+                        log_red("S2C ring slice identity mismatch in relay pump");
+                        *agg_dirs_out = agg_dirs;
+                        *did_ssh_read_out = did_ssh_read;
+                        return -1;
+                    }
                 } else {
                     ptr = rb_write_slice(&c->s2c, &avail);
                 }
                 if (ptr && avail > 0) {
                     ssize_t r = libssh2_channel_read(c->channel, (char *)ptr, avail);
                     if (r > 0) {
+                        if ((size_t)r > avail || rb_commit_write(&c->s2c, (size_t)r) < 0) {
+                            log_red("S2C ring commit rejected in relay pump");
+                            *agg_dirs_out = agg_dirs;
+                            *did_ssh_read_out = did_ssh_read;
+                            return -1;
+                        }
                         c->read_pending = 0;
-                        c->read_pending_ptr = NULL;
+                        c->read_pending_tail = 0;
+                        c->read_pending_generation = 0;
                         c->read_pending_len = 0;
                         did_ssh_read = 1;
-                        rb_commit_write(&c->s2c, (size_t)r);
-            note_s2c_buffer_peak(c);
+                        note_s2c_buffer_peak(c);
                         c->last_activity_ms=now_ms();
                         any_progress = 1;
                         if (c->abort_on_pending ||
@@ -2550,7 +2705,8 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         }
                     } else if (r == 0) {
                         c->read_pending = 0;
-                        c->read_pending_ptr = NULL;
+                        c->read_pending_tail = 0;
+        c->read_pending_generation = 0;
                         c->read_pending_len = 0;
                         if (c->s2c.used == 0) { c->s2c.head = 0; c->s2c.tail = 0; }
                         if (libssh2_channel_eof(c->channel)) {
@@ -2570,13 +2726,15 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     } else if (r == LIBSSH2_ERROR_EAGAIN) {
                         did_ssh_read = 1;
                         c->read_pending = 1;
-                        c->read_pending_ptr = ptr;
+                        c->read_pending_tail = c->s2c.tail;
+                        c->read_pending_generation = c->s2c.generation;
                         c->read_pending_len = avail;
                         record_eagain(session, u, c, PENDING_READ, &agg_dirs, &stop_loop);
                         if (stop_loop) break;
                     } else {
                         c->read_pending = 0;
-                        c->read_pending_ptr = NULL;
+                        c->read_pending_tail = 0;
+        c->read_pending_generation = 0;
                         c->read_pending_len = 0;
                         c->abort_on_pending = 0;
                         start_closing_client(epfd, c);
@@ -2605,11 +2763,18 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 update_client_epoll(epfd, c, want);
             }
         } else if (c->state == ST_CLOSING) {
+            if (!c->channel) {
+                remove_client(epfd, c);
+                any_progress = 1;
+                c = next;
+                continue;
+            }
             int rc = libssh2_channel_free(c->channel);
             if (rc == LIBSSH2_ERROR_EAGAIN) {
                 record_eagain(session, u, c, PENDING_FREE, &agg_dirs, &stop_loop);
                 if (stop_loop) break;
             } else {
+                if (rc < 0) log_yellow("libssh2_channel_free cleanup returned %d", rc);
                 c->channel = NULL;
                 remove_client(epfd, c);
                 any_progress = 1;
@@ -2691,6 +2856,23 @@ static int check_upstream_eof_peek(upstream_ctx_t *u) {
     return -1;
 }
 
+static int session_free_with_deadline(LIBSSH2_SESSION **session,
+                                       int fd, long long deadline_ms) {
+    if (!session || !*session) return 0;
+    while (now_ms() < deadline_ms) {
+        int rc = libssh2_session_free(*session);
+        if (rc == 0) { *session = NULL; return 0; }
+        if (rc != LIBSSH2_ERROR_EAGAIN) return rc;
+        int dirs = libssh2_session_block_directions(*session);
+        short events = 0;
+        if (dirs & LIBSSH2_SESSION_BLOCK_INBOUND) events |= POLLIN;
+        if (dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) events |= POLLOUT;
+        if (events == 0) events = POLLIN | POLLOUT;
+        if (poll_fd_until(fd, events, deadline_ms) <= 0) break;
+    }
+    return LIBSSH2_ERROR_EAGAIN;
+}
+
 static void on_sig(int sig) {
     (void)sig;
     g_stop = 1;
@@ -2766,40 +2948,23 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    char listen_ip[64] = "127.0.0.1";
-    int listen_port = 1080;
-    char *colon = strrchr(cfg.socks_addr, ':');
-    if (colon) {
-        size_t ilen = (size_t)(colon - cfg.socks_addr);
-        if (ilen > 0) {
-            if (ilen >= sizeof(listen_ip)) {
-                log_red("Alamat SOCKS5 terlalu panjang: %s", cfg.socks_addr);
-                return 1;
-            }
-            memcpy(listen_ip, cfg.socks_addr, ilen);
-            listen_ip[ilen] = '\0';
-        }
-        char *pend = NULL;
-        long p = strtol(colon + 1, &pend, 10);
-        if (pend == colon + 1 || *pend != '\0' || p < 1 || p > 65535) {
-            log_red("Port SOCKS5 tidak valid: %s", cfg.socks_addr);
-            return 1;
-        }
-        listen_port = (int)p;
-    } else if (cfg.socks_addr[0]) {
-        snprintf(listen_ip, sizeof(listen_ip), "%s", cfg.socks_addr);
-    }
-
-    struct sockaddr_in laddr = {0};
-    laddr.sin_family = AF_INET;
-    laddr.sin_port = htons((uint16_t)listen_port);
-    if (inet_pton(AF_INET, listen_ip, &laddr.sin_addr) != 1) {
-        log_red("Alamat IPv4 SOCKS5 tidak valid: %s", listen_ip);
+    char listen_ip[INET6_ADDRSTRLEN + 1] = {0};
+    int listen_port = 1080, listen_loopback = 0;
+    struct sockaddr_storage listen_addr;
+    socklen_t listen_addr_len = 0;
+    if (parse_socks_listen_addr(cfg.socks_addr, &listen_addr, &listen_addr_len,
+                                listen_ip, sizeof(listen_ip), &listen_port,
+                                &listen_loopback) < 0) {
+        log_red("Alamat SOCKS5 tidak valid: %s (gunakan IPv4:port atau [IPv6]:port)", cfg.socks_addr);
         return 1;
     }
-    if (strcmp(listen_ip, "127.0.0.1") != 0) {
-        if(!cfg.allow_remote_socks){log_red("Bind SOCKS5 non-loopback ditolak; set ALLOW_REMOTE_SOCKS=1 hanya jika firewall membatasi akses");return 1;}
-        log_yellow("PERINGATAN: SOCKS5 tanpa autentikasi di-bind ke %s:%d; lindungi dengan firewall",listen_ip,listen_port);
+    if (!listen_loopback) {
+        if (!cfg.allow_remote_socks) {
+            log_red("Bind SOCKS5 non-loopback ditolak; set ALLOW_REMOTE_SOCKS=1 hanya jika firewall membatasi akses");
+            return 1;
+        }
+        log_yellow("PERINGATAN: SOCKS5 tanpa autentikasi di-bind ke %s:%d; lindungi dengan firewall",
+                   listen_ip, listen_port);
     }
 
     char *raw_payload = NULL;
@@ -2885,7 +3050,7 @@ int main(int argc, char **argv) {
             write_marker(NEED_RESTART_FILE, "SSL_new failed");
             goto fail_cleanup;
         }
-        const char *sni = cfg.sni[0] ? cfg.sni : dial_host;
+        const char *sni = cfg.sni[0] ? cfg.sni : cfg.host;
         if (SSL_set_tlsext_host_name(uctx.ssl, sni) != 1) {
             log_red("SSL_set_tlsext_host_name gagal");
             write_marker(NEED_RESTART_FILE, "TLS SNI setup failed");
@@ -3087,7 +3252,7 @@ int main(int argc, char **argv) {
         log_blue("SSH Cipher: %s | MAC: %s", cp ? cp : "?", mc ? mc : "?");
     }
 
-    listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    listen_fd = socket(listen_addr.ss_family, SOCK_STREAM, 0);
     if (listen_fd < 0) {
         log_red("Gagal membuat socket SOCKS5: %s", strerror(errno));
         write_marker(NEED_RESTART_FILE, "SOCKS5 socket failed");
@@ -3095,8 +3260,15 @@ int main(int argc, char **argv) {
     }
     int one = 1;
     setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (listen_addr.ss_family == AF_INET6) {
+        int v6_only = 1;
+        if (setsockopt(listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6_only, sizeof(v6_only)) < 0) {
+            log_red("Gagal mengatur IPv6-only SOCKS listener: %s", strerror(errno));
+            goto fail_cleanup;
+        }
+    }
     if (set_nonblock(listen_fd, 1) < 0 ||
-        bind(listen_fd, (struct sockaddr *)&laddr, sizeof(laddr)) < 0 ||
+        bind(listen_fd, (struct sockaddr *)&listen_addr, listen_addr_len) < 0 ||
         listen(listen_fd, 128) < 0) {
         log_red("Gagal membuka SOCKS5 di %s:%d (%s)", listen_ip, listen_port, strerror(errno));
         write_marker(NEED_RESTART_FILE, "SOCKS5 bind failed");
@@ -3331,8 +3503,7 @@ int main(int argc, char **argv) {
             } else if (ka_rc == LIBSSH2_ERROR_EAGAIN) {
                 int ka_dirs = libssh2_session_block_directions(session);
                 agg_dirs |= ka_dirs;
-                g_pending_op = PENDING_KEEPALIVE;
-                g_pending_client = NULL;
+                set_pending_operation(NULL, PENDING_KEEPALIVE);
             } else {
                 log_red("Keepalive SSH gagal");
                 write_marker(NEED_RESTART_FILE, "keepalive failed");
@@ -3377,15 +3548,20 @@ int main(int argc, char **argv) {
     }
 
     while (g_clients) {
-        if (g_clients->channel) libssh2_channel_free(g_clients->channel);
-        remove_client(epfd, g_clients);
+        client_conn_t *c = g_clients;
+        if (c->fd >= 0) detach_client_fd(epfd, c);
+        remove_client(epfd, c);
     }
+    clear_pending_operation();
+    g_opening_client = NULL;
     if (epfd >= 0) close(epfd);
     if (listen_fd >= 0) close(listen_fd);
     if (session) {
-        if (exit_code == 0) libssh2_session_disconnect(session, "Normal shutdown");
-        libssh2_session_free(session);
-        libssh2_exit();
+        int free_rc = session_free_with_deadline(&session, upstream_fd, now_ms() + 2500);
+        if (free_rc == LIBSSH2_ERROR_EAGAIN) {
+            log_yellow("Session cleanup remained pending after 2.5 seconds; process teardown will close remaining resources");
+        } else if (free_rc < 0) log_yellow("libssh2_session_free returned %d during shutdown", free_rc);
+        else libssh2_exit();
     }
     if (uctx.ssl) {
         if (exit_code == 0) SSL_shutdown(uctx.ssl);
@@ -3400,8 +3576,11 @@ fail_cleanup:
     if (epfd >= 0) close(epfd);
     if (listen_fd >= 0) close(listen_fd);
     if (session) {
-        libssh2_session_free(session);
-        libssh2_exit();
+        int free_rc = session_free_with_deadline(&session, upstream_fd, now_ms() + 2500);
+        if (free_rc == LIBSSH2_ERROR_EAGAIN) {
+            log_yellow("Session cleanup remained pending after 2.5 seconds; process teardown will close remaining resources");
+        } else if (free_rc < 0) log_yellow("libssh2_session_free returned %d during startup cleanup", free_rc);
+        else libssh2_exit();
     }
     if (uctx.ssl) SSL_free(uctx.ssl);
     if (ssl_ctx) SSL_CTX_free(ssl_ctx);
