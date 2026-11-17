@@ -43,18 +43,26 @@ workflow automatically run the full pipeline in order:
    strict numeric parsing, single and concurrent direct-tcpip transfers.
 4. **Backpressure and recovery** — force a 32 MiB c2s upload through a stalled,
    small-window receiver; run four simultaneous 8 MiB uploads; then throttle
-   the S2C reader during an 8 MiB download. Both directions verify exact
+   the S2C reader during a 32 MiB download. Both directions verify exact
    lengths and SHA-256. The tests assert that c2s and s2c buffers never exceed
    their 32 KiB capacity and drain to zero after the receiver resumes.
-5. **Disconnect and repeated-connection checks** — abort an in-flight client
+5. **TCP half-close and sustained stress** — use a statically linked client
+   cross-compiled by the OpenWrt SDK to test client-FIN-first and server-FIN-first
+   sequences. The host fixture independently verifies that each FIN arrives
+   and that the opposite write direction remains usable. Then run four
+   concurrent workers for 90 seconds, verify every 1 MiB transfer by SHA-256,
+   and monitor peak RSS and FD counts.
+6. **Disconnect and repeated-connection checks** — abort an in-flight client
    request, verify that the service remains usable, then open and close 12
    more SOCKS connections while checking process RSS and file-descriptor
    counts for material growth.
 
 The workflow is a single sequential job for push-triggered runs: SDK build
 must finish successfully before the VM stage downloads and installs its APK.
-The guest test script is syntax-checked before the VM boots, and the host HTTP
-fixture is Python-compiled before it starts. The job has a 60-minute hard
+The guest test script is syntax-checked before the VM boots, the host HTTP
+fixture is Python-compiled before it starts, and the statically linked
+half-close test client is cross-compiled with the OpenWrt SDK and checksum-
+verified as part of the SDK artifact. The job has a 60-minute hard
 timeout; individual transfers also have explicit curl timeouts.
 
 For diagnosis, the workflow still exposes a manual `workflow_dispatch` route
@@ -62,3 +70,5 @@ for running one isolated stage (`parser`, `sdk`, or `vm`). The manual VM
 stage requires the run ID of a successful SDK-stage artifact from the same
 repository. A green workflow result means all stages and all guest assertions
 completed successfully; a timeout or skipped test is not considered a pass.
+The current VM run validates the x86_64 OpenWrt 25.12.5 target only; it does
+not replace a runtime test on the actual physical router or another target.

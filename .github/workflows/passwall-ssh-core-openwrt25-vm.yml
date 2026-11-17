@@ -185,6 +185,15 @@ jobs:
           echo "Built APK: $APK"
           file "$APK"
           sha256sum "$APK"
+
+          echo "========== CROSS-COMPILE OPENWRT HALF-CLOSE TEST CLIENT =========="
+          CROSS_CC="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -path '*/bin/*-openwrt-linux-musl-gcc' -print | head -n 1)"
+          test -n "$CROSS_CC"
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror "$GITHUB_WORKSPACE/tests/socks_halfclose.c" -o "$GITHUB_WORKSPACE/test-results/socks-halfclose"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/socks-halfclose"
+          file "$GITHUB_WORKSPACE/test-results/socks-halfclose"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum socks-halfclose > halfclose.sha256)
+
           find staging_dir/target-* -name 'libssh2.so*' -o -name 'libssl.so*' -o -name 'libcrypto.so*' | head -30
 
       - name: Save OpenWrt APK for the separate VM stage
@@ -196,6 +205,8 @@ jobs:
             test-results/passwall-ssh-core*.apk
             test-results/build-source.sha
             test-results/apk.sha256
+            test-results/socks-halfclose
+            test-results/halfclose.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -246,12 +257,12 @@ jobs:
           fi
           # Permit workflow/docs-only commits, but reject changes to compiled inputs.
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c; then
-            echo "The APK was built from different ssh-core.c or package Makefile sources."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/socks_halfclose.c; then
+            echo "The APK or half-close helper was built from different source inputs."
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/socks_halfclose.c
             false
           fi
-          (cd test-results && sha256sum -c apk.sha256)
+          (cd test-results && sha256sum -c apk.sha256 halfclose.sha256)
       - name: Prepare host-side SSH and HTTP forwarding targets
         if: inputs.stage == 'vm' || github.event_name == 'push'
         shell: bash
@@ -260,8 +271,8 @@ jobs:
           mkdir -p /tmp/ssh-core-http
           dd if=/dev/urandom of=/tmp/ssh-core-http/payload-1MiB.bin bs=1M count=1 status=none
           sha256sum /tmp/ssh-core-http/payload-1MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/payload-1MiB.sha256
-          dd if=/dev/urandom of=/tmp/ssh-core-http/slow-download-8MiB.bin bs=1M count=8 status=none
-          sha256sum /tmp/ssh-core-http/slow-download-8MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/slow-download-8MiB.sha256
+          dd if=/dev/urandom of=/tmp/ssh-core-http/slow-download-32MiB.bin bs=1M count=32 status=none
+          sha256sum /tmp/ssh-core-http/slow-download-32MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/slow-download-32MiB.sha256
 
           cat > /tmp/ssh-core-http-server.py <<'PY_SERVER'
           from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -285,9 +296,35 @@ jobs:
                       with open(os.path.join(ROOT, "payload-1MiB.bin"), "rb") as f:
                           body = f.read()
                   elif self.path == "/slow-download":
-                      with open(os.path.join(ROOT, "slow-download-8MiB.bin"), "rb") as f:
+                      with open(os.path.join(ROOT, "slow-download-32MiB.bin"), "rb") as f:
                           body = f.read()
                       self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32768)
+                  elif self.path == "/half-close-server-eof":
+                      body = b"server-half-close-ok\n"
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(len(body)))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      self.wfile.write(body)
+                      self.wfile.flush()
+                      self.connection.shutdown(socket.SHUT_WR)
+                      self.connection.settimeout(20.0)
+                      expected = b"client-write-after-server-fin"
+                      received = bytearray()
+                      try:
+                          while len(received) < len(expected):
+                              part = self.connection.recv(len(expected) - len(received))
+                              if not part:
+                                  break
+                              received.extend(part)
+                      except (TimeoutError, OSError):
+                          pass
+                      if bytes(received) == expected:
+                          print("[HALFCLOSE] server FIN path received exact client trailer", flush=True)
+                      else:
+                          print("[HALFCLOSE] server FIN path trailer mismatch: %r" % bytes(received), flush=True)
+                      self.close_connection = True
+                      return
                   elif self.path == "/abort-stream":
                       body = b"A" * (16 * 1024 * 1024)
                   else:
@@ -305,6 +342,28 @@ jobs:
                   self.close_connection = True
 
               def do_POST(self):
+                  if self.path == "/half-close-client-eof":
+                      expected = int(self.headers.get("Content-Length", "0"))
+                      body = self.rfile.read(expected)
+                      self.connection.settimeout(20.0)
+                      try:
+                          extra = self.connection.recv(1)
+                          client_fin = (extra == b"")
+                      except (TimeoutError, OSError):
+                          client_fin = False
+                      if client_fin and len(body) == expected:
+                          print("[HALFCLOSE] client FIN observed after complete request body", flush=True)
+                      else:
+                          print("[HALFCLOSE] client FIN missing or body short: fin=%s size=%d expected=%d" %
+                                (client_fin, len(body), expected), flush=True)
+                      self.send_response(200 if client_fin and len(body) == expected else 400)
+                      self.send_header("Content-Length", str(len(body)))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      self.wfile.write(body)
+                      self.close_connection = True
+                      return
+
                   if self.path != "/slow-upload" and not self.path.startswith("/parallel-upload/"):
                       self.send_error(404)
                       return
@@ -422,9 +481,10 @@ jobs:
           APK="$(find "$GITHUB_WORKSPACE/test-results" -maxdepth 1 -name 'passwall-ssh-core*.apk' | head -n 1)"
           test -n "$APK"
           sudo install -m 0644 "$APK" "$ROOT/root/passwall-ssh-core.apk"
+          sudo install -m 0755 "$GITHUB_WORKSPACE/test-results/socks-halfclose" "$ROOT/root/socks-halfclose"
           EXPECTED_SHA="$(cat /tmp/ssh-core-http/payload-1MiB.sha256)"
           printf '%s\n' "$EXPECTED_SHA" | sudo tee "$ROOT/root/expected-payload.sha256" >/dev/null
-          EXPECTED_S2C_SHA="$(cat /tmp/ssh-core-http/slow-download-8MiB.sha256)"
+          EXPECTED_S2C_SHA="$(cat /tmp/ssh-core-http/slow-download-32MiB.sha256)"
           printf '%s\n' "$EXPECTED_S2C_SHA" | sudo tee "$ROOT/root/expected-s2c.sha256" >/dev/null
 
           sudo mkdir -p "$ROOT/root/ssh-core-test-logs" "$ROOT/etc/uci-defaults"
@@ -517,6 +577,12 @@ jobs:
             done
             if grep -q "SOCKS5 Listening" "$LOGDIR/ssh-core.log" 2>/dev/null; then
               pass "SSH password authentication completed and SOCKS5 listener started"
+              echo "========== TWO-DIRECTION TCP HALF-CLOSE TEST =========="
+              if /root/socks-halfclose; then
+                pass "client-FIN-first and server-FIN-first half-close paths both completed"
+              else
+                fail "one or both TCP half-close directions failed"
+              fi
             else
               fail "SSH authentication/listener startup timeout"
               cat "$LOGDIR/ssh-core-stdout.log" 2>/dev/null
@@ -684,20 +750,20 @@ jobs:
           fi
 
           if [ "$STATUS" -eq 0 ]; then
-            echo "========== S2C SLOW-READER BACKPRESSURE (8 MiB DOWNLOAD) =========="
+            echo "========== S2C SLOW-READER BACKPRESSURE (32 MiB DOWNLOAD) =========="
             if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
-              --connect-timeout 20 --max-time 180 --limit-rate 128K \
-              http://127.0.0.1:18080/slow-download -o /tmp/slow-download-8MiB.bin; then
-              S2C_SIZE="$(wc -c </tmp/slow-download-8MiB.bin | tr -d ' ')"
+              --connect-timeout 20 --max-time 420 --limit-rate 128K \
+              http://127.0.0.1:18080/slow-download -o /tmp/slow-download-32MiB.bin; then
+              S2C_SIZE="$(wc -c </tmp/slow-download-32MiB.bin | tr -d ' ')"
               S2C_EXPECTED_SHA="$(cat /root/expected-s2c.sha256)"
-              S2C_ACTUAL_SHA="$(sha256sum /tmp/slow-download-8MiB.bin | awk '{print $1}')"
-              if [ "$S2C_SIZE" = "8388608" ] && [ "$S2C_ACTUAL_SHA" = "$S2C_EXPECTED_SHA" ]; then
-                pass "slow 8 MiB S2C download retained exact length and SHA-256"
+              S2C_ACTUAL_SHA="$(sha256sum /tmp/slow-download-32MiB.bin | awk '{print $1}')"
+              if [ "$S2C_SIZE" = "33554432" ] && [ "$S2C_ACTUAL_SHA" = "$S2C_EXPECTED_SHA" ]; then
+                pass "slow 32 MiB S2C download retained exact length and SHA-256"
               else
                 fail "S2C slow download size/hash mismatch: size=$S2C_SIZE sha=$S2C_ACTUAL_SHA"
               fi
             else
-              fail "S2C slow-reader download failed or exceeded its 180-second limit"
+              fail "S2C slow-reader download failed or exceeded its 420-second limit"
             fi
             S2C_FULL_COUNT="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
             S2C_DRAINED_COUNT="$(grep -c "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
@@ -743,6 +809,83 @@ jobs:
               fi
             else
               fail "SSH core did not recover after a client-side disconnect"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== CONTINUOUS FOUR-WORKER STRESS (90 SECONDS) =========="
+            STRESS_SECONDS=90
+            STRESS_END=$(( $(date +%s) + STRESS_SECONDS ))
+            STRESS_EXPECTED_SHA="$(cat /root/expected-payload.sha256)"
+            STRESS_PIDS=""
+            I=1
+            while [ "$I" -le 4 ]; do
+              (
+                COUNT=0
+                ERRORS=0
+                while [ "$(date +%s)" -lt "$STRESS_END" ]; do
+                  if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 --connect-timeout 15 --max-time 30 http://127.0.0.1:18080/payload -o "/tmp/stress-$I.bin"; then
+                    SIZE="$(wc -c <"/tmp/stress-$I.bin" | tr -d ' ')"
+                    SHA="$(sha256sum "/tmp/stress-$I.bin" | awk '{print $1}')"
+                    if [ "$SIZE" = "1048576" ] && [ "$SHA" = "$STRESS_EXPECTED_SHA" ]; then
+                      COUNT=$((COUNT + 1))
+                    else
+                      ERRORS=$((ERRORS + 1))
+                    fi
+                  else
+                    ERRORS=$((ERRORS + 1))
+                  fi
+                done
+                printf '%s %s\n' "$COUNT" "$ERRORS" > "/tmp/stress-$I.result"
+              ) &
+              STRESS_PIDS="$STRESS_PIDS $!"
+              I=$((I + 1))
+            done
+
+            RSS_BASE="$(awk '/VmRSS:/ {print $2}' "/proc/$APP_PID/status" 2>/dev/null)"
+            FD_BASE="$(ls "/proc/$APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
+            [ -n "$RSS_BASE" ] || RSS_BASE=0
+            [ -n "$FD_BASE" ] || FD_BASE=0
+            MAX_RSS="$RSS_BASE"
+            MAX_FD="$FD_BASE"
+            STRESS_ALIVE=1
+            while [ "$(date +%s)" -lt "$STRESS_END" ]; do
+              if ! kill -0 "$APP_PID" 2>/dev/null; then
+                STRESS_ALIVE=0
+                break
+              fi
+              CURRENT_RSS="$(awk '/VmRSS:/ {print $2}' "/proc/$APP_PID/status" 2>/dev/null)"
+              CURRENT_FD="$(ls "/proc/$APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
+              [ -n "$CURRENT_RSS" ] || CURRENT_RSS=0
+              [ -n "$CURRENT_FD" ] || CURRENT_FD=0
+              if [ "$CURRENT_RSS" -gt "$MAX_RSS" ]; then MAX_RSS="$CURRENT_RSS"; fi
+              if [ "$CURRENT_FD" -gt "$MAX_FD" ]; then MAX_FD="$CURRENT_FD"; fi
+              sleep 10
+            done
+            for STRESS_PID in $STRESS_PIDS; do
+              wait "$STRESS_PID" || STRESS_ALIVE=0
+            done
+
+            STRESS_TOTAL=0
+            STRESS_ERRORS=0
+            I=1
+            while [ "$I" -le 4 ]; do
+              if [ -f "/tmp/stress-$I.result" ]; then
+                read WORKER_COUNT WORKER_ERRORS < "/tmp/stress-$I.result"
+                STRESS_TOTAL=$((STRESS_TOTAL + WORKER_COUNT))
+                STRESS_ERRORS=$((STRESS_ERRORS + WORKER_ERRORS))
+              else
+                STRESS_ERRORS=$((STRESS_ERRORS + 1))
+              fi
+              I=$((I + 1))
+            done
+            echo "Stress downloads=$STRESS_TOTAL errors=$STRESS_ERRORS duration=$STRESS_SECONDS seconds workers=4"
+            echo "Stress process RSS baseline=$RSS_BASE peak=$MAX_RSS KiB; FD baseline=$FD_BASE peak=$MAX_FD"
+            if [ "$STRESS_ALIVE" -eq 1 ] && [ "$STRESS_TOTAL" -ge 20 ] && [ "$STRESS_ERRORS" -eq 0 ] &&
+              [ "$MAX_RSS" -le $((RSS_BASE + 16384)) ] && [ "$MAX_FD" -le $((FD_BASE + 8)) ]; then
+              pass "90-second four-worker stress completed with exact 1 MiB hashes and bounded RSS/FD usage"
+            else
+              fail "continuous stress errors, service exit, insufficient transfers, or resource growth detected"
             fi
           fi
 
@@ -847,6 +990,23 @@ jobs:
           exit 2
           EXPECT
           expect /tmp/passwall-ssh-core-openwrt.exp
+
+      - name: Verify host observed both half-close directions
+        if: inputs.stage == 'vm' || github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOTH_HALFCLOSE_SEEN=0
+          for attempt in $(seq 1 10); do
+            if grep -qF "[HALFCLOSE] client FIN observed after complete request body" /tmp/ssh-core-http-server.log &&
+              grep -qF "[HALFCLOSE] server FIN path received exact client trailer" /tmp/ssh-core-http-server.log; then
+              BOTH_HALFCLOSE_SEEN=1
+              break
+            fi
+            sleep 1
+          done
+          test "$BOTH_HALFCLOSE_SEEN" -eq 1
+          echo "Both half-close FIN directions were observed by the host HTTP fixture."
 
       - name: Collect OpenWrt guest logs and build manifests
         if: always() && (inputs.stage == 'vm' || github.event_name == 'push')
