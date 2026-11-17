@@ -2094,9 +2094,15 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             return 2;
         }
         if (w == LIBSSH2_ERROR_EAGAIN) {
-            if (libssh2_channel_window_write_ex(c->channel, NULL) == 0)
+            unsigned long write_window = libssh2_channel_window_write_ex(c->channel, NULL);
+            if (write_window == 0) {
+                c->write_waiting_window = 1;
+                c->write_wait_rx_seq = u->rx_seq;
                 note_channel_window_blocked(c, 1);
-            c->write_waiting_window=0;
+            } else {
+                c->write_waiting_window = 0;
+                c->write_wait_rx_seq = 0;
+            }
             int d = libssh2_session_block_directions(session);
             *agg_dirs_out |= d;
             if ((d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && u->ssl_want_events == EPOLLOUT)) {
@@ -2531,6 +2537,23 @@ static int has_readable_relay_channel(void) {
         }
     }
     return 0;
+}
+
+static int has_window_waiter(void) {
+    for (client_conn_t *c = g_clients; c; c = c->next) {
+        if (c->state == ST_RELAY && c->c2s.used > 0 && c->write_waiting_window) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void retry_window_waiters(void) {
+    for (client_conn_t *c = g_clients; c; c = c->next) {
+        if (c->state == ST_RELAY && c->c2s.used > 0 && c->write_waiting_window) {
+            c->write_waiting_window = 0;
+        }
+    }
 }
 
 static int check_upstream_eof_peek(upstream_ctx_t *u) {
@@ -3073,6 +3096,16 @@ int main(int argc, char **argv) {
 
         if (g_stop) break;
 
+        /*
+         * SSH WINDOW_ADJUST arrives on the upstream transport. A local client
+         * socket may already be half-closed, so its events cannot wake this path.
+         */
+        if (upstream_readable ||
+            (uctx.ssl && SSL_pending(uctx.ssl) > 0 &&
+             (uctx.ssl_want_events & EPOLLOUT) == 0)) {
+            retry_window_waiters();
+        }
+
         time_t now_sec = time(NULL);
         long long now_msec = now_ms();
         for (client_conn_t *c = g_clients, *nxt = NULL; c; c = nxt) {
@@ -3172,7 +3205,9 @@ int main(int argc, char **argv) {
 
         if (rounds == 16 ||
             (uctx.ssl && SSL_pending(uctx.ssl) > 0 &&
-             (g_opening_client != NULL || has_readable_relay_channel()))) {
+             (uctx.ssl_want_events & EPOLLOUT) == 0 &&
+             (g_opening_client != NULL || has_readable_relay_channel() ||
+              has_window_waiter()))) {
             force_next_tick = 1;
         }
 
@@ -3182,12 +3217,14 @@ int main(int argc, char **argv) {
         } else if (g_pending_op != PENDING_NONE) {
             if (agg_dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) want_up |= EPOLLOUT;
             if (agg_dirs & LIBSSH2_SESSION_BLOCK_INBOUND)  want_up |= EPOLLIN;
+            if (has_window_waiter()) want_up |= EPOLLIN;
             if ((want_up & (EPOLLIN | EPOLLOUT)) == 0) want_up |= EPOLLOUT;
         } else {
             int need_read =
                 !idle_rx_paused ||
                 (g_opening_client != NULL) ||
                 has_readable_relay_channel() ||
+                has_window_waiter() ||
                 (agg_dirs & LIBSSH2_SESSION_BLOCK_INBOUND);
             if (need_read) {
                 idle_rx_paused = 0;

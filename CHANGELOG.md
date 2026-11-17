@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix C2S half-close stalls when an SSH channel write window reaches zero. Keep upstream reads armed while a channel is waiting for `WINDOW_ADJUST`, retry the pinned write when upstream data becomes readable (including already-decrypted TLS data), and preserve the window-wait state when resuming a pending write.
+- Bump the OpenWrt package release to r6.
+
 - Align the package payload, service executable name, and VM checks on `/usr/bin/passwall-ssh-core`; fresh installs and upgrades no longer require a manual rename. Bump the OpenWrt package release to r5.
 
 - Gate verbose per-channel C2S/S2C backpressure, SSH window EAGAIN/recovery, and ring-buffer close diagnostics behind `LOG_BACKPRESSURE=1`; default production logs no longer emit these high-frequency test diagnostics. Preserve the diagnostic path for CI and opt-in troubleshooting.
