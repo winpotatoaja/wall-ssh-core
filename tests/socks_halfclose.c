@@ -212,7 +212,72 @@ static int test_server_fin_first(void)
     return 0;
 }
 
-int main(void)
+static int send_file_all(int fd, const char *path, size_t *total_out)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    unsigned char buf[16384];
+    size_t total = 0;
+    while (1) {
+        size_t n = fread(buf, 1, sizeof(buf), f);
+        if (n > 0) {
+            if (send_all(fd, buf, n) < 0) {
+                fclose(f);
+                return -1;
+            }
+            total += n;
+        }
+        if (n < sizeof(buf)) {
+            if (ferror(f)) {
+                fclose(f);
+                return -1;
+            }
+            break;
+        }
+    }
+    fclose(f);
+    *total_out = total;
+    return 0;
+}
+
+static int test_server_fin_first_large(const char *upload_path)
+{
+    static const char expected[] = "server-half-close-large-ok\n";
+    static const char request[] =
+        "GET /half-close-server-eof-large HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Connection: close\r\n\r\n";
+
+    int fd = open_socks_tunnel();
+    if (fd < 0) return -1;
+    if (send_all(fd, request, sizeof(request) - 1) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    char response[RESPONSE_CAP];
+    size_t response_len = 0;
+    if (recv_to_eof(fd, response, sizeof(response), &response_len) < 0 ||
+        validate_http_response(response, response_len, expected, sizeof(expected) - 1) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    /* The remote server has sent FIN; keep the client write side open and
+     * send enough data to exhaust the SSH channel window. */
+    size_t uploaded = 0;
+    if (send_file_all(fd, upload_path, &uploaded) < 0 ||
+        uploaded != (8U * 1024U * 1024U) ||
+        shutdown(fd, SHUT_WR) < 0) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    return 0;
+}
+
+int main(int argc, char **argv)
 {
     if (test_client_fin_first() < 0) {
         fprintf(stderr, "[FAIL] client-FIN-first half-close\n");
@@ -221,9 +286,17 @@ int main(void)
     puts("[PASS] client FIN first: server response remained readable");
 
     if (test_server_fin_first() < 0) {
-        fprintf(stderr, "[FAIL] server-FIN-first half-close\n");
+        fprintf(stderr, "[FAIL] server-FIN-first small half-close\n");
         return 1;
     }
-    puts("[PASS] server FIN first: client write direction remained usable");
+    puts("[PASS] server FIN first: small client write direction remained usable");
+
+    if (argc > 1) {
+        if (test_server_fin_first_large(argv[1]) < 0) {
+            fprintf(stderr, "[FAIL] server-FIN-first 8 MiB upload after EOF\n");
+            return 1;
+        }
+        puts("[PASS] server FIN first: 8 MiB client upload completed after remote EOF");
+    }
     return 0;
 }
