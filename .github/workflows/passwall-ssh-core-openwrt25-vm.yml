@@ -1,0 +1,709 @@
+name: Passwall SSH core - OpenWrt 25.12.5 staged tests
+run-name: Passwall SSH Core / ${{ inputs.stage }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Jalankan satu tahap saja"
+        required: true
+        type: choice
+        default: parser
+        options:
+          - parser
+          - sdk
+          - vm
+      sdk_run_id:
+        description: "Wajib untuk tahap vm: run ID dari tahap sdk yang sukses"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: passwall-ssh-core-openwrt25-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-test:
+    name: Build OpenWrt 25.12.5 x86_64 and test in QEMU VM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Install dependencies for the selected stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          case "${{ inputs.stage }}" in
+            parser)
+              sudo apt-get install -y --no-install-recommends \
+                build-essential libssh2-1-dev libssl-dev
+              ;;
+            sdk)
+              sudo apt-get install -y --no-install-recommends \
+                build-essential clang flex bison gawk gettext git \
+                libncurses-dev libssl-dev python3 rsync unzip wget zstd curl ca-certificates
+              ;;
+            vm)
+              sudo apt-get install -y --no-install-recommends \
+                qemu-system-x86 qemu-utils expect e2fsprogs openssh-server \
+                python3 curl ca-certificates
+              ;;
+            *)
+              echo "Unknown stage"
+              false
+              ;;
+          esac
+
+      - name: Run native HTTP parser regression tests
+        if: inputs.stage == 'parser'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          gcc -std=gnu11 -O1 -g -Wall -Wextra \
+            -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
+            -ffunction-sections -fdata-sections \
+            tests/http_parser_test.c \
+            -Wl,--gc-sections -o /tmp/http-parser-test \
+            -lssh2 -lssl -lcrypto
+          /tmp/http-parser-test | tee test-results/http-parser-test.log
+
+      - name: Download and configure OpenWrt 25.12.5 x86_64 SDK
+        if: inputs.stage == 'sdk'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_BASE="https://downloads.openwrt.org/releases/25.12.5/targets/x86/64"
+          SDK_FILE="$(curl -fsSL "$SDK_BASE/" | grep -oE 'openwrt-sdk-[^"]+Linux-x86_64\.tar\.zst' | head -n 1)"
+          test -n "$SDK_FILE"
+          echo "SDK archive: $SDK_FILE"
+          curl -fL --retry 3 --connect-timeout 20 "$SDK_BASE/$SDK_FILE" -o /tmp/openwrt-sdk.tar.zst
+          tar --zstd -xf /tmp/openwrt-sdk.tar.zst
+          SDK_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-sdk-*' | head -n 1)"
+          test -n "$SDK_DIR"
+          mv "$SDK_DIR" sdk
+          cd sdk
+
+          echo "========== ADD OPENSSL SOURCE PACKAGE FROM OPENWRT 25.12 =========="
+          git clone --depth 1 --filter=blob:none --sparse --branch openwrt-25.12 \
+            https://github.com/openwrt/openwrt.git /tmp/openwrt-25.12-source
+          git -C /tmp/openwrt-25.12-source sparse-checkout set package/libs/openssl package/libs/zlib
+          mkdir -p package/libs
+          cp -a /tmp/openwrt-25.12-source/package/libs/openssl package/libs/openssl
+          cp -a /tmp/openwrt-25.12-source/package/libs/zlib package/libs/zlib
+
+          TARGET_STAGING="$(find staging_dir -maxdepth 1 -type d -name 'target-*' | head -n 1)"
+          test -n "$TARGET_STAGING"
+          echo "Target staging: $TARGET_STAGING"
+
+          echo "========== BUILD OPENSSL FOR OPENWRT TARGET =========="
+          {
+            echo "CONFIG_PACKAGE_libopenssl=y"
+            echo "CONFIG_OPENSSL_WITH_CHACHA_POLY1305=y"
+            echo "CONFIG_OPENSSL_WITH_TLS13=y"
+            echo "CONFIG_OPENSSL_WITH_BLAKE2=y"
+            echo "# CONFIG_ALL is not set"
+            echo "# CONFIG_ALL_KMODS is not set"
+            echo "# CONFIG_ALL_NONSHARED is not set"
+          } >> .config
+          make defconfig
+          make package/libs/openssl/compile -j"$(nproc)" V=s
+
+          echo "========== VERIFY OPENSSL TARGET DEVELOPMENT FILES =========="
+          test -f "$TARGET_STAGING/usr/include/openssl/ssl.h"
+          test -e "$TARGET_STAGING/usr/lib/libssl.so"
+          test -e "$TARGET_STAGING/usr/lib/libcrypto.so"
+
+          echo "========== BUILD ZLIB TARGET DEPENDENCY =========="
+          echo "CONFIG_PACKAGE_zlib=y" >> .config
+          make defconfig
+          make package/libs/zlib/compile -j"$(nproc)" V=s
+          test -f "$TARGET_STAGING/usr/include/zlib.h"
+          test -e "$TARGET_STAGING/usr/lib/libz.so"
+
+          echo "========== INSTALL LIBSSH2 FROM OPENWRT PACKAGES FEED =========="
+          ./scripts/feeds update packages
+          ./scripts/feeds install libssh2
+          {
+            echo "CONFIG_PACKAGE_libssh2=y"
+            echo "# CONFIG_ALL is not set"
+            echo "# CONFIG_ALL_KMODS is not set"
+            echo "# CONFIG_ALL_NONSHARED is not set"
+          } >> .config
+          make defconfig
+          make package/feeds/packages/libssh2/compile -j"$(nproc)" V=s
+
+          echo "========== VERIFY LIBSSH2 TARGET DEVELOPMENT FILES =========="
+          test -f "$TARGET_STAGING/usr/include/libssh2.h"
+          test -e "$TARGET_STAGING/usr/lib/libssh2.so"
+
+      - name: Compile ssh-core using the repository OpenWrt package recipe
+        if: inputs.stage == 'sdk'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKG_DIR="$GITHUB_WORKSPACE/sdk/package/passwall-ssh-core"
+          mkdir -p "$PKG_DIR"
+          cp Makefile "$PKG_DIR/Makefile"
+          cp ssh-core.c "$PKG_DIR/ssh-core.c"
+
+          cd "$GITHUB_WORKSPACE/sdk"
+          echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
+          make defconfig
+          make package/passwall-ssh-core/compile -j"$(nproc)" V=s
+
+          APK="$(find bin/packages -type f -name 'passwall-ssh-core*.apk' | head -n 1)"
+          test -n "$APK"
+          mkdir -p "$GITHUB_WORKSPACE/test-results"
+          cp "$APK" "$GITHUB_WORKSPACE/test-results/"
+          printf '%s\n' "$GITHUB_SHA" > "$GITHUB_WORKSPACE/test-results/build-source.sha"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum "$(basename "$APK")" > apk.sha256)
+          echo "Built APK: $APK"
+          file "$APK"
+          sha256sum "$APK"
+          find staging_dir/target-* -name 'libssh2.so*' -o -name 'libssl.so*' -o -name 'libcrypto.so*' | head -30
+
+      - name: Save OpenWrt APK for the separate VM stage
+        if: inputs.stage == 'sdk'
+        uses: actions/upload-artifact@v4
+        with:
+          name: passwall-ssh-core-openwrt-apk
+          path: |
+            test-results/passwall-ssh-core*.apk
+            test-results/build-source.sha
+            test-results/apk.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Show SDK run ID for the VM stage
+        if: inputs.stage == 'sdk'
+        shell: bash
+        run: |
+          {
+            echo "## OpenWrt SDK build succeeded"
+            echo
+            printf '%s\n' 'Use this run ID as the `sdk_run_id` input when selecting the `vm` stage:'
+            echo
+            printf '`%s`\n' "$GITHUB_RUN_ID"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate SDK run ID for the VM stage
+        if: inputs.stage == 'vm'
+        shell: bash
+        env:
+          SDK_RUN_ID: ${{ inputs.sdk_run_id }}
+        run: |
+          test -n "$SDK_RUN_ID"
+          case "$SDK_RUN_ID" in
+            *[!0-9]*)
+              echo "sdk_run_id must contain digits only"
+              false
+              ;;
+          esac
+
+      - name: Download APK from the successful SDK stage
+        if: inputs.stage == 'vm'
+        uses: actions/download-artifact@v4
+        with:
+          name: passwall-ssh-core-openwrt-apk
+          run-id: ${{ inputs.sdk_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          path: test-results
+
+      - name: Verify APK and package source match current branch
+        if: inputs.stage == 'vm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
+          if ! printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "SDK artifact source commit is missing or malformed."
+            false
+          fi
+          # Permit workflow/docs-only commits, but reject changes to compiled inputs.
+          git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c; then
+            echo "The APK was built from different ssh-core.c or package Makefile sources."
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c
+            false
+          fi
+          (cd test-results && sha256sum -c apk.sha256)
+      - name: Prepare host-side SSH and HTTP forwarding targets
+        if: inputs.stage == 'vm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ssh-core-http
+          dd if=/dev/urandom of=/tmp/ssh-core-http/payload-1MiB.bin bs=1M count=1 status=none
+          sha256sum /tmp/ssh-core-http/payload-1MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/payload-1MiB.sha256
+
+          cat > /tmp/ssh-core-http-server.py <<'PY_SERVER'
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+          import hashlib
+          import os
+          import socket
+          import time
+
+          ROOT = "/tmp/ssh-core-http"
+
+          class Handler(BaseHTTPRequestHandler):
+              protocol_version = "HTTP/1.1"
+
+              def log_message(self, fmt, *args):
+                  print("%s - %s" % (self.client_address[0], fmt % args), flush=True)
+
+              def do_GET(self):
+                  if self.path == "/health":
+                      body = b"ok\n"
+                  elif self.path == "/payload":
+                      with open(os.path.join(ROOT, "payload-1MiB.bin"), "rb") as f:
+                          body = f.read()
+                  else:
+                      self.send_error(404)
+                      return
+                  self.send_response(200)
+                  self.send_header("Content-Length", str(len(body)))
+                  self.send_header("Connection", "close")
+                  self.end_headers()
+                  self.wfile.write(body)
+                  self.close_connection = True
+
+              def do_POST(self):
+                  if self.path != "/slow-upload":
+                      self.send_error(404)
+                      return
+                  # Constrain the host-side TCP receive window and pause reads
+                  # after headers. This backs up sshd's channel consumer so that
+                  # libssh2_channel_write() must encounter a depleted SSH window.
+                  self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32768)
+                  receive_buffer = self.connection.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+                  window_clamp = 0
+                  if hasattr(socket, "TCP_WINDOW_CLAMP"):
+                      try:
+                          self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_WINDOW_CLAMP, 32768)
+                          window_clamp = self.connection.getsockopt(socket.IPPROTO_TCP, socket.TCP_WINDOW_CLAMP)
+                      except OSError:
+                          window_clamp = -1
+
+                  remaining = int(self.headers.get("Content-Length", "0"))
+                  digest = hashlib.sha256()
+                  received = 0
+                  started = time.monotonic()
+                  print("[BACKPRESSURE] recvbuf=%d window_clamp=%d initial_pause=8s expected=%d" %
+                        (receive_buffer, window_clamp, remaining), flush=True)
+                  # Stop consuming the forwarded TCP stream long enough to fill
+                  # the SSH channel window and the small kernel receive buffer.
+                  time.sleep(8.0)
+                  print("[BACKPRESSURE] receiver resumed; beginning slow drain", flush=True)
+                  while remaining:
+                      block = self.rfile.read(min(16384, remaining))
+                      if not block:
+                          break
+                      digest.update(block)
+                      received += len(block)
+                      remaining -= len(block)
+                      time.sleep(0.02)
+                  elapsed = time.monotonic() - started
+                  print("[BACKPRESSURE] received=%d remaining=%d elapsed=%.3fs" %
+                        (received, remaining, elapsed), flush=True)
+                  body = ("size=%d sha256=%s recvbuf=%d window_clamp=%d elapsed=%.3f\n" %
+                          (received, digest.hexdigest(), receive_buffer, window_clamp, elapsed)).encode()
+                  self.send_response(200 if remaining == 0 else 400)
+                  self.send_header("Content-Length", str(len(body)))
+                  self.send_header("Connection", "close")
+                  self.end_headers()
+                  self.wfile.write(body)
+                  self.close_connection = True
+
+          ThreadingHTTPServer(("127.0.0.1", 18080), Handler).serve_forever()
+          PY_SERVER
+          python3 /tmp/ssh-core-http-server.py >/tmp/ssh-core-http-server.log 2>&1 &
+          echo "$!" >/tmp/ssh-core-http-server.pid
+
+          # Keep sshd's forwarded TCP send queue below the SSH channel window.
+          # With a stalled, small-window HTTP receiver this forces SSH window
+          # exhaustion instead of buffering the entire upload in the host kernel.
+          sudo sysctl -w net.core.wmem_max=32768 | tee /tmp/ssh-core-tcp-buffers.log
+          sudo sysctl -w net.core.wmem_default=32768 | tee -a /tmp/ssh-core-tcp-buffers.log
+          sudo sysctl -w net.ipv4.tcp_wmem="4096 8192 32768" | tee -a /tmp/ssh-core-tcp-buffers.log
+
+          sudo useradd -m -s /bin/bash sshcore-ci
+          echo 'sshcore-ci:OpenWrt-CI-SSH-Only-2026' | sudo chpasswd
+          sudo ssh-keygen -A
+          # OpenSSH privilege separation requires this runtime directory on
+          # minimal GitHub-hosted runners before sshd can bind its listener.
+          sudo install -d -m 0755 -o root -g root /run/sshd
+          sudo /usr/sbin/sshd -D -e -f /dev/null \
+            -p 2222 \
+            -o PidFile=/tmp/ssh-core-sshd.pid \
+            -o HostKey=/etc/ssh/ssh_host_ed25519_key \
+            -o ListenAddress=0.0.0.0 \
+            -o PasswordAuthentication=yes \
+            -o KbdInteractiveAuthentication=no \
+            -o PubkeyAuthentication=no \
+            -o PermitRootLogin=no \
+            -o UsePAM=no \
+            -o StrictModes=no \
+            -o AllowUsers=sshcore-ci \
+            -o AllowTcpForwarding=yes \
+            -o PermitOpen=127.0.0.1:18080 \
+            -o LogLevel=VERBOSE >/tmp/ssh-core-sshd.log 2>&1 &
+          echo "$!" >/tmp/ssh-core-sshd.pid.host
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/health >/dev/null && \
+               timeout 2 bash -c '</dev/tcp/127.0.0.1/2222' 2>/dev/null; then
+              echo "Host HTTP endpoint and SSHD are ready."
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/health
+          sudo ss -lntp | grep -E ':2222|:18080'
+
+      - name: Download and prepare OpenWrt 25.12.5 x86_64 VM rootfs
+        if: inputs.stage == 'vm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://downloads.openwrt.org/releases/25.12.5/targets/x86/64"
+          curl -fL --retry 3 --connect-timeout 20 \
+            "$BASE/openwrt-25.12.5-x86-64-generic-kernel.bin" \
+            -o /tmp/openwrt-kernel.bin
+          curl -fL --retry 3 --connect-timeout 20 \
+            "$BASE/openwrt-25.12.5-x86-64-generic-ext4-rootfs.img.gz" \
+            -o /tmp/openwrt-rootfs.img.gz
+          echo "e440f082d59550072b1421f10d1a83449c6a4cf356eea5bfa9ac1306978d649b  /tmp/openwrt-kernel.bin" | sha256sum -c -
+          echo "a1cb366a0af03d0f4afbce90aed9b4db35b07140629eabf7ae21c45dc08eeb23  /tmp/openwrt-rootfs.img.gz" | sha256sum -c -
+          gzip -dc /tmp/openwrt-rootfs.img.gz > /tmp/openwrt-rootfs.img
+          truncate -s 2G /tmp/openwrt-rootfs.img
+          sudo resize2fs /tmp/openwrt-rootfs.img
+          sudo mkdir -p /mnt/openwrt-root
+          sudo mount -o loop /tmp/openwrt-rootfs.img /mnt/openwrt-root
+
+          ROOT=/mnt/openwrt-root
+          APK="$(find "$GITHUB_WORKSPACE/test-results" -maxdepth 1 -name 'passwall-ssh-core*.apk' | head -n 1)"
+          test -n "$APK"
+          sudo install -m 0644 "$APK" "$ROOT/root/passwall-ssh-core.apk"
+          EXPECTED_SHA="$(cat /tmp/ssh-core-http/payload-1MiB.sha256)"
+          printf '%s\n' "$EXPECTED_SHA" | sudo tee "$ROOT/root/expected-payload.sha256" >/dev/null
+
+          sudo mkdir -p "$ROOT/root/ssh-core-test-logs" "$ROOT/etc/uci-defaults"
+          sudo tee "$ROOT/etc/uci-defaults/99-qemu-ci-network" >/dev/null <<'GUEST_NET'
+          #!/bin/sh
+          uci set network.lan.proto='dhcp'
+          uci commit network
+          GUEST_NET
+          sudo chmod 0755 "$ROOT/etc/uci-defaults/99-qemu-ci-network"
+
+          sudo tee "$ROOT/root/run-passwall-ssh-core-test.sh" >/dev/null <<'GUEST_TEST'
+          #!/bin/sh
+          set -u
+          LOGDIR=/root/ssh-core-test-logs
+          BIN=/usr/bin/ssh-core
+          STATUS=0
+          APP_PID=
+          mkdir -p "$LOGDIR"
+          pass() { echo "[PASS] $*"; }
+          fail() { echo "[FAIL] $*"; STATUS=2; }
+
+          echo "========== OPENWRT GUEST =========="
+          cat /etc/openwrt_release
+          uname -a
+          echo "========== INSTALL APK AND CURL =========="
+          apk update
+          APK_RC=$?
+          if [ "$APK_RC" -eq 0 ]; then
+            apk add --allow-untrusted /root/passwall-ssh-core.apk curl
+            APK_RC=$?
+          fi
+          if [ "$APK_RC" -ne 0 ]; then
+            fail "apk dependencies or ssh-core package installation failed"
+          fi
+
+          if [ "$APK_RC" -eq 0 ]; then
+            echo "========== BINARY / DYNAMIC LIBRARIES =========="
+            "$BIN" -h
+            if [ "$?" -eq 0 ]; then pass "ssh-core starts and prints usage"; else fail "ssh-core -h"; fi
+            ldd "$BIN" 2>&1 | tee "$LOGDIR/ldd.log"
+
+            echo "========== SOCKS BIND SAFETY =========="
+            if "$BIN" -host 127.0.0.1 -user ci -socks 0.0.0.0:1081 -log - >"$LOGDIR/bind-guard.log" 2>&1; then
+              fail "non-loopback unauthenticated SOCKS bind was not rejected"
+            elif grep -q "non-loopback ditolak" "$LOGDIR/bind-guard.log"; then
+              pass "non-loopback SOCKS bind rejected unless explicitly enabled"
+            else
+              fail "bind guard did not produce its expected diagnostic"
+            fi
+
+            echo "========== STRICT NUMERIC CONFIGURATION =========="
+            if "$BIN" -host 127.0.0.1 -user ci -max-clients 999999999999999999999 -log - >"$LOGDIR/number-guard.log" 2>&1; then
+              fail "overflowing MAX_CLIENTS argument was accepted"
+            else
+              pass "overflowing MAX_CLIENTS argument rejected"
+            fi
+
+            cat > /root/ssh-core-test.env <<'GUEST_ENV'
+          TRANSPORT=TCP
+          HOST=10.0.2.2
+          HOST_PORT=2222
+          USERNAME=sshcore-ci
+          PASSWORD=OpenWrt-CI-SSH-Only-2026
+          DELAY=0
+          FIX_CRLF=1
+          SOCKS_ADDR=127.0.0.1:1080
+          KEEPALIVE=15
+          VERIFY_TLS=0
+          MAX_CLIENTS=32
+          IDLE_TIMEOUT=600
+          GUEST_ENV
+            "$BIN" -env /root/ssh-core-test.env -log "$LOGDIR/ssh-core.log" >"$LOGDIR/ssh-core-stdout.log" 2>&1 &
+            APP_PID=$!
+
+            echo "========== WAIT FOR SSH AUTH AND SOCKS LISTENER =========="
+            COUNT=0
+            while [ "$COUNT" -lt 90 ]; do
+              if grep -q "SOCKS5 Listening" "$LOGDIR/ssh-core.log" 2>/dev/null; then
+                break
+              fi
+              if ! kill -0 "$APP_PID" 2>/dev/null; then
+                break
+              fi
+              COUNT=$((COUNT + 1))
+              sleep 1
+            done
+            if grep -q "SOCKS5 Listening" "$LOGDIR/ssh-core.log" 2>/dev/null; then
+              pass "SSH password authentication completed and SOCKS5 listener started"
+            else
+              fail "SSH authentication/listener startup timeout"
+              cat "$LOGDIR/ssh-core-stdout.log" 2>/dev/null
+              cat "$LOGDIR/ssh-core.log" 2>/dev/null
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== SINGLE SOCKS DOWNLOAD (1 MiB) =========="
+            if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
+              --connect-timeout 15 --max-time 90 \
+              http://127.0.0.1:18080/payload -o /tmp/download-1MiB.bin; then
+              ACTUAL_SIZE="$(wc -c </tmp/download-1MiB.bin | tr -d ' ')"
+              EXPECTED_SIZE=1048576
+              EXPECTED_SHA="$(cat /root/expected-payload.sha256)"
+              ACTUAL_SHA="$(sha256sum /tmp/download-1MiB.bin | awk '{print $1}')"
+              if [ "$ACTUAL_SIZE" = "$EXPECTED_SIZE" ] && [ "$ACTUAL_SHA" = "$EXPECTED_SHA" ]; then
+                pass "1 MiB SOCKS download hash and length verified"
+              else
+                fail "1 MiB download size/hash mismatch: size=$ACTUAL_SIZE sha=$ACTUAL_SHA"
+              fi
+            else
+              fail "single SOCKS download failed"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== FOUR CONCURRENT SOCKS CHANNELS =========="
+            I=1
+            CURL_PIDS=""
+            CONCURRENT_CURL_FAILED=0
+            while [ "$I" -le 4 ]; do
+              curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
+                --connect-timeout 15 --max-time 120 \
+                http://127.0.0.1:18080/payload -o "/tmp/concurrent-$I.bin" &
+              CURL_PID=$!
+              CURL_PIDS="$CURL_PIDS $CURL_PID"
+              I=$((I + 1))
+            done
+
+            # Wait only for the four curl workers. A bare 'wait' also waits for
+            # APP_PID (the long-lived ssh-core SOCKS service), causing a hang.
+            for CURL_PID in $CURL_PIDS; do
+              if ! wait "$CURL_PID"; then
+                CONCURRENT_CURL_FAILED=1
+              fi
+            done
+
+            I=1
+            CONCURRENT_OK=1
+            EXPECTED_SHA="$(cat /root/expected-payload.sha256)"
+            if [ "$CONCURRENT_CURL_FAILED" -ne 0 ]; then
+              CONCURRENT_OK=0
+            fi
+            while [ "$I" -le 4 ]; do
+              if [ -f "/tmp/concurrent-$I.bin" ]; then
+                SHA="$(sha256sum "/tmp/concurrent-$I.bin" 2>/dev/null | awk '{print $1}')"
+                SIZE="$(wc -c <"/tmp/concurrent-$I.bin" 2>/dev/null | tr -d ' ')"
+                if [ "$SHA" != "$EXPECTED_SHA" ] || [ "$SIZE" != "1048576" ]; then
+                  CONCURRENT_OK=0
+                fi
+              else
+                CONCURRENT_OK=0
+              fi
+              I=$((I + 1))
+            done
+            if [ "$CONCURRENT_OK" -eq 1 ]; then
+              pass "four parallel direct-tcpip channels transferred exact data"
+            else
+              fail "concurrent channel transfer failed or data size/hash mismatch"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== FORCED 32 MiB UPLOAD / SSH CHANNEL WINDOW BACKPRESSURE =========="
+            dd if=/dev/urandom of=/tmp/upload-32MiB.bin bs=1M count=32 2>/dev/null
+            LOCAL_SHA="$(sha256sum /tmp/upload-32MiB.bin | awk '{print $1}')"
+            if RESPONSE="$(curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
+              --connect-timeout 20 --max-time 300 \
+              --data-binary @/tmp/upload-32MiB.bin \
+              http://127.0.0.1:18080/slow-upload)"; then
+              echo "$RESPONSE"
+              if echo "$RESPONSE" | grep -q "size=33554432 sha256=$LOCAL_SHA"; then
+                pass "forced 32 MiB upload completed with matching remote SHA-256"
+              else
+                fail "forced upload response did not match sent bytes"
+              fi
+            else
+              fail "forced upload through SSH SOCKS failed"
+            fi
+            WINDOW_FULL_COUNT="$(grep -c "SSH channel window penuh" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+            WINDOW_RECOVERED_COUNT="$(grep -c "SSH channel window recovered; write resumed" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+            WINDOW_EAGAIN_COUNT="$(grep -c "write_window=0" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+            BUFFER_DRAINED_COUNT="$(grep -c "SSH channel buffer drained after window recovery" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+            BUFFER_NOT_DRAINED_COUNT="$(grep -c "SSH channel buffer not drained at close" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+            echo "SSH channel blocked transitions: $WINDOW_FULL_COUNT"
+            echo "SSH channel successful recoveries: $WINDOW_RECOVERED_COUNT"
+            echo "SSH channel EAGAIN/zero-window observations: $WINDOW_EAGAIN_COUNT"
+            echo "SSH channel drained-buffer reports: $BUFFER_DRAINED_COUNT"
+            if [ "$WINDOW_FULL_COUNT" -gt 0 ] && [ "$WINDOW_RECOVERED_COUNT" -eq "$WINDOW_FULL_COUNT" ]; then
+              pass "every logged window-block episode recovered through a successful channel write"
+            else
+              fail "window-block/recovery log counts do not match"
+            fi
+            if [ "$WINDOW_EAGAIN_COUNT" -gt 0 ]; then
+              pass "libssh2 EAGAIN with an explicitly zero SSH write window was observed"
+            else
+              fail "forced upload did not exercise the EAGAIN zero-window path"
+            fi
+            if [ "$BUFFER_DRAINED_COUNT" -gt 0 ] && [ "$BUFFER_NOT_DRAINED_COUNT" -eq 0 ]; then
+              BUFFER_LINE="$(grep "SSH channel buffer drained after window recovery" "$LOGDIR/ssh-core.log" | tail -n 1)"
+              BUFFER_PEAK="$(printf '%s\n' "$BUFFER_LINE" | sed -n 's/.*peak=\([0-9][0-9]*\)\/32768.*/\1/p')"
+              if [ -n "$BUFFER_PEAK" ] && [ "$BUFFER_PEAK" -le 32768 ]; then
+                pass "c2s ring buffer drained to zero and peak stayed within its 32 KiB bound"
+              else
+                fail "c2s ring buffer high-water mark was missing or exceeded 32 KiB"
+              fi
+            else
+              fail "c2s ring buffer was not confirmed empty at channel close"
+            fi
+          fi
+
+          echo "========== SSH CORE LOG =========="
+          cat "$LOGDIR/ssh-core.log" 2>/dev/null || true
+          echo "========== SSH CORE STDOUT =========="
+          cat "$LOGDIR/ssh-core-stdout.log" 2>/dev/null || true
+          if [ -n "$APP_PID" ]; then
+            kill "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+          fi
+          echo "TEST STATUS: $STATUS" | tee "$LOGDIR/test-status" >/dev/console
+          sync
+          poweroff
+          GUEST_TEST
+          sudo chmod 0700 "$ROOT/root/run-passwall-ssh-core-test.sh"
+          sudo sh -n "$ROOT/root/run-passwall-ssh-core-test.sh"
+
+          sudo tee "$ROOT/etc/init.d/passwall-ssh-core-test" >/dev/null <<'GUEST_INIT'
+          #!/bin/sh /etc/rc.common
+          START=99
+          start() {
+            (
+              sleep 8
+              /root/run-passwall-ssh-core-test.sh 2>&1 | tee -a /root/ssh-core-test-logs/test.log /dev/console
+            ) >/dev/console 2>&1 &
+          }
+          GUEST_INIT
+          sudo chmod 0755 "$ROOT/etc/init.d/passwall-ssh-core-test"
+          sudo mkdir -p "$ROOT/etc/rc.d"
+          sudo ln -sf ../init.d/passwall-ssh-core-test "$ROOT/etc/rc.d/S99passwall-ssh-core-test"
+          sudo tee "$ROOT/etc/rc.local" >/dev/null <<'GUEST_RC'
+          #!/bin/sh
+          exit 0
+          GUEST_RC
+          sudo chmod 0755 "$ROOT/etc/rc.local"
+          sudo umount "$ROOT"
+
+      - name: Boot OpenWrt 25.12.5 VM and run SOCKS / SSH channel tests
+        if: inputs.stage == 'vm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/passwall-ssh-core-openwrt.exp <<'EXPECT'
+          log_user 1
+          log_file -a /tmp/passwall-ssh-core-openwrt-console.log
+          set timeout 1800
+          spawn qemu-system-x86_64 -machine accel=tcg -m 1024 -smp 2 \
+            -kernel /tmp/openwrt-kernel.bin \
+            -drive file=/tmp/openwrt-rootfs.img,format=raw,if=ide,index=0 \
+            -append "root=/dev/sda rootfstype=ext4 rootwait rw console=ttyS0,115200" \
+            -netdev user,id=net0 -device e1000,netdev=net0 -nographic -no-reboot
+          set test_status ""
+          expect {
+            -re {Please press Enter to activate this console\.} { send "\r"; exp_continue }
+            -re {TEST STATUS: ([0-9]+)} {
+              set test_status $expect_out(1,string)
+              exp_continue
+            }
+            timeout { puts "Timed out waiting for OpenWrt SSH core test."; exit 2 }
+            eof {}
+          }
+          if {$test_status eq "0"} {
+            puts "OpenWrt guest SSH core test passed; VM completed shutdown."
+            exit 0
+          }
+          if {$test_status ne ""} {
+            puts "OpenWrt guest SSH core test failed with status $test_status."
+          } else {
+            puts "OpenWrt VM stopped without reporting test status."
+          }
+          exit 2
+          EXPECT
+          expect /tmp/passwall-ssh-core-openwrt.exp
+
+      - name: Collect OpenWrt guest logs and build manifests
+        if: always() && inputs.stage == 'vm'
+        shell: bash
+        run: |
+          set +e
+          mkdir -p test-results/openwrt-guest
+          if mountpoint -q /mnt/openwrt-root; then sudo umount /mnt/openwrt-root; fi
+          if [ -f /tmp/openwrt-rootfs.img ]; then sudo e2fsck -fy /tmp/openwrt-rootfs.img; fi
+          if [ -f /tmp/openwrt-rootfs.img ] && sudo mount -o loop,ro /tmp/openwrt-rootfs.img /mnt/openwrt-root; then
+            sudo cp -a /mnt/openwrt-root/root/ssh-core-test-logs/. test-results/openwrt-guest/ 2>/dev/null
+            sudo cp -a /mnt/openwrt-root/root/ssh-core-test.env test-results/openwrt-guest/ 2>/dev/null
+            sudo umount /mnt/openwrt-root
+          fi
+          cp /tmp/passwall-ssh-core-openwrt-console.log test-results/openwrt-qemu-console.log 2>/dev/null
+          cp /tmp/ssh-core-sshd.log test-results/host-sshd.log 2>/dev/null
+          cp /tmp/ssh-core-http-server.log test-results/host-http-server.log 2>/dev/null
+          cp /tmp/ssh-core-tcp-buffers.log test-results/host-tcp-buffers.log 2>/dev/null
+          sha256sum ssh-core.c > test-results/ssh-core-source.sha256
+          ls -lh test-results test-results/openwrt-guest || true
+
+      - name: Upload OpenWrt guest test logs
+        if: always() && inputs.stage == 'vm'
+        uses: actions/upload-artifact@v4
+        with:
+          name: passwall-ssh-core-openwrt-25.12.5-x86_64-vm
+          path: |
+            test-results/**
+          if-no-files-found: warn
+          retention-days: 14
