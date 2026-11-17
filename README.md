@@ -28,6 +28,11 @@ libssh2 from the packages feed.
   database.
 - `MAX_CLIENTS` defaults to 64 and is capped at 256.
 - `IDLE_TIMEOUT` defaults to 600 seconds; set it to 0 to disable idle expiry.
+- Per-channel backpressure/window-transition diagnostics are disabled by default
+  to keep normal logs quiet. Set `LOG_BACKPRESSURE=1` in the environment file,
+  or pass `-log-backpressure 1`, only when troubleshooting flow control. The
+  CI integration test enables this flag explicitly; it does not affect buffering
+  or retry behavior.
 
 ## Continuous integration tests
 

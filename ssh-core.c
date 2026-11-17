@@ -49,6 +49,8 @@
 
 static volatile sig_atomic_t g_stop = 0;
 static const char *g_log_path = DEFAULT_LOG_PATH;
+/* Verbose per-channel flow-control diagnostics are opt-in. */
+static int g_log_backpressure = 0;
 static const char *g_kbd_password = "";
 
 /* Sentinel tag untuk O(1) epoll dispatch */
@@ -314,12 +316,13 @@ static void log_red(const char *fmt, ...) {
 }
 
 static void note_c2s_buffer_peak(client_conn_t *c) {
+    if (!g_log_backpressure) return;
     if (c && c->c2s.used > c->c2s_peak_used)
         c->c2s_peak_used = c->c2s.used;
 }
 
 static void note_s2c_buffer_peak(client_conn_t *c) {
-    if (!c) return;
+    if (!g_log_backpressure || !c) return;
     if (c->s2c.used > c->s2c_peak_used)
         c->s2c_peak_used = c->s2c.used;
     if (!c->s2c_saturated && c->s2c.cap > 0 && c->s2c.used == c->s2c.cap) {
@@ -330,7 +333,7 @@ static void note_s2c_buffer_peak(client_conn_t *c) {
 }
 
 static void log_s2c_buffer_final(client_conn_t *c) {
-    if (!c || !c->s2c_saturated || c->s2c_final_logged) return;
+    if (!g_log_backpressure || !c || !c->s2c_saturated || c->s2c_final_logged) return;
     note_s2c_buffer_peak(c);
     if (c->s2c.used == 0) {
         log_blue("SSH channel s2c buffer drained after client resumed reading (%s:%u; queued=0/%zu; peak=%zu/%zu)",
@@ -347,7 +350,7 @@ static void log_s2c_buffer_final(client_conn_t *c) {
 /* Keep diagnostic state separate from write_waiting_window, which is reset
  * whenever inbound SSH traffic allows the relay loop to retry a blocked write. */
 static void note_channel_window_blocked(client_conn_t *c, int eagain_zero) {
-    if (!c) return;
+    if (!g_log_backpressure || !c) return;
     if (eagain_zero && !c->write_window_eagain_logged) {
         c->write_window_eagain_logged = 1;
         if (c->write_window_log_active) {
@@ -368,14 +371,14 @@ static void note_channel_window_blocked(client_conn_t *c, int eagain_zero) {
 }
 
 static void note_channel_window_recovered(client_conn_t *c) {
-    if (!c || !c->write_window_log_active) return;
+    if (!g_log_backpressure || !c || !c->write_window_log_active) return;
     log_blue("SSH channel window recovered; write resumed (%s:%u; c2s_pending=%zu/%zu)",
              c->target_host, (unsigned)c->target_port, c->c2s.used, c->c2s.cap);
     c->write_window_log_active = 0;
 }
 
 static void log_channel_buffer_final(client_conn_t *c) {
-    if (!c || !c->write_window_log_seen || c->write_window_final_logged) return;
+    if (!g_log_backpressure || !c || !c->write_window_log_seen || c->write_window_final_logged) return;
     note_c2s_buffer_peak(c);
     if (!c->write_window_log_active && c->c2s.used == 0) {
         log_blue("SSH channel buffer drained after window recovery (%s:%u; queued=0/%zu; peak=%zu/%zu)",
@@ -420,6 +423,7 @@ typedef struct {
     int  idle_timeout_sec;
     char hostkey_fp[128]; /* Opsional: SHA256:<base64> atau 64-hex untuk pin host key */
     int  max_clients;
+    int  log_backpressure;
 } app_cfg_t;
 
 static void trim_ws(char *s) {
@@ -518,6 +522,9 @@ static void load_env(const char *path, app_cfg_t *cfg) {
         } else if (!strcmp(k,"MAX_CLIENTS")) {
             if(parse_int_range(v,1,MAX_CLIENTS_LIMIT,&n)==0) cfg->max_clients=n;
             else log_yellow("MAX_CLIENTS harus 1..%d",MAX_CLIENTS_LIMIT);
+        } else if (!strcmp(k,"LOG_BACKPRESSURE")) {
+            if(parse_int_range(v,0,1,&n)==0) cfg->log_backpressure=n;
+            else log_yellow("LOG_BACKPRESSURE harus 0 atau 1; diagnostik dinonaktifkan");
         }
     }
     fclose(f);
@@ -2565,7 +2572,8 @@ int main(int argc, char **argv) {
         .allow_http_200_tunnel = 0,
         .idle_timeout_sec = DEFAULT_IDLE_TIMEOUT,
         .hostkey_fp = "",
-        .max_clients = DEFAULT_MAX_CLIENTS
+        .max_clients = DEFAULT_MAX_CLIENTS,
+        .log_backpressure = 0
     };
     const char *env_file = NULL;
     const char *payload_file = NULL;
@@ -2573,7 +2581,7 @@ int main(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            printf("Usage: %s [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-verify-tls 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log FILE|-]\\n", argv[0]);
+            printf("Usage: %s [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-verify-tls 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log-backpressure 0|1] [-log FILE|-]\\n", argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-env") == 0 && i + 1 < argc) {
             env_file = argv[++i];
@@ -2607,7 +2615,12 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "-idle-timeout") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,86400,&cfg.idle_timeout_sec)<0){log_red("Nilai -idle-timeout tidak valid");return 1;} }
         else if (strcmp(argv[i], "-hostkey") == 0 && i + 1 < argc) snprintf(cfg.hostkey_fp,sizeof(cfg.hostkey_fp),"%s",argv[++i]);
         else if (strcmp(argv[i], "-max-clients") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],1,MAX_CLIENTS_LIMIT,&cfg.max_clients)<0){log_red("MAX_CLIENTS harus 1..%d",MAX_CLIENTS_LIMIT);return 1;} }
+        else if (strcmp(argv[i], "-log-backpressure") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,1,&cfg.log_backpressure)<0){log_red("LOG_BACKPRESSURE harus 0 atau 1");return 1;} }
     }
+
+    g_log_backpressure = cfg.log_backpressure;
+    if (g_log_backpressure)
+        log_blue("Diagnostik backpressure aktif (LOG_BACKPRESSURE=1)");
 
     if (!cfg.host[0] || !cfg.username[0]) {
         fprintf(stderr, "Host dan Username wajib diisi\n");
