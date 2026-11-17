@@ -3,6 +3,13 @@
 A non-blocking libssh2 client that opens one SSH session and multiplexes local
 SOCKS5 clients over SSH `direct-tcpip` channels.
 
+## Package and executable names
+
+The OpenWrt package is named `passwall-ssh-core`, and the runtime executable
+installed by the package is `/usr/bin/passwall-ssh-core`. The package manifest,
+service scripts, and VM integration test use this same executable path; no
+post-install rename is required.
+
 ## OpenWrt 25.12.5 x86_64 build
 
 The repository includes an OpenWrt package recipe at `Makefile`.

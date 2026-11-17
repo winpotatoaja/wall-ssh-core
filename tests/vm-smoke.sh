@@ -12,10 +12,13 @@ apk update
 apk add curl
 apk add --allow-untrusted /tmp/passwall-ssh-core.apk
 
-/usr/bin/ssh-core -h >/tmp/ssh-core-help.txt
+BIN=/usr/bin/passwall-ssh-core
+grep -qx "$BIN" /lib/apk/packages/passwall-ssh-core.list
+[ -x "$BIN" ]
+"$BIN" -h >/tmp/ssh-core-help.txt
 grep -q 'max-clients' /tmp/ssh-core-help.txt
 
-nohup /usr/bin/ssh-core -env /tmp/core.env -log /tmp/ssh-core.log >/tmp/ssh-core.out 2>&1 &
+nohup "$BIN" -env /tmp/core.env -log /tmp/ssh-core.log >/tmp/ssh-core.out 2>&1 &
 i=0
 while [ "$i" -lt 40 ]; do
     if grep -q 'SOCKS5 Listening' /tmp/ssh-core.log 2>/dev/null; then

@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=4
+PKG_RELEASE:=5
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1
@@ -31,14 +31,14 @@ endef
 define Build/Compile
 	$(TARGET_CC) $(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -std=gnu11 \
 		-Wall -Wextra \
-		-o $(PKG_BUILD_DIR)/ssh-core $(PKG_BUILD_DIR)/ssh-core.c \
+		-o $(PKG_BUILD_DIR)/passwall-ssh-core $(PKG_BUILD_DIR)/ssh-core.c \
 		$(TARGET_LDFLAGS) -Wl,--as-needed -lssh2 -lssl -lcrypto
-	test -x $(PKG_BUILD_DIR)/ssh-core
+	test -x $(PKG_BUILD_DIR)/passwall-ssh-core
 endef
 
 define Package/passwall-ssh-core/install
 	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/ssh-core $(1)/usr/bin/ssh-core
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/passwall-ssh-core $(1)/usr/bin/passwall-ssh-core
 endef
 
 $(eval $(call BuildPackage,passwall-ssh-core))

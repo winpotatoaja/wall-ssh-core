@@ -161,7 +161,7 @@ jobs:
           test -f "$TARGET_STAGING/usr/include/libssh2.h"
           test -e "$TARGET_STAGING/usr/lib/libssh2.so"
 
-      - name: Compile ssh-core using the repository OpenWrt package recipe
+      - name: Compile passwall-ssh-core using the repository OpenWrt package recipe
         if: inputs.stage == 'sdk' || github.event_name == 'push'
         shell: bash
         run: |
@@ -510,7 +510,7 @@ jobs:
           #!/bin/sh
           set -u
           LOGDIR=/root/ssh-core-test-logs
-          BIN=/usr/bin/ssh-core
+          BIN=/usr/bin/passwall-ssh-core
           STATUS=0
           APP_PID=
           mkdir -p "$LOGDIR"
@@ -528,10 +528,15 @@ jobs:
             APK_RC=$?
           fi
           if [ "$APK_RC" -ne 0 ]; then
-            fail "apk dependencies or ssh-core package installation failed"
+            fail "apk dependencies or passwall-ssh-core package installation failed"
           fi
 
           if [ "$APK_RC" -eq 0 ]; then
+            if [ -x "$BIN" ] && grep -qx "$BIN" /lib/apk/packages/passwall-ssh-core.list; then
+              pass "APK installs and owns /usr/bin/passwall-ssh-core"
+            else
+              fail "APK executable path or ownership manifest does not match /usr/bin/passwall-ssh-core"
+            fi
             echo "========== BINARY / DYNAMIC LIBRARIES =========="
             "$BIN" -h
             if [ "$?" -eq 0 ]; then pass "ssh-core starts and prints usage"; else fail "ssh-core -h"; fi
