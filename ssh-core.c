@@ -2929,6 +2929,11 @@ static void retry_window_waiters(void) {
     }
 }
 
+static int upstream_hup_needs_restart(int hup, uint64_t rx_before,
+                                        uint64_t rx_after, int rounds) {
+    return hup && rx_before == rx_after && rounds < 16;
+}
+
 static int upstream_http_response_rejected(const upstream_ctx_t *u) {
     return u && !u->tunnel_established &&
            (u->last_http_code >= 200 || u->last_http_code == 101);
@@ -3618,8 +3623,8 @@ int main(int argc, char **argv) {
             idle_rx_paused = 1;
         }
 
-        if (upstream_hup && uctx.rx_seq == upstream_rx_before_pump &&
-            rounds < 16) {
+        if (upstream_hup_needs_restart(upstream_hup, upstream_rx_before_pump,
+                                        uctx.rx_seq, rounds)) {
             log_red("Koneksi upstream SSH ditutup oleh peer");
             write_marker(NEED_RESTART_FILE, "upstream eof");
             exit_code = 1;
