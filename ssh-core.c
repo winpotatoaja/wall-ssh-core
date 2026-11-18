@@ -1675,6 +1675,14 @@ static void start_closing_client(int epfd, client_conn_t *c) {
         detach_client_fd(epfd, c);
         return;
     }
+    /* Inbound-only EAGAIN leaves retryable channel IO without a global pending slot.
+     * Keep the pinned ring memory until that same channel operation completes. */
+    if (c->channel &&
+        (c->read_pending || (c->write_pending && !c->write_waiting_window))) {
+        c->abort_on_pending = 1;
+        detach_client_fd(epfd, c);
+        return;
+    }
     detach_client_fd(epfd, c);
     if (c->channel) {
         c->write_pending = 0;
@@ -2118,7 +2126,8 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
             update_client_epoll(epfd, c, want);
         }
 
-        if ((c->client_dead && !c->hup_pending && c->c2s.used == 0 && !c->need_send_eof) ||
+        if ((c->client_dead && !c->hup_pending && c->c2s.used == 0 && !c->need_send_eof &&
+             !c->read_pending && !c->write_pending) ||
             (c->client_eof && c->ssh_eof && c->c2s.used == 0 && c->s2c.used == 0 && !c->need_send_eof)) {
             start_closing_client(epfd, c);
             return;
@@ -2526,6 +2535,18 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 }
             }
         } else if (c->state == ST_RELAY) {
+            if (c->client_dead && c->write_pending && c->write_waiting_window) {
+                /* No channel_write call is in flight while waiting for WINDOW_ADJUST.
+                 * The local socket is gone, so unsent C2S bytes can be discarded. */
+                c->c2s.head = c->c2s.tail;
+                c->c2s.used = 0;
+                c->write_pending = 0;
+                c->write_pending_head = 0;
+                c->write_pending_generation = 0;
+                c->write_pending_len = 0;
+                c->write_waiting_window = 0;
+                c->write_wait_rx_seq = 0;
+            }
             if (drain_pending_eof_to_c2s(epfd, c)) {
                 any_progress = 1;
             }
@@ -2651,14 +2672,16 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 }
             }
 
-            if (c->client_dead && !c->hup_pending && c->c2s.used == 0 && !c->need_send_eof) {
+            if (c->client_dead && !c->hup_pending && c->c2s.used == 0 && !c->need_send_eof &&
+                !c->read_pending && !c->write_pending) {
                 c->abort_on_pending = 0;
                 start_closing_client(epfd, c);
                 c = next;
                 continue;
             }
 
-            if (!c->ssh_eof && !c->client_dead && (c->read_pending || rb_free_space(&c->s2c) > 0)) {
+            if (!c->ssh_eof && (!c->client_dead || c->read_pending) &&
+                (c->read_pending || rb_free_space(&c->s2c) > 0)) {
                 uint8_t *ptr = NULL;
                 size_t avail = 0;
                 if (c->read_pending) {
@@ -2793,7 +2816,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
 
 static int has_readable_relay_channel(void) {
     for (client_conn_t *c = g_clients; c; c = c->next) {
-        if (c->state == ST_RELAY && !c->ssh_eof && !c->client_dead &&
+        if (c->state == ST_RELAY && !c->ssh_eof && (!c->client_dead || c->read_pending) &&
             (c->read_pending || rb_free_space(&c->s2c) > 0)) {
             return 1;
         }
@@ -2854,6 +2877,23 @@ static int check_upstream_eof_peek(upstream_ctx_t *u) {
     if (n > 0) return 1;
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return -2;
     return -1;
+}
+
+static int session_disconnect_with_deadline(LIBSSH2_SESSION *session,
+                                             int fd, long long deadline_ms) {
+    if (!session) return 0;
+    while (now_ms() < deadline_ms) {
+        int rc = libssh2_session_disconnect(session, "Normal shutdown");
+        if (rc == 0) return 0;
+        if (rc != LIBSSH2_ERROR_EAGAIN) return rc;
+        int dirs = libssh2_session_block_directions(session);
+        short events = 0;
+        if (dirs & LIBSSH2_SESSION_BLOCK_INBOUND) events |= POLLIN;
+        if (dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) events |= POLLOUT;
+        if (events == 0) events = POLLIN | POLLOUT;
+        if (poll_fd_until(fd, events, deadline_ms) <= 0) break;
+    }
+    return LIBSSH2_ERROR_EAGAIN;
 }
 
 static int session_free_with_deadline(LIBSSH2_SESSION **session,
@@ -3557,11 +3597,25 @@ int main(int argc, char **argv) {
     if (epfd >= 0) close(epfd);
     if (listen_fd >= 0) close(listen_fd);
     if (session) {
-        int free_rc = session_free_with_deadline(&session, upstream_fd, now_ms() + 2500);
-        if (free_rc == LIBSSH2_ERROR_EAGAIN) {
-            log_yellow("Session cleanup remained pending after 2.5 seconds; process teardown will close remaining resources");
-        } else if (free_rc < 0) log_yellow("libssh2_session_free returned %d during shutdown", free_rc);
-        else libssh2_exit();
+        int disconnect_rc = 0;
+        if (exit_code == 0) {
+            disconnect_rc = session_disconnect_with_deadline(session, upstream_fd, now_ms() + 2500);
+            if (disconnect_rc == LIBSSH2_ERROR_EAGAIN) {
+                log_yellow("SSH disconnect remained pending after 2.5 seconds; skipping session_free before process teardown");
+            } else if (disconnect_rc < 0) {
+                log_yellow("libssh2_session_disconnect returned %d during shutdown", disconnect_rc);
+            }
+        }
+        if (disconnect_rc != LIBSSH2_ERROR_EAGAIN) {
+            int free_rc = session_free_with_deadline(&session, upstream_fd, now_ms() + 2500);
+            if (free_rc == LIBSSH2_ERROR_EAGAIN) {
+                log_yellow("Session cleanup remained pending after 2.5 seconds; process teardown will close remaining resources");
+            } else if (free_rc < 0) {
+                log_yellow("libssh2_session_free returned %d during shutdown", free_rc);
+            } else {
+                libssh2_exit();
+            }
+        }
     }
     if (uctx.ssl) {
         if (exit_code == 0) SSL_shutdown(uctx.ssl);
