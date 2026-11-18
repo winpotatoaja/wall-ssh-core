@@ -22,6 +22,13 @@
 - Preserve pinned buffers for real channel read/write EAGAIN; use a validated,
   generation-changing ring clear only for a write blocked before packet creation
   by a zero remote window.
+- Use one absolute 2.5-second deadline for SSH disconnect, session free, and
+  TLS shutdown rather than resetting the budget at each phase.
+- Complete nonblocking TLS shutdown without calling SSL_get_error() on the
+  special zero return from SSL_shutdown(); drain with SSL_read() until the
+  peer close_notify or deadline, and retry WANT_READ/WANT_WRITE correctly.
+- Let shutdown polling retry reads when POLLIN is reported together with HUP,
+  so buffered close_notify data is not discarded by the poller.
 - Retry TLS close_notify on WANT_READ/WANT_WRITE with a deadline, using a
   shutdown poller that remains active after g_stop; skip TLS I/O if SSH teardown
   is incomplete or any libssh2 operation is still pending.
