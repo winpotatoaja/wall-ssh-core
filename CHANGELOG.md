@@ -27,8 +27,9 @@
   is incomplete or any libssh2 operation is still pending.
 - Skip libssh2 API cleanup entirely on startup failure, avoiding a switch to
   session_free when handshake or authentication may still be pending.
-- Add native regressions for ring clear, cleanup deadlines, and shutdown pending
-  detection, including the distinction between window wait and active write.
+- Add native regressions for ring clear, cleanup deadlines, shutdown pending
+  detection, and shutdown polling after g_stop, including the distinction
+  between window wait and active write.
 - Add regressions for ring invariants, HUP/RDHUP EAGAIN, deferred cleanup, IPv6
   listener parsing, strict HTTP status lines, and unframed HTTP 200 responses.
 - Bump the OpenWrt package release to r9.
