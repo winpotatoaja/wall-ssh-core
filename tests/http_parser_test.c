@@ -540,8 +540,8 @@ static int run_inbound_only_channel_close_regression(void) {
         free(c);
     }
 
-    /* channel_write EAGAIN caused only by inbound socket wait does not pin
-     * its arguments inside libssh2 either; there is no global pending op. */
+    /* A nonzero-window write EAGAIN may have created a packet even when
+     * the TLS callback requests inbound readiness; keep that exact buffer. */
     client_conn_t *write_c = calloc(1, sizeof(*write_c));
     if (!write_c) failed = 1;
     if (write_c) {
