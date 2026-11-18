@@ -1,5 +1,5 @@
 name: Passwall SSH core - OpenWrt 25.12.5 staged pipeline
-run-name: ${{ format('Passwall SSH Core / {0}', inputs.stage || 'parser') }}
+run-name: ${{ format('Passwall SSH Core / {0}', inputs.stage || (contains(github.event.head_commit.message, '[stage=vm]') && 'vm') || (contains(github.event.head_commit.message, '[stage=sdk]') && 'sdk') || 'parser') }}
 
 on:
   push:
@@ -34,6 +34,9 @@ jobs:
     name: Build OpenWrt 25.12.5 x86_64 and test in QEMU VM
     runs-on: ubuntu-24.04
     timeout-minutes: 75
+    env:
+      TEST_STAGE: ${{ inputs.stage || (contains(github.event.head_commit.message, '[stage=vm]') && 'vm') || (contains(github.event.head_commit.message, '[stage=sdk]') && 'sdk') || 'parser' }}
+      SDK_RUN_ID: ${{ inputs.sdk_run_id || '' }}
 
     steps:
       - name: Checkout selected branch
@@ -46,7 +49,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          case "${{ inputs.stage || 'parser' }}" in
+          case "$TEST_STAGE" in
             parser)
               sudo apt-get install -y --no-install-recommends \
                 build-essential libssh2-1-dev libssl-dev
@@ -74,7 +77,7 @@ jobs:
           esac
 
       - name: Run native HTTP parser regression tests
-        if: github.event_name == 'push' || inputs.stage == 'parser'
+        if: env.TEST_STAGE == 'parser'
         shell: bash
         run: |
           set -euo pipefail
@@ -88,7 +91,7 @@ jobs:
           /tmp/http-parser-test | tee test-results/http-parser-test.log
 
       - name: Download and configure OpenWrt 25.12.5 x86_64 SDK
-        if: inputs.stage == 'sdk'
+        if: env.TEST_STAGE == 'sdk'
         shell: bash
         run: |
           set -euo pipefail
@@ -157,7 +160,7 @@ jobs:
           test -e "$TARGET_STAGING/usr/lib/libssh2.so"
 
       - name: Compile passwall-ssh-core using the repository OpenWrt package recipe
-        if: inputs.stage == 'sdk'
+        if: env.TEST_STAGE == 'sdk'
         shell: bash
         run: |
           set -euo pipefail
@@ -192,7 +195,7 @@ jobs:
           find staging_dir/target-* -name 'libssh2.so*' -o -name 'libssl.so*' -o -name 'libcrypto.so*' | head -30
 
       - name: Save OpenWrt APK for the separate VM stage
-        if: inputs.stage == 'sdk'
+        if: env.TEST_STAGE == 'sdk'
         uses: actions/upload-artifact@v4
         with:
           name: passwall-ssh-core-openwrt-apk
@@ -206,7 +209,7 @@ jobs:
           retention-days: 7
 
       - name: Show SDK run ID for the VM stage
-        if: inputs.stage == 'sdk'
+        if: env.TEST_STAGE == 'sdk'
         shell: bash
         run: |
           {
@@ -217,32 +220,39 @@ jobs:
             printf '`%s`\n' "$GITHUB_RUN_ID"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Validate SDK run ID for the VM stage
-        if: inputs.stage == 'vm'
+        if: env.TEST_STAGE == 'vm'
         shell: bash
-        env:
-          SDK_RUN_ID: ${{ inputs.sdk_run_id || github.run_id }}
         run: |
-          test -n "$SDK_RUN_ID"
+          if [ -z "$SDK_RUN_ID" ]; then
+            SDK_COMMIT_MESSAGE="$(jq -r '.head_commit.message // empty' "$GITHUB_EVENT_PATH")"
+            SDK_RUN_ID="$(printf '%s\n' "$SDK_COMMIT_MESSAGE" | sed -n 's/.*\[sdk_run_id=\([0-9][0-9]*\)\].*/\1/p')"
+          fi
+          if [ -z "$SDK_RUN_ID" ]; then
+            echo "Provide sdk_run_id input or [sdk_run_id=RUN_ID] in the push commit message."
+            false
+          fi
           case "$SDK_RUN_ID" in
             *[!0-9]*)
               echo "sdk_run_id must contain digits only"
               false
               ;;
           esac
+          echo "SDK_RUN_ID=$SDK_RUN_ID" >> "$GITHUB_ENV"
+          echo "Using SDK run ID: $SDK_RUN_ID"
 
       # Manual VM stage consumes an artifact from a separate SDK workflow run.
       - name: Download APK artifact from selected SDK run
-        if: inputs.stage == 'vm'
+        if: env.TEST_STAGE == 'vm'
         uses: actions/download-artifact@v4
         with:
           name: passwall-ssh-core-openwrt-apk
-          run-id: ${{ inputs.sdk_run_id }}
+          run-id: ${{ env.SDK_RUN_ID }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           path: test-results
 
       - name: Verify APK and package source match current branch
-        if: inputs.stage == 'vm'
+        if: env.TEST_STAGE == 'vm'
         shell: bash
         run: |
           set -euo pipefail
@@ -260,7 +270,7 @@ jobs:
           fi
           (cd test-results && sha256sum -c apk.sha256 halfclose.sha256)
       - name: Prepare host-side SSH and HTTP forwarding targets
-        if: inputs.stage == 'vm'
+        if: env.TEST_STAGE == 'vm'
         shell: bash
         run: |
           set -euo pipefail
@@ -660,7 +670,7 @@ jobs:
           sudo ss -lntp | grep -E ':2222|:8443|:18080'
 
       - name: Download and prepare OpenWrt 25.12.5 x86_64 VM rootfs
-        if: inputs.stage == 'vm'
+        if: env.TEST_STAGE == 'vm'
         shell: bash
         run: |
           set -euo pipefail
@@ -1513,7 +1523,7 @@ jobs:
           sudo umount "$ROOT"
 
       - name: Boot OpenWrt 25.12.5 VM and run SOCKS / SSH channel tests
-        if: inputs.stage == 'vm'
+        if: env.TEST_STAGE == 'vm'
         shell: bash
         run: |
           set -euo pipefail
@@ -1550,7 +1560,7 @@ jobs:
           expect /tmp/passwall-ssh-core-openwrt.exp
 
       - name: Verify host observed both half-close directions
-        if: inputs.stage == 'vm'
+        if: env.TEST_STAGE == 'vm'
         shell: bash
         run: |
           set -euo pipefail
@@ -1581,7 +1591,7 @@ jobs:
           echo "TLS relay acknowledged the guest's graceful close_notify during SIGTERM shutdown."
 
       - name: Collect OpenWrt guest logs and build manifests
-        if: always() && inputs.stage == 'vm'
+        if: always() && env.TEST_STAGE == 'vm'
         shell: bash
         run: |
           set +e
@@ -1602,7 +1612,7 @@ jobs:
           ls -lh test-results test-results/openwrt-guest || true
 
       - name: Upload OpenWrt guest test logs
-        if: always() && inputs.stage == 'vm'
+        if: always() && env.TEST_STAGE == 'vm'
         uses: actions/upload-artifact@v4
         with:
           name: passwall-ssh-core-openwrt-25.12.5-x86_64-vm
