@@ -269,10 +269,10 @@ static int relay_idle_timeout_due(const client_conn_t *c, int timeout_sec,
     return now_msec - c->last_activity_ms >= (long long)timeout_sec * 1000LL;
 }
 
-/* A dead local peer no longer needs a remote EOF handshake. Preserve queued
- * client data, then close the channel regardless of a stale inbound read
- * EAGAIN or an unsent EOF intent. Any truly active libssh2 call is guarded by
- * g_pending_client/g_pending_op inside start_closing_client(). */
+/* A reset local peer has no remaining consumer for queued C2S data. Close
+ * its channel without waiting for inbound-only read/write EAGAIN or remote
+ * EOF. A truly active libssh2 call is still guarded by the global pending slot
+ * inside start_closing_client(). */
 static int client_dead_ready_to_close(const client_conn_t *c) {
     return c && c->client_dead && !c->hup_pending;
 }
