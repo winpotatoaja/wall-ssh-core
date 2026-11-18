@@ -1029,7 +1029,9 @@ static int run_tls_message_callback_errno_regression(void) {
     int saved_errno = errno;
 
     g_tls_diag_message_count = 0;
-    g_log_path = "-";
+    /* /dev/null is a file, not a directory: fopen() must fail with ENOTDIR.
+     * This guarantees the logger clobbers errno unless the callback restores it. */
+    g_log_path = "/dev/null/passwall-core-errno-test.log";
     errno = EAGAIN;
     tls_message_callback(1, TLS1_2_VERSION, SSL3_RT_HANDSHAKE,
                          message, sizeof(message), NULL, NULL);
