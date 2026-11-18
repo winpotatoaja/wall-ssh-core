@@ -7,18 +7,22 @@
 - Close reset-client channels immediately, discarding queued C2S data that
   no live local peer can consume; do not wait for inbound-only EAGAIN or remote
   EOF that may never arrive.
-- Keep aborted channel-open attempts under the existing 30-second hard-open
-  timeout instead of the shorter 10-second cleanup deadline; clear any stale
-  OPEN-pending deadline when the open resolves and begin a fresh close budget.
-- Separate passive TLS EOF-peek readiness from TLS callback retry state.
-  A passive WANT_READ no longer blocks SSH channel pumping; WANT_WRITE remains
-  serialized, and actual upstream receive progress invalidates the old probe.
+- Keep aborted channel-open attempts, including globally pending OPEN
+  retries, under the existing 30-second hard-open timeout instead of the
+  shorter 10-second cleanup deadline. Clear any stale OPEN deadline when the
+  open resolves and begin a fresh close budget.
+- Remove the passive SSL_peek EOF probe from the shared TLS transport.
+  Nonblocking WANT_READ/WANT_WRITE belongs to the active TLS read operation;
+  SSH channel callbacks now own upstream consumption, while epoll HUP/RDHUP
+  drives transport-loss handling after buffered receive progress is drained.
+- Track upstream receive-sequence changes across every relay-pump return path
+  so reads performed inside channel writes are visible to EOF/idle handling.
 - Classify rejected non-tunnel HTTP 200 and invalid 101 responses as proxy
   failures rather than SSH KEX failures.
 - Add regressions for inbound-only read/write EAGAIN cleanup, globally pending
-  write buffer retention, dead-client cleanup readiness, TLS EOF-peek state,
-  receive-sequence tracking, HTTP rejection classification, and aborted-open
-  deadline behavior.
+  write buffer retention, reset-client disposal, pending-OPEN and channel-close
+  deadlines, upstream receive-sequence tracking, upstream HUP drain handling,
+  and HTTP rejection classification.
 - Bump the OpenWrt package release to r10.
 
 - Treat HUP/RDHUP as drain hints rather than EOF: EAGAIN keeps the drain
