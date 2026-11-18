@@ -244,6 +244,63 @@ static int send_file_all(int fd, const char *path, size_t *total_out)
     return 0;
 }
 
+static int test_idle_client_rst(void)
+{
+    static const char request[] =
+        "GET /idle HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Connection: close\r\n\r\n";
+    char headers[4096];
+    size_t used = 0;
+    int fd = open_socks_tunnel();
+    if (fd < 0) return -1;
+
+    if (send_all(fd, request, sizeof(request) - 1) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    /* Read only the HTTP headers. The fixture holds its 64-byte response body
+     * for 40 seconds, so the SSH channel reaches a read-EAGAIN idle state. */
+    while (used + 1 < sizeof(headers)) {
+        ssize_t n = recv(fd, headers + used, sizeof(headers) - used - 1, 0);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) {
+            close(fd);
+            return -1;
+        }
+        used += (size_t)n;
+        headers[used] = '\0';
+        if (strstr(headers, "\r\n\r\n")) break;
+    }
+    if (!strstr(headers, "\r\n\r\n")) {
+        close(fd);
+        return -1;
+    }
+
+    /* Give the core time to drain the response headers and enter channel
+     * read-pending state before resetting the local SOCKS socket. */
+    sleep(2);
+    struct linger rst = { .l_onoff = 1, .l_linger = 0 };
+    if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &rst, sizeof(rst)) < 0) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    return 0;
+}
+
+static int parse_socks_port_arg(const char *arg)
+{
+    char *end = NULL;
+    errno = 0;
+    long parsed = strtol(arg, &end, 10);
+    if (errno != 0 || end == arg || *end != '\0' ||
+        parsed < 1 || parsed > 65535) return -1;
+    socks_port = (uint16_t)parsed;
+    return 0;
+}
+
 static int test_server_fin_first_large(const char *upload_path)
 {
     static const char expected[] = "server-half-close-large-ok\n";
@@ -282,16 +339,22 @@ static int test_server_fin_first_large(const char *upload_path)
 
 int main(int argc, char **argv)
 {
-    if (argc > 2) {
-        char *end = NULL;
-        errno = 0;
-        long parsed = strtol(argv[2], &end, 10);
-        if (errno != 0 || end == argv[2] || *end != '\0' ||
-            parsed < 1 || parsed > 65535) {
+    if (argc > 1 && strcmp(argv[1], "--rst-idle") == 0) {
+        if (argc > 2 && parse_socks_port_arg(argv[2]) < 0) {
             fprintf(stderr, "[FAIL] invalid SOCKS port: %s\n", argv[2]);
             return 1;
         }
-        socks_port = (uint16_t)parsed;
+        if (test_idle_client_rst() < 0) {
+            fprintf(stderr, "[FAIL] idle SOCKS client RST\n");
+            return 1;
+        }
+        puts("[PASS] idle SOCKS channel reset with TCP RST");
+        return 0;
+    }
+
+    if (argc > 2 && parse_socks_port_arg(argv[2]) < 0) {
+        fprintf(stderr, "[FAIL] invalid SOCKS port: %s\n", argv[2]);
+        return 1;
     }
 
     if (test_client_fin_first() < 0) {
