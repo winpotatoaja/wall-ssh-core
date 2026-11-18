@@ -538,10 +538,11 @@ jobs:
                       destination.sendall(block)
               except (BrokenPipeError, ConnectionResetError, OSError, ssl.SSLError):
                   pass
-              try:
-                  destination.shutdown(socket.SHUT_WR)
-              except OSError:
-                  pass
+              if not isinstance(destination, ssl.SSLSocket):
+                  try:
+                      destination.shutdown(socket.SHUT_WR)
+                  except OSError:
+                      pass
 
           def handle(raw, address):
               tls = None
@@ -558,6 +559,12 @@ jobs:
                   ssh_to_client.start()
                   client_to_ssh.join()
                   ssh_to_client.join()
+                  try:
+                      raw = tls.unwrap()
+                      tls = None
+                      print('[TLS-RELAY] close_notify exchange completed', flush=True)
+                  except (OSError, ssl.SSLError) as exc:
+                      print('[TLS-RELAY] close_notify exchange failed: %r' % (exc,), flush=True)
               except Exception as exc:
                   print('[TLS-RELAY] connection error: %r' % (exc,), flush=True)
               finally:
@@ -1328,7 +1335,10 @@ jobs:
               TLS_APP_PID=
               if [ "$TLS_EXIT_RC" -eq 0 ] && \
                 ! grep -q "A libssh2/OpenSSL operation is still pending at process shutdown" "$LOGDIR/ssh-core-tls.log" 2>/dev/null && \
-                ! grep -q "Skipping libssh2 disconnect/free" "$LOGDIR/ssh-core-tls.log" 2>/dev/null; then
+                ! grep -q "Skipping libssh2 disconnect/free" "$LOGDIR/ssh-core-tls.log" 2>/dev/null && \
+                ! grep -q "TLS close_notify did not complete before shutdown deadline" "$LOGDIR/ssh-core-tls.log" 2>/dev/null && \
+                ! grep -q "libssh2_session_disconnect returned" "$LOGDIR/ssh-core-tls.log" 2>/dev/null && \
+                grep -q "close_notify exchange completed" /tmp/ssh-core-tls-relay.log 2>/dev/null; then
                 pass "SIGTERM completed graceful SSH disconnect and TLS shutdown without pending-operation skip"
               else
                 fail "SIGTERM did not complete graceful TLS shutdown (exit=$TLS_EXIT_RC)"
