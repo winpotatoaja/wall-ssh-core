@@ -1130,8 +1130,11 @@ static int poll_fd_until_shutdown(int fd, short events, long long deadline_ms) {
             return -1;
         }
         if (rc == 0) continue;
-        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) return -1;
-        return 1;
+        if (pfd.revents & POLLNVAL) return -1;
+        if (pfd.revents & events) return 1;
+        if ((pfd.revents & POLLHUP) && (events & POLLIN)) return 1;
+        if (pfd.revents & (POLLERR | POLLHUP)) return -1;
+        return -1;
     }
 }
 
@@ -2984,17 +2987,44 @@ static int session_free_with_deadline(LIBSSH2_SESSION **session,
     return LIBSSH2_ERROR_EAGAIN;
 }
 
+static int ssl_wait_peer_close_notify(SSL *ssl, int fd, long long deadline_ms) {
+    uint8_t discard[4096];
+    while (now_ms() < deadline_ms) {
+        ERR_clear_error();
+        int n = SSL_read(ssl, discard, sizeof(discard));
+        if (n > 0) continue;
+
+        int err = SSL_get_error(ssl, n);
+        if (err == SSL_ERROR_ZERO_RETURN) return 1;
+
+        short events = 0;
+        if (err == SSL_ERROR_WANT_READ) events = POLLIN;
+        else if (err == SSL_ERROR_WANT_WRITE) events = POLLOUT;
+        else return -1;
+
+        if (poll_fd_until_shutdown(fd, events, deadline_ms) <= 0) break;
+    }
+    return 0;
+}
+
 static int ssl_shutdown_with_deadline(SSL *ssl, int fd, long long deadline_ms) {
     if (!ssl) return 1;
     while (now_ms() < deadline_ms) {
+        ERR_clear_error();
         int rc = SSL_shutdown(ssl);
         if (rc == 1) return 1;
+
+        /* A zero return is not an error: our close_notify was sent.
+         * SSL_get_error() must not be called with rc == 0. */
+        if (rc == 0)
+            return ssl_wait_peer_close_notify(ssl, fd, deadline_ms);
+
         int err = SSL_get_error(ssl, rc);
         short events = 0;
         if (err == SSL_ERROR_WANT_READ) events = POLLIN;
         else if (err == SSL_ERROR_WANT_WRITE) events = POLLOUT;
-        else if (rc == 0 && err == SSL_ERROR_NONE) events = POLLIN;
         else return -1;
+
         if (poll_fd_until_shutdown(fd, events, deadline_ms) <= 0) break;
     }
     return 0;
@@ -3698,11 +3728,12 @@ int main(int argc, char **argv) {
     g_opening_client = NULL;
     if (epfd >= 0) close(epfd);
     if (listen_fd >= 0) close(listen_fd);
+    long long shutdown_deadline_ms = now_ms() + SHUTDOWN_IO_TIMEOUT_MS;
     if (session && !g_skip_libssh2_cleanup) {
         int disconnect_rc = 0;
         if (exit_code == 0) {
             disconnect_rc = session_disconnect_with_deadline(
-                session, upstream_fd, now_ms() + SHUTDOWN_IO_TIMEOUT_MS);
+                session, upstream_fd, shutdown_deadline_ms);
             if (disconnect_rc == LIBSSH2_ERROR_EAGAIN) {
                 log_yellow("SSH disconnect remained pending after deadline; skipping session_free and TLS shutdown");
                 g_skip_libssh2_cleanup = 1;
@@ -3712,7 +3743,7 @@ int main(int argc, char **argv) {
         }
         if (!g_skip_libssh2_cleanup) {
             int free_rc = session_free_with_deadline(
-                &session, upstream_fd, now_ms() + SHUTDOWN_IO_TIMEOUT_MS);
+                &session, upstream_fd, shutdown_deadline_ms);
             if (free_rc == LIBSSH2_ERROR_EAGAIN) {
                 log_yellow("Session cleanup remained pending after deadline; skipping TLS shutdown");
                 g_skip_libssh2_cleanup = 1;
@@ -3729,7 +3760,7 @@ int main(int argc, char **argv) {
     if (uctx.ssl) {
         if (exit_code == 0 && !g_skip_libssh2_cleanup && session == NULL) {
             int tls_rc = ssl_shutdown_with_deadline(
-                uctx.ssl, upstream_fd, now_ms() + SHUTDOWN_IO_TIMEOUT_MS);
+                uctx.ssl, upstream_fd, shutdown_deadline_ms);
             if (tls_rc <= 0)
                 log_yellow("TLS close_notify did not complete before shutdown deadline");
         } else if (g_skip_libssh2_cleanup) {
