@@ -1225,9 +1225,22 @@ static int run_tcp_dial_success_clears_errno_regression(void) {
     listener = socket(AF_INET, SOCK_STREAM, 0);
     if (refused_fd < 0 || listener < 0) { failed = 1; goto done; }
 
+    /* Reserve the live endpoint first so the refused port cannot be reused. */
+    live_addr.sin_family = AF_INET;
+    live_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    live_addr.sin_port = 0;
+    addr_len = sizeof(live_addr);
+    if (bind(listener, (struct sockaddr *)&live_addr, sizeof(live_addr)) < 0 ||
+        listen(listener, 1) < 0 ||
+        getsockname(listener, (struct sockaddr *)&live_addr, &addr_len) < 0) {
+        failed = 1;
+        goto done;
+    }
+
     refused_addr.sin_family = AF_INET;
     refused_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     refused_addr.sin_port = 0;
+    addr_len = sizeof(refused_addr);
     if (bind(refused_fd, (struct sockaddr *)&refused_addr, sizeof(refused_addr)) < 0 ||
         getsockname(refused_fd, (struct sockaddr *)&refused_addr, &addr_len) < 0) {
         failed = 1;
@@ -1235,16 +1248,6 @@ static int run_tcp_dial_success_clears_errno_regression(void) {
     }
     close(refused_fd);
     refused_fd = -1;
-
-    live_addr.sin_family = AF_INET;
-    live_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    live_addr.sin_port = 0;
-    if (bind(listener, (struct sockaddr *)&live_addr, sizeof(live_addr)) < 0 ||
-        listen(listener, 1) < 0 ||
-        getsockname(listener, (struct sockaddr *)&live_addr, &addr_len) < 0) {
-        failed = 1;
-        goto done;
-    }
 
     entries[0].ai_family = AF_INET;
     entries[0].ai_socktype = SOCK_STREAM;
