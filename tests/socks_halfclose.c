@@ -244,6 +244,117 @@ static int send_file_all(int fd, const char *path, size_t *total_out)
     return 0;
 }
 
+static int recv_http_body_to_file(int fd, const char *path,
+                                  size_t expected_len)
+{
+    char headers[4096];
+    size_t header_used = 0;
+    size_t header_end = 0;
+    FILE *out = NULL;
+    unsigned char body_buf[16384];
+    size_t body_received = 0;
+
+    while (header_used + 1 < sizeof(headers)) {
+        ssize_t n = recv(fd, headers + header_used,
+                         sizeof(headers) - header_used - 1, 0);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        header_used += (size_t)n;
+        headers[header_used] = '\0';
+        char *end = strstr(headers, "\r\n\r\n");
+        if (end) {
+            header_end = (size_t)(end - headers) + 4;
+            break;
+        }
+    }
+    if (header_end == 0 ||
+        strncmp(headers, "HTTP/1.1 200 ", 13) != 0) return -1;
+
+    char *content_length = strstr(headers, "Content-Length:");
+    if (!content_length) return -1;
+    char *number = content_length + strlen("Content-Length:");
+    while (*number == ' ' || *number == '\t') number++;
+    char *endptr = NULL;
+    errno = 0;
+    unsigned long parsed = strtoul(number, &endptr, 10);
+    if (errno != 0 || endptr == number ||
+        parsed != (unsigned long)expected_len) return -1;
+
+    out = fopen(path, "wb");
+    if (!out) return -1;
+    if (header_used > header_end) {
+        body_received = header_used - header_end;
+        if (body_received > expected_len ||
+            fwrite(headers + header_end, 1, body_received, out) != body_received) {
+            fclose(out);
+            return -1;
+        }
+    }
+
+    while (body_received < expected_len) {
+        size_t want = expected_len - body_received;
+        if (want > sizeof(body_buf)) want = sizeof(body_buf);
+        ssize_t n = recv(fd, body_buf, want, 0);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) {
+            fclose(out);
+            return -1;
+        }
+        if (fwrite(body_buf, 1, (size_t)n, out) != (size_t)n) {
+            fclose(out);
+            return -1;
+        }
+        body_received += (size_t)n;
+    }
+    return fclose(out) == 0 ? 0 : -1;
+}
+
+static int test_duplex_upload_s2c_full(const char *upload_path,
+                                       const char *download_path)
+{
+    static const char request_fmt[] =
+        "POST /duplex-backpressure HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Content-Length: %u\r\n"
+        "Connection: close\r\n\r\n";
+    int fd = open_socks_tunnel();
+    if (fd < 0) return -1;
+
+    int rcvbuf = 32768;
+    struct timeval tv = { .tv_sec = 120, .tv_usec = 0 };
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) < 0 ||
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0 ||
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    char request[512];
+    int request_len = snprintf(request, sizeof(request), request_fmt,
+                               8U * 1024U * 1024U);
+    if (request_len <= 0 || (size_t)request_len >= sizeof(request) ||
+        send_all(fd, request, (size_t)request_len) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    size_t uploaded = 0;
+    if (send_file_all(fd, upload_path, &uploaded) < 0 ||
+        uploaded != (8U * 1024U * 1024U) ||
+        shutdown(fd, SHUT_WR) < 0) {
+        close(fd);
+        return -1;
+    }
+
+    /* Do not consume the concurrently generated S2C stream yet. The small
+     * local receive window plus this pause forces the core's 32 KiB S2C ring
+     * to saturate while C2S upload traffic is being processed. */
+    sleep(2);
+    int rc = recv_http_body_to_file(fd, download_path, 32U * 1024U * 1024U);
+    close(fd);
+    return rc;
+}
+
 static int test_idle_client_rst(void)
 {
     static const char request[] =
@@ -339,6 +450,20 @@ static int test_server_fin_first_large(const char *upload_path)
 
 int main(int argc, char **argv)
 {
+    if (argc > 1 && strcmp(argv[1], "--duplex") == 0) {
+        if (argc < 4 ||
+            (argc > 4 && parse_socks_port_arg(argv[4]) < 0)) {
+            fprintf(stderr, "[FAIL] usage: %s --duplex upload.bin download.bin [socks-port]\n", argv[0]);
+            return 1;
+        }
+        if (test_duplex_upload_s2c_full(argv[2], argv[3]) < 0) {
+            fprintf(stderr, "[FAIL] 8 MiB upload while the 32 MiB S2C response is backpressured\n");
+            return 1;
+        }
+        puts("[PASS] 8 MiB C2S upload completed while the 32 MiB S2C ring saturated and drained");
+        return 0;
+    }
+
     if (argc > 1 && strcmp(argv[1], "--rst-idle") == 0) {
         if (argc > 2 && parse_socks_port_arg(argv[2]) < 0) {
             fprintf(stderr, "[FAIL] invalid SOCKS port: %s\n", argv[2]);
