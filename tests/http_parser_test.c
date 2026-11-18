@@ -151,6 +151,75 @@ static int run_fragmented_followup_case(const char *name,
     return failed;
 }
 
+static int g_test_dns_v4_lookups = 0;
+static int g_test_dns_v6_lookups = 0;
+static int g_test_dns_force_v4_noname = 0;
+static int g_test_dns_force_v6_again = 0;
+
+static int test_tcp_getaddrinfo(const char *host, const char *service,
+                                const struct addrinfo *hints,
+                                struct addrinfo **res) {
+    if (hints && hints->ai_family == AF_INET) {
+        g_test_dns_v4_lookups++;
+        if (g_test_dns_force_v4_noname) {
+            *res = NULL;
+            return EAI_NONAME;
+        }
+    } else if (hints && hints->ai_family == AF_INET6) {
+        g_test_dns_v6_lookups++;
+        if (g_test_dns_force_v6_again) {
+            *res = NULL;
+            return EAI_AGAIN;
+        }
+    }
+    return getaddrinfo(host, service, hints, res);
+}
+
+static int run_ipv4_dial_regression(void) {
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener < 0) return 1;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) < 0 ||
+        listen(listener, 1) < 0) {
+        close(listener);
+        fprintf(stderr, "[FAIL] IPv4 dial test listener setup: %s\n", strerror(errno));
+        return 1;
+    }
+    socklen_t addr_len = sizeof(addr);
+    if (getsockname(listener, (struct sockaddr *)&addr, &addr_len) < 0) {
+        close(listener);
+        return 1;
+    }
+    char port[16];
+    snprintf(port, sizeof(port), "%u", (unsigned)ntohs(addr.sin_port));
+
+    g_test_dns_v4_lookups = 0;
+    g_test_dns_v6_lookups = 0;
+    g_test_dns_force_v4_noname = 0;
+    g_test_dns_force_v6_again = 1;
+    g_tcp_getaddrinfo = test_tcp_getaddrinfo;
+    int client = tcp_connect_host("127.0.0.1", port);
+    g_tcp_getaddrinfo = getaddrinfo;
+    g_test_dns_force_v6_again = 0;
+
+    int accepted = client >= 0 ? accept(listener, NULL, NULL) : -1;
+    int failed = client < 0 || accepted < 0 ||
+                 g_test_dns_v4_lookups != 1 || g_test_dns_v6_lookups != 0;
+    if (failed) {
+        fprintf(stderr, "[FAIL] IPv4 dial must succeed without querying a failing AAAA resolver (v4=%d v6=%d)\n",
+                g_test_dns_v4_lookups, g_test_dns_v6_lookups);
+    } else {
+        puts("[PASS] IPv4 dial is independent of an unavailable AAAA resolver");
+    }
+    if (accepted >= 0) close(accepted);
+    if (client >= 0) close(client);
+    close(listener);
+    return failed;
+}
+
 static int run_ipv6_dial_regression(void) {
     int listener = socket(AF_INET6, SOCK_STREAM, 0);
     if (listener < 0) {
@@ -177,7 +246,21 @@ static int run_ipv6_dial_regression(void) {
     }
     char port[16];
     snprintf(port, sizeof(port), "%u", (unsigned)ntohs(addr.sin6_port));
+    g_test_dns_v4_lookups = 0;
+    g_test_dns_v6_lookups = 0;
+    g_test_dns_force_v4_noname = 1;
+    g_test_dns_force_v6_again = 0;
+    g_tcp_getaddrinfo = test_tcp_getaddrinfo;
     int client = tcp_connect_host("::1", port);
+    g_tcp_getaddrinfo = getaddrinfo;
+    g_test_dns_force_v4_noname = 0;
+    if (client < 0 || g_test_dns_v4_lookups != 1 || g_test_dns_v6_lookups != 1) {
+        if (client >= 0) close(client);
+        close(listener);
+        fprintf(stderr, "[FAIL] IPv6 fallback after IPv4 lookup miss (v4=%d v6=%d)\\n",
+                g_test_dns_v4_lookups, g_test_dns_v6_lookups);
+        return 1;
+    }
     if (client < 0) {
         close(listener);
         fprintf(stderr, "[FAIL] IPv6 SOCKS destination dialing failed\n");
@@ -833,6 +916,8 @@ static int run_socks_listener_address_regression(void) {
 
 static int run_core_state_regressions(void) {
     int failures = 0;
+    failures += run_ipv4_dial_regression();
+    failures += run_ipv6_dial_regression();
     failures += run_ring_buffer_regressions();
     failures += run_eof_drain_regression();
     failures += run_graceful_hup_preserves_c2s_regression();

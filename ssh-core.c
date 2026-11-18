@@ -43,8 +43,11 @@
 #define MAX_CLIENTS_LIMIT      256
 #define DEFAULT_IDLE_TIMEOUT   600
 #define HANDSHAKE_TIMEOUT_MS   15000
-#define TCP_CONNECT_TIMEOUT_MS 10000
-#define TCP_CONNECT_ADDRESS_TIMEOUT_MS 1200
+#define TCP_CONNECT_FAMILY_TIMEOUT_MS 4000
+#define TCP_CONNECT_MAX_ADDRS 32
+
+static int (*g_tcp_getaddrinfo)(const char *, const char *, const struct addrinfo *, struct addrinfo **) = getaddrinfo;
+static int g_tcp_dial_debug = 1;
 #define SOCKS_HS_TIMEOUT_SEC   15
 #define SSH_OPEN_SOFT_TO_MS    15000
 #define SSH_OPEN_HARD_TO_MS    30000
@@ -1556,114 +1559,269 @@ static int wait_ssh_nb(LIBSSH2_SESSION *session, upstream_ctx_t *u, long long de
 }
 
 /* ============================================================
- * DIAL UPSTREAM (NON-BLOCKING CONNECT DENGAN TIMEOUT 10 DETIK)
+ * DIAL UPSTREAM
+ *
+ * Resolve IPv4 and IPv6 separately. On musl, an AF_UNSPEC lookup can
+ * combine A/AAAA resolver failures; a broken AAAA response must not
+ * suppress a usable A record. Addresses within one family are raced
+ * concurrently, bounded by a four-second family deadline.
  * ============================================================ */
-static int poll_tcp_connect_until(int fd, long long deadline_ms) {
-    while (!g_stop) {
-        long long remaining = deadline_ms - now_ms();
-        if (remaining <= 0) return 0;
-        int timeout_ms = remaining > 60000 ? 60000 : (int)remaining;
-        struct pollfd pfd = {.fd = fd, .events = POLLOUT};
-        int rc = poll(&pfd, 1, timeout_ms);
-        if (rc < 0) {
-            if (errno == EINTR) continue;
-            return -1;
+typedef struct {
+    int fd;
+    char address[INET6_ADDRSTRLEN + 24];
+} tcp_connect_candidate_t;
+
+static void tcp_format_address(const struct sockaddr *sa,
+                               char *out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    out[0] = '\0';
+    if (!sa) return;
+
+    char ip[INET6_ADDRSTRLEN] = {0};
+    if (sa->sa_family == AF_INET) {
+        const struct sockaddr_in *a4 = (const struct sockaddr_in *)sa;
+        if (!inet_ntop(AF_INET, &a4->sin_addr, ip, sizeof(ip))) return;
+        snprintf(out, out_size, "%s:%u", ip, (unsigned)ntohs(a4->sin_port));
+    } else if (sa->sa_family == AF_INET6) {
+        const struct sockaddr_in6 *a6 = (const struct sockaddr_in6 *)sa;
+        if (!inet_ntop(AF_INET6, &a6->sin6_addr, ip, sizeof(ip))) return;
+        snprintf(out, out_size, "[%s]:%u", ip, (unsigned)ntohs(a6->sin6_port));
+    }
+}
+
+static const char *tcp_family_name(int family) {
+    return family == AF_INET ? "IPv4/A" : "IPv6/AAAA";
+}
+
+static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
+                                     long long deadline_ms,
+                                     char *connected_address,
+                                     size_t connected_address_size,
+                                     int *last_errno_out) {
+    tcp_connect_candidate_t candidates[TCP_CONNECT_MAX_ADDRS];
+    struct pollfd pfds[TCP_CONNECT_MAX_ADDRS];
+    size_t count = 0;
+    size_t active = 0;
+    int last_error = EHOSTUNREACH;
+
+    for (size_t i = 0; i < TCP_CONNECT_MAX_ADDRS; i++) {
+        candidates[i].fd = -1;
+        candidates[i].address[0] = '\0';
+        pfds[i].fd = -1;
+        pfds[i].events = POLLOUT;
+        pfds[i].revents = 0;
+    }
+
+    for (const struct addrinfo *rp = res; rp; rp = rp->ai_next) {
+        if (rp->ai_family != family) continue;
+        if (count >= TCP_CONNECT_MAX_ADDRS) {
+            if (g_tcp_dial_debug)
+                log_yellow("[TCP-DIAL] %s candidate list truncated at %d addresses",
+                           tcp_family_name(family), TCP_CONNECT_MAX_ADDRS);
+            break;
         }
-        if (rc == 0) continue;
-        if (pfd.revents & POLLNVAL) {
-            errno = EBADF;
-            return -1;
+        tcp_format_address(rp->ai_addr, candidates[count].address,
+                           sizeof(candidates[count].address));
+        count++;
+    }
+
+    if (count == 0) {
+        last_error = EADDRNOTAVAIL;
+        if (last_errno_out) *last_errno_out = last_error;
+        errno = last_error;
+        return -1;
+    }
+
+    if (g_tcp_dial_debug)
+        log_blue("[TCP-DIAL] racing %zu %s address(es), timeout=%d ms",
+                 count, tcp_family_name(family), TCP_CONNECT_FAMILY_TIMEOUT_MS);
+
+    size_t index = 0;
+    for (const struct addrinfo *rp = res; rp && index < count; rp = rp->ai_next) {
+        if (rp->ai_family != family) continue;
+
+        const char *target = candidates[index].address;
+        int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (fd < 0) {
+            last_error = errno;
+            log_yellow("[TCP-DIAL] socket %s failed: %s (%d)",
+                       target, strerror(last_error), last_error);
+            index++;
+            continue;
         }
-        if (pfd.revents & (POLLERR | POLLHUP)) {
-            int so_error = 0;
-            socklen_t so_len = sizeof(so_error);
-            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) == 0 &&
-                so_error != 0) errno = so_error;
-            else errno = ECONNRESET;
-            return -1;
+
+        tune_tcp_socket(fd);
+        if (set_nonblock(fd, 1) < 0) {
+            last_error = errno;
+            log_yellow("[TCP-DIAL] nonblock %s failed: %s (%d)",
+                       target, strerror(last_error), last_error);
+            close(fd);
+            index++;
+            continue;
         }
-        if (pfd.revents & POLLOUT) {
-            int so_error = 0;
-            socklen_t so_len = sizeof(so_error);
-            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_len) < 0) return -1;
-            if (so_error != 0) {
-                errno = so_error;
-                return -1;
+
+        int cr = connect(fd, rp->ai_addr, rp->ai_addrlen);
+        if (cr == 0) {
+            for (size_t j = 0; j < count; j++) {
+                if (j != index) close_connect_fd(&candidates[j].fd);
             }
-            return 1;
+            if (connected_address && connected_address_size)
+                snprintf(connected_address, connected_address_size, "%s", target);
+            if (last_errno_out) *last_errno_out = 0;
+            return fd;
+        }
+
+        int connect_error = errno;
+        if (connect_error == EINPROGRESS || connect_error == EALREADY ||
+            connect_error == EINTR || connect_error == EWOULDBLOCK) {
+            candidates[index].fd = fd;
+            pfds[index].fd = fd;
+            active++;
+        } else {
+            last_error = connect_error;
+            log_yellow("[TCP-DIAL] connect %s failed: %s (%d)",
+                       target, strerror(last_error), last_error);
+            close(fd);
+        }
+        index++;
+    }
+
+    if (active > 0) {
+        for (;;) {
+            long long remaining = deadline_ms - now_ms();
+            if (remaining <= 0) {
+                last_error = ETIMEDOUT;
+                break;
+            }
+            int timeout_ms = remaining > INT_MAX ? INT_MAX : (int)remaining;
+            int rc = poll(pfds, (nfds_t)count, timeout_ms);
+            if (rc < 0) {
+                if (errno == EINTR) continue;
+                last_error = errno;
+                break;
+            }
+            if (rc == 0) {
+                last_error = ETIMEDOUT;
+                break;
+            }
+
+            for (size_t i = 0; i < count; i++) {
+                if (candidates[i].fd < 0 || pfds[i].revents == 0) continue;
+
+                int candidate_error = 0;
+                socklen_t error_size = sizeof(candidate_error);
+                if (pfds[i].revents & POLLNVAL) {
+                    candidate_error = EBADF;
+                } else if (getsockopt(candidates[i].fd, SOL_SOCKET, SO_ERROR,
+                                      &candidate_error, &error_size) < 0) {
+                    candidate_error = errno;
+                } else if (candidate_error == 0 &&
+                           (pfds[i].revents & POLLOUT)) {
+                    int winner = candidates[i].fd;
+                    candidates[i].fd = -1;
+                    for (size_t j = 0; j < count; j++)
+                        close_connect_fd(&candidates[j].fd);
+                    if (connected_address && connected_address_size)
+                        snprintf(connected_address, connected_address_size, "%s",
+                                 candidates[i].address);
+                    if (last_errno_out) *last_errno_out = 0;
+                    return winner;
+                } else if (candidate_error == 0) {
+                    candidate_error = ECONNRESET;
+                }
+
+                last_error = candidate_error;
+                log_yellow("[TCP-DIAL] connect %s failed: %s (%d)",
+                           candidates[i].address, strerror(last_error), last_error);
+                close_connect_fd(&candidates[i].fd);
+                pfds[i].fd = -1;
+                pfds[i].revents = 0;
+                active--;
+            }
+            if (active == 0) break;
         }
     }
+
+    for (size_t i = 0; i < count; i++)
+        close_connect_fd(&candidates[i].fd);
+
+    if (last_errno_out) *last_errno_out = last_error;
+    errno = last_error;
     return -1;
 }
 
-static void close_connect_fd(int *fd) {
-    if (!fd || *fd < 0) return;
-    int old_fd = *fd;
-    *fd = -1;
-    (void)close(old_fd);
-}
-
-/*
- * The single 10-second deadline covers all address connect attempts.
- * getaddrinfo() is synchronous and completes before this deadline starts.
- */
-static int tcp_connect_one_address(const struct addrinfo *rp,
-                                    long long total_deadline_ms) {
-    int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-    if (fd < 0) return -1;
-    tune_tcp_socket(fd);
-    if (set_nonblock(fd, 1) < 0) {
-        close_connect_fd(&fd);
-        return -1;
-    }
-    int cr = connect(fd, rp->ai_addr, rp->ai_addrlen);
-    if (cr == 0) return fd;
-    int connect_errno = errno;
-    if (connect_errno != EINPROGRESS && connect_errno != EALREADY &&
-        connect_errno != EINTR && connect_errno != EWOULDBLOCK) {
-        close_connect_fd(&fd);
-        return -1;
-    }
-    long long deadline = now_ms() + TCP_CONNECT_ADDRESS_TIMEOUT_MS;
-    if (deadline > total_deadline_ms) deadline = total_deadline_ms;
-    int wait_rc = poll_tcp_connect_until(fd, deadline);
-    if (wait_rc > 0) return fd;
-    close_connect_fd(&fd);
-    return -1;
-}
 static int tcp_connect_host(const char *host, const char *port) {
-    struct addrinfo hints = {0}, *res = NULL;
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    int rc = getaddrinfo(host, port, &hints, &res);
-    if (rc != 0 || !res) return -1;
-    size_t n4 = 0, n6 = 0;
-    for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
-        if (rp->ai_family == AF_INET) n4++;
-        else if (rp->ai_family == AF_INET6) n6++;
+    const int families[] = {AF_INET, AF_INET6};
+    const char *family_names[] = {"A/IPv4", "AAAA/IPv6"};
+    int last_error = EHOSTUNREACH;
+    long long total_started = now_ms();
+
+    for (size_t family_index = 0; family_index < 2 && !g_stop; family_index++) {
+        int family = families[family_index];
+        struct addrinfo hints = {0}, *res = NULL;
+        hints.ai_family = family;
+        hints.ai_socktype = SOCK_STREAM;
+
+        long long dns_started = now_ms();
+        int rc = g_tcp_getaddrinfo(host, port, &hints, &res);
+        long long dns_elapsed = now_ms() - dns_started;
+        if (rc != 0 || !res) {
+            if (rc == EAI_SYSTEM && errno != 0) last_error = errno;
+            log_yellow("[TCP-DIAL] DNS %s lookup for %s:%s failed after %lld ms: %s (%d)",
+                       family_names[family_index], host, port, dns_elapsed,
+                       rc != 0 ? gai_strerror(rc) : "empty address list", rc);
+            if (res) freeaddrinfo(res);
+            continue;
+        }
+
+        size_t addresses = 0;
+        for (struct addrinfo *rp = res; rp; rp = rp->ai_next)
+            if (rp->ai_family == family) addresses++;
+
+        if (g_tcp_dial_debug)
+            log_blue("[TCP-DIAL] DNS %s returned %zu address(es) for %s:%s in %lld ms",
+                     family_names[family_index], addresses, host, port, dns_elapsed);
+
+        if (addresses == 0) {
+            last_error = EADDRNOTAVAIL;
+            freeaddrinfo(res);
+            continue;
+        }
+
+        char connected_address[INET6_ADDRSTRLEN + 24] = {0};
+        int family_error = 0;
+        long long connect_started = now_ms();
+        int fd = tcp_connect_addrinfo_list(
+            res, family, connect_started + TCP_CONNECT_FAMILY_TIMEOUT_MS,
+            connected_address, sizeof(connected_address), &family_error);
+        long long connect_elapsed = now_ms() - connect_started;
+        freeaddrinfo(res);
+
+        if (fd >= 0) {
+            char local_address[INET6_ADDRSTRLEN + 24] = "unknown";
+            struct sockaddr_storage local_sa;
+            socklen_t local_len = sizeof(local_sa);
+            if (getsockname(fd, (struct sockaddr *)&local_sa, &local_len) == 0)
+                tcp_format_address((struct sockaddr *)&local_sa,
+                                   local_address, sizeof(local_address));
+            if (g_tcp_dial_debug)
+                log_blue("[TCP-DIAL] connected family=%s remote=%s local=%s connect=%lld ms total=%lld ms",
+                         family_names[family_index],
+                         connected_address[0] ? connected_address : host,
+                         local_address, connect_elapsed, now_ms() - total_started);
+            return fd;
+        }
+
+        last_error = family_error ? family_error : (errno ? errno : EHOSTUNREACH);
+        log_red("[TCP-DIAL] %s candidates for %s:%s failed after %lld ms; last error: %s (%d)",
+                family_names[family_index], host, port, connect_elapsed,
+                strerror(last_error), last_error);
     }
-    struct addrinfo **v4 = n4 ? calloc(n4, sizeof(*v4)) : NULL;
-    struct addrinfo **v6 = n6 ? calloc(n6, sizeof(*v6)) : NULL;
-    if ((n4 && !v4) || (n6 && !v6)) {
-        free(v4); free(v6); freeaddrinfo(res);
-        return -1;
-    }
-    size_t i4 = 0, i6 = 0;
-    for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
-        if (rp->ai_family == AF_INET) v4[i4++] = rp;
-        else if (rp->ai_family == AF_INET6) v6[i6++] = rp;
-    }
-    long long total_deadline = now_ms() + TCP_CONNECT_TIMEOUT_MS;
-    size_t rounds = n4 > n6 ? n4 : n6;
-    int fd = -1;
-    for (size_t i = 0; i < rounds && fd < 0 && !g_stop; i++) {
-        if (i < n4 && now_ms() < total_deadline)
-            fd = tcp_connect_one_address(v4[i], total_deadline);
-        if (fd < 0 && i < n6 && now_ms() < total_deadline)
-            fd = tcp_connect_one_address(v6[i], total_deadline);
-    }
-    free(v4); free(v6); freeaddrinfo(res);
-    return fd;
+
+    errno = last_error;
+    log_red("[TCP-DIAL] failed to connect %s:%s after %lld ms; final error: %s (%d)",
+            host, port, now_ms() - total_started, strerror(last_error), last_error);
+    return -1;
 }
 
 /* ============================================================

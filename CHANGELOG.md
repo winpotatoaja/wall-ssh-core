@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Resolve upstream DNS by querying IPv4 (A) and IPv6 (AAAA) independently,
+  so a broken AAAA response on musl cannot discard a usable A result. Race
+  returned addresses within each family instead of serially aborting each
+  candidate after 1.2 seconds; allow a four-second family connect window and
+  fall back to IPv6 when IPv4 resolution or connection attempts fail.
+- Add temporary TCP dial diagnostics for resolver family, DNS latency,
+  candidate addresses, connect errno, selected remote endpoint, and local
+  socket address. Add regressions proving IPv4 succeeds without an AAAA lookup
+  and IPv6 fallback is attempted after an IPv4 lookup miss.
+- Bump the OpenWrt package release to r13 for the upstream DNS/connect fix.
+
+
 - Preserve compatibility with OpenWrt 24.10's libssh2 1.11.0 callback API while using the typed `libssh2_session_callback_set2()` API on libssh2 1.11.1 and newer. This keeps the custom SSH socket callbacks enabled across both supported SDK generations.
 
 - Add a full-duplex transport regression on both TCP and TLS: the SOCKS
