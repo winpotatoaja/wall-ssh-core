@@ -1593,6 +1593,13 @@ static const char *tcp_family_name(int family) {
     return family == AF_INET ? "IPv4/A" : "IPv6/AAAA";
 }
 
+static void close_connect_fd(int *fd) {
+    if (!fd || *fd < 0) return;
+    int old_fd = *fd;
+    *fd = -1;
+    (void)close(old_fd);
+}
+
 static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
                                      long long deadline_ms,
                                      char *connected_address,
@@ -1742,6 +1749,13 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
         }
     }
 
+    if (last_error == ETIMEDOUT) {
+        for (size_t i = 0; i < count; i++) {
+            if (candidates[i].fd >= 0)
+                log_yellow("[TCP-DIAL] connect %s timed out after %d ms",
+                           candidates[i].address, TCP_CONNECT_FAMILY_TIMEOUT_MS);
+        }
+    }
     for (size_t i = 0; i < count; i++)
         close_connect_fd(&candidates[i].fd);
 
