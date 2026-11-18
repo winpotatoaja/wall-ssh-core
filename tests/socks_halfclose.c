@@ -13,6 +13,8 @@
 #define SOCKS_PORT 1080
 #define RESPONSE_CAP 65536
 
+static uint16_t socks_port = SOCKS_PORT;
+
 static int send_all(int fd, const void *data, size_t len)
 {
     const unsigned char *p = (const unsigned char *)data;
@@ -70,7 +72,7 @@ static int open_socks_tunnel(void)
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(SOCKS_PORT);
+    addr.sin_port = htons(socks_port);
     if (inet_pton(AF_INET, SOCKS_HOST, &addr.sin_addr) != 1 ||
         connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         close(fd);
@@ -279,6 +281,18 @@ static int test_server_fin_first_large(const char *upload_path)
 
 int main(int argc, char **argv)
 {
+    if (argc > 2) {
+        char *end = NULL;
+        errno = 0;
+        long parsed = strtol(argv[2], &end, 10);
+        if (errno != 0 || end == argv[2] || *end != '\0' ||
+            parsed < 1 || parsed > 65535) {
+            fprintf(stderr, "[FAIL] invalid SOCKS port: %s\n", argv[2]);
+            return 1;
+        }
+        socks_port = (uint16_t)parsed;
+    }
+
     if (test_client_fin_first() < 0) {
         fprintf(stderr, "[FAIL] client-FIN-first half-close\n");
         return 1;
