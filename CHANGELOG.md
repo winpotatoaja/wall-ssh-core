@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Add a full-duplex transport regression on both TCP and TLS: the SOCKS
+  client sends an exact 8 MiB C2S upload and half-closes its write side while
+  the remote HTTP fixture concurrently streams a 32 MiB S2C response. The
+  client deliberately pauses response reads to fill the 32 KiB S2C ring,
+  then verifies the complete response length and SHA-256 after resuming.
+  The host fixture independently verifies the complete upload hash and FIN.
+- Add an explicit zero-linger RST test against an idle channel after it has
+  received response headers and reached the read-EAGAIN wait. Exercise it on
+  TCP and TLS, including while another TLS S2C slow-reader channel remains
+  active; verify daemon liveness and bounded RSS/file-descriptor growth.
+- Run TLS idle-channel cleanup with `IDLE_TIMEOUT=3` beside an active
+  32 MiB transfer, verify `KEEPALIVE=10` produces repeated idle TLS
+  keepalives, and require a clean SIGTERM exit without skipped SSH cleanup
+  or an incomplete TLS close_notify exchange.
+- Extend the four-worker VM stress period from 90 seconds to 30 minutes.
+  Update the QEMU expect and Actions job timeouts to accommodate the run.
+- Strengthen the HTTP 200 follow-up regression so trailing non-HTTP data
+  must leave the tunnel unestablished and classify as
+  `HTTP/Proxy Rejected (200)`, alongside malformed chunk-size and
+  over-limit chunked-body rejection tests.
+
+
 - Extend the SOCKS half-close helper with an explicit zero-linger client RST
   against an idle response channel after it has received headers and entered
   the read-EAGAIN wait. Exercise the reset on TCP and TLS, including while a
