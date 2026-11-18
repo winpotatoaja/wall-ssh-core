@@ -311,6 +311,35 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     return 0;
 }
 
+static int run_shutdown_poll_ignores_stop_regression(void) {
+    int sv[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        fprintf(stderr, "[FAIL] shutdown poll stop-state: socketpair: %s\\n", strerror(errno));
+        return 1;
+    }
+    if (send_test_bytes(sv[1], "x", 1) < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        fprintf(stderr, "[FAIL] shutdown poll stop-state: send\\n");
+        return 1;
+    }
+
+    sig_atomic_t old_stop = g_stop;
+    g_stop = 1;
+    int normal_rc = poll_fd_until(sv[0], POLLIN, now_ms() + 100);
+    int shutdown_rc = poll_fd_until_shutdown(sv[0], POLLIN, now_ms() + 100);
+    g_stop = old_stop;
+
+    close(sv[0]);
+    close(sv[1]);
+    if (normal_rc >= 0 || shutdown_rc <= 0) {
+        fprintf(stderr, "[FAIL] shutdown poll must ignore g_stop while honoring readiness\\n");
+        return 1;
+    }
+    puts("[PASS] shutdown poll remains usable after g_stop");
+    return 0;
+}
+
 static int run_pending_channel_close_buffer_regression(void) {
     client_conn_t *c = calloc(1, sizeof(*c));
     if (!c) return 1;
@@ -390,6 +419,7 @@ static int run_core_state_regressions(void) {
     failures += run_eof_drain_regression();
     failures += run_deferred_client_cleanup_regression();
     failures += run_cleanup_deadline_and_shutdown_pending_regression();
+    failures += run_shutdown_poll_ignores_stop_regression();
     failures += run_pending_channel_close_buffer_regression();
     failures += run_socks_listener_address_regression();
 
