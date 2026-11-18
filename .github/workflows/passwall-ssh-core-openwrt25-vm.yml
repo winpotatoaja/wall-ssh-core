@@ -953,8 +953,45 @@ jobs:
           fi
 
           if [ "$STATUS" -eq 0 ]; then
-            echo "========== CONTINUOUS FOUR-WORKER STRESS (90 SECONDS) =========="
-            STRESS_SECONDS=90
+            echo "========== ABRUPT TCP RST ON IDLE READ-PENDING CHANNEL =========="
+            RST_RSS_BEFORE="$(awk '/VmRSS:/ {print $2}' "/proc/$APP_PID/status" 2>/dev/null)"
+            RST_FD_BEFORE="$(ls "/proc/$APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
+            [ -n "$RST_RSS_BEFORE" ] || RST_RSS_BEFORE=0
+            [ -n "$RST_FD_BEFORE" ] || RST_FD_BEFORE=0
+            if /root/socks-halfclose --rst-idle 1080; then
+              pass "idle SOCKS channel received an explicit zero-linger TCP RST after read-EAGAIN"
+            else
+              fail "explicit RST helper failed to establish and reset an idle SOCKS channel"
+            fi
+            sleep 3
+            RST_RSS_AFTER="$(awk '/VmRSS:/ {print $2}' "/proc/$APP_PID/status" 2>/dev/null)"
+            RST_FD_AFTER="$(ls "/proc/$APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
+            [ -n "$RST_RSS_AFTER" ] || RST_RSS_AFTER=0
+            [ -n "$RST_FD_AFTER" ] || RST_FD_AFTER=0
+            if [ "$RST_RSS_AFTER" -le $((RST_RSS_BEFORE + 16384)) ] && \
+              [ "$RST_FD_AFTER" -le $((RST_FD_BEFORE + 4)) ] && kill -0 "$APP_PID" 2>/dev/null; then
+              pass "idle RST cleanup left no material RSS/FD growth and daemon remained alive (RSS $RST_RSS_BEFORE->$RST_RSS_AFTER KiB; FD $RST_FD_BEFORE->$RST_FD_AFTER)"
+            else
+              fail "idle RST may have leaked client/channel state (RSS $RST_RSS_BEFORE->$RST_RSS_AFTER KiB; FD $RST_FD_BEFORE->$RST_FD_AFTER)"
+            fi
+            if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
+              --connect-timeout 15 --max-time 30 \
+              http://127.0.0.1:18080/payload -o /tmp/post-rst.bin; then
+              POST_RST_SHA="$(sha256sum /tmp/post-rst.bin | awk '{print $1}')"
+              EXPECTED_SHA="$(cat /root/expected-payload.sha256)"
+              if [ "$POST_RST_SHA" = "$EXPECTED_SHA" ]; then
+                pass "new SOCKS channel worked with exact SHA-256 after idle RST"
+              else
+                fail "post-RST SOCKS channel returned corrupted data"
+              fi
+            else
+              fail "daemon did not accept a new SOCKS channel after idle RST"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== CONTINUOUS FOUR-WORKER STRESS (30 MINUTES) =========="
+            STRESS_SECONDS=1800
             STRESS_END=$(( $(date +%s) + STRESS_SECONDS ))
             STRESS_EXPECTED_SHA="$(cat /root/expected-payload.sha256)"
             STRESS_PIDS=""
@@ -1140,6 +1177,7 @@ jobs:
                 -e 's|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:1082|' \
                 -e 's|^VERIFY_TLS=.*$|VERIFY_TLS=0|' \
                 -e 's|^KEEPALIVE=.*$|KEEPALIVE=2|' \
+                -e 's|^IDLE_TIMEOUT=.*$|IDLE_TIMEOUT=3|' \
                 /root/ssh-core-test.env > /root/ssh-core-tls-test.env
             printf '%s\n' 'SNI=localhost' >> /root/ssh-core-tls-test.env
             "$BIN" -env /root/ssh-core-tls-test.env -log "$LOGDIR/ssh-core-tls.log" \
@@ -1197,13 +1235,13 @@ jobs:
 
                 TLS_IDLE_RC=0
                 curl -4 -sS --socks5-hostname 127.0.0.1:1082 \
-                  --connect-timeout 10 --max-time 3 \
+                  --connect-timeout 10 --max-time 12 \
                   http://127.0.0.1:18080/idle -o /dev/null \
                   >"$LOGDIR/tls-second-idle-channel.log" 2>&1 || TLS_IDLE_RC=$?
-                if [ "$TLS_IDLE_RC" -eq 28 ]; then
-                  pass "second TLS SOCKS channel was closed by its local idle reader"
+                if [ "$TLS_IDLE_RC" -ne 0 ] && [ "$TLS_IDLE_RC" -ne 28 ]; then
+                  pass "second TLS SOCKS channel expired by IDLE_TIMEOUT=3 before the curl deadline"
                 else
-                  fail "second TLS channel returned unexpected curl status $TLS_IDLE_RC"
+                  fail "TLS idle-timeout channel was not closed independently (curl rc=$TLS_IDLE_RC)"
                   cat "$LOGDIR/tls-second-idle-channel.log" 2>/dev/null || true
                 fi
 
@@ -1266,8 +1304,18 @@ jobs:
               cat "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true
             fi
             if [ -n "$TLS_APP_PID" ]; then
-              kill "$TLS_APP_PID" 2>/dev/null || true
-              wait "$TLS_APP_PID" 2>/dev/null || true
+              echo "========== TLS SIGTERM / GRACEFUL SSH AND TLS SHUTDOWN =========="
+              kill -TERM "$TLS_APP_PID" 2>/dev/null || true
+              TLS_EXIT_RC=0
+              wait "$TLS_APP_PID" || TLS_EXIT_RC=$?
+              TLS_APP_PID=
+              if [ "$TLS_EXIT_RC" -eq 0 ] && \
+                ! grep -q "A libssh2/OpenSSL operation is still pending at process shutdown" "$LOGDIR/ssh-core-tls.log" 2>/dev/null && \
+                ! grep -q "Skipping libssh2 disconnect/free" "$LOGDIR/ssh-core-tls.log" 2>/dev/null; then
+                pass "SIGTERM completed graceful SSH disconnect and TLS shutdown without pending-operation skip"
+              else
+                fail "SIGTERM did not complete graceful TLS shutdown (exit=$TLS_EXIT_RC)"
+              fi
             fi
           fi
 
@@ -1322,7 +1370,7 @@ jobs:
           cat > /tmp/passwall-ssh-core-openwrt.exp <<'EXPECT'
           log_user 1
           log_file -a /tmp/passwall-ssh-core-openwrt-console.log
-          set timeout 1800
+          set timeout 3600
           spawn qemu-system-x86_64 -machine accel=tcg -m 1024 -smp 2 \
             -kernel /tmp/openwrt-kernel.bin \
             -drive file=/tmp/openwrt-rootfs.img,format=raw,if=ide,index=0 \
