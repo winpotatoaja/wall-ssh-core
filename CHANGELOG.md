@@ -17,6 +17,18 @@
 - Use the destination host rather than the proxy as default TLS SNI and
   hostname-verification identity. Reject ambiguous unframed non-CONNECT HTTP
   200 unless HTTP_200_TUNNEL is explicitly enabled.
+- Add a hard deadline for deferred channel cleanup; if it expires, stop the
+  process without issuing another libssh2 API call while an operation is pending.
+- Preserve pinned buffers for real channel read/write EAGAIN; use a validated,
+  generation-changing ring clear only for a write blocked before packet creation
+  by a zero remote window.
+- Retry TLS close_notify on WANT_READ/WANT_WRITE with a deadline, using a
+  shutdown poller that remains active after g_stop; skip TLS I/O if SSH teardown
+  is incomplete or any libssh2 operation is still pending.
+- Skip libssh2 API cleanup entirely on startup failure, avoiding a switch to
+  session_free when handshake or authentication may still be pending.
+- Add native regressions for ring clear, cleanup deadlines, and shutdown pending
+  detection, including the distinction between window wait and active write.
 - Add regressions for ring invariants, HUP/RDHUP EAGAIN, deferred cleanup, IPv6
   listener parsing, strict HTTP status lines, and unframed HTTP 200 responses.
 - Bump the OpenWrt package release to r9.
