@@ -118,7 +118,7 @@ jobs:
           printf 'SDK run ID: %s\n' "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
   vm:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -820,21 +820,11 @@ jobs:
           test "$LARGE" -ge 2
           test "$DUPLEX" -ge 2
 
-      - name: Stop MT7621 emulator and collect logs
+      - name: Collect guest logs, stop MT7621 emulator and collect host logs
         if: always()
         shell: bash
         run: |
           set +e
-          if [ -n "$EMU_DIR" ]; then
-            if [ -f "$GITHUB_WORKSPACE/test-results/mips-emulator.pid" ]; then
-              EMU_PID="$(cat "$GITHUB_WORKSPACE/test-results/mips-emulator.pid")"
-              kill -- "-$EMU_PID" 2>/dev/null
-            fi
-            pkill -x qemu-system-mipsel 2>/dev/null
-            mkdir -p test-results/mips-console-logs
-            cp -a "$EMU_DIR/work/mips-emulator.log" test-results/mips-emulator.log 2>/dev/null
-            cp -a "$EMU_DIR/work/logs/." test-results/mips-console-logs/ 2>/dev/null
-          fi
           if [ -f "$RUNNER_TEMP/mips-vm-key" ]; then
             mkdir -p test-results/guest
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
@@ -846,10 +836,20 @@ jobs:
               root@127.0.0.1:/tmp/mips-guest-logs.tgz test-results/guest/ 2>/dev/null
             tar -xzf test-results/guest/mips-guest-logs.tgz -C test-results/guest/ 2>/dev/null
           fi
+          if [ -n "$EMU_DIR" ]; then
+            if [ -f "$GITHUB_WORKSPACE/test-results/mips-emulator.pid" ]; then
+              EMU_PID="$(cat "$GITHUB_WORKSPACE/test-results/mips-emulator.pid")"
+              kill -- "-$EMU_PID" 2>/dev/null
+            fi
+            pkill -x qemu-system-mipsel 2>/dev/null
+            mkdir -p test-results/mips-console-logs
+            cp -a "$EMU_DIR/work/mips-emulator.log" test-results/mips-emulator.log 2>/dev/null
+            cp -a "$EMU_DIR/work/logs/." test-results/mips-console-logs/ 2>/dev/null
+          fi
           cp /tmp/mips-http-server.log test-results/host-http-server.log 2>/dev/null
           cp /tmp/mips-sshd.log test-results/host-sshd.log 2>/dev/null
           cp /tmp/mips-tls-relay.log test-results/host-tls-relay.log 2>/dev/null
-          ls -lh test-results test-results/guest test-results/mips-console-logs 2>/dev/null
+          ls -lh test-results test-results/guest test-results/mips-console-logs 2>/dev/null || true
 
       - name: Upload OpenWrt 24.10.7 MIPS VM results
         if: always()
