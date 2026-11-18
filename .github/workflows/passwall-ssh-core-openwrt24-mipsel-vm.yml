@@ -190,10 +190,38 @@ jobs:
           EMU_DIR="$(find emulator -maxdepth 3 -type f -name emulator.sh -print -quit | xargs dirname)"
           test -n "$EMU_DIR"
           unzip -q /tmp/router-emulator-presets.zip -d "$EMU_DIR"
-          test -x "$EMU_DIR/qemu/qemu-system-mipsel"
-          "$EMU_DIR/qemu/qemu-system-mipsel" -M help > /tmp/mips-qemu-machines.txt
-          grep -q mt7621-router /tmp/mips-qemu-machines.txt
-          test -f "$EMU_DIR/presets/zbtlink-zbt-wg3526-16m.ini"
+          echo "========== ROUTER EMULATOR PACKAGE LAYOUT =========="
+          echo "EMU_DIR=$EMU_DIR"
+          ls -ld "$EMU_DIR" "$EMU_DIR/qemu" "$EMU_DIR/presets" 2>&1 || true
+          find "$EMU_DIR" -maxdepth 4 -type f \( -name 'qemu-system-mipsel' -o -iname '*wg3526*' \) -print
+          QEMU_MIPSEL="$EMU_DIR/qemu/qemu-system-mipsel"
+          if [ ! -x "$QEMU_MIPSEL" ]; then
+            echo "Missing executable QEMU MIPS binary: $QEMU_MIPSEL"
+            ls -la "$EMU_DIR/qemu" 2>&1 || true
+            false
+          fi
+          "$QEMU_MIPSEL" --version
+          if "$QEMU_MIPSEL" -M help > /tmp/mips-qemu-machines.txt 2>/tmp/mips-qemu-machines.err; then
+            echo "QEMU machine help succeeded."
+          else
+            QEMU_RC=$?
+            echo "QEMU machine help failed with status $QEMU_RC"
+            cat /tmp/mips-qemu-machines.err
+            cat /tmp/mips-qemu-machines.txt
+            false
+          fi
+          cat /tmp/mips-qemu-machines.txt
+          if ! grep -qi 'mt7621-router' /tmp/mips-qemu-machines.txt; then
+            echo "QEMU binary does not advertise the MT7621 machine."
+            false
+          fi
+          PRESET_FILE="$(find "$EMU_DIR" -maxdepth 4 -type f -name 'zbtlink-zbt-wg3526-16m.ini' -print -quit)"
+          if [ -z "$PRESET_FILE" ]; then
+            echo "ZBT-WG3526-16M preset not found in downloaded preset archive."
+            find "$EMU_DIR" -maxdepth 4 -type f -iname '*wg3526*' -print
+            false
+          fi
+          echo "Preset file: $PRESET_FILE"
           echo "EMU_DIR=$EMU_DIR" >> "$GITHUB_ENV"
 
           IB_BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
