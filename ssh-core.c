@@ -1760,8 +1760,9 @@ static void start_closing_client(int epfd, client_conn_t *c) {
         detach_client_fd(epfd, c);
         return;
     }
-    /* Inbound-only EAGAIN does not retain a libssh2 buffer pointer. The
-     * global pending-operation guard above is the only reason to defer close. */
+    /* A channel read EAGAIN and a zero-window write wait do not retain an
+     * application buffer in libssh2. Active writes are pinned by the guard
+     * above even when their TLS callback is waiting for inbound readiness. */
     detach_client_fd(epfd, c);
     if (c->channel) {
         c->write_pending = 0;
