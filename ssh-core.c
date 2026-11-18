@@ -2242,6 +2242,10 @@ static int keepalive_can_start(const upstream_ctx_t *u, pending_op_t pending_op)
     return pending_op == PENDING_NONE && !tls_write_retry_pending(u);
 }
 
+static int shutdown_io_pending(const upstream_ctx_t *u) {
+    return tls_write_retry_pending(u) || has_pending_libssh2_work_for_shutdown();
+}
+
 static uint32_t upstream_epoll_interest(const upstream_ctx_t *u,
                                         pending_op_t pending_op,
                                         int agg_dirs,
@@ -2403,7 +2407,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             int d = libssh2_session_block_directions(session);
             *agg_dirs_out |= d;
             *did_ssh_read_out = 1;
-            if ((d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && u->ssl_want_events == EPOLLOUT)) {
+            if ((d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && (u->ssl_want_events & EPOLLOUT) != 0)) {
                 return 0;
             }
             if (c->abort_on_pending) {
@@ -3750,8 +3754,7 @@ int main(int argc, char **argv) {
         update_epoll(epfd, upstream_fd, &g_upstream_tag, &upstream_ev, want_up);
     }
 
-    if (!g_skip_libssh2_cleanup &&
-        (tls_write_retry_pending(&uctx) || has_pending_libssh2_work_for_shutdown())) {
+    if (!g_skip_libssh2_cleanup && shutdown_io_pending(&uctx)) {
         log_yellow("A libssh2/OpenSSL operation is still pending at process shutdown; skipping further transport I/O");
         g_skip_libssh2_cleanup = 1;
     }
