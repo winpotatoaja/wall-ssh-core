@@ -1273,7 +1273,7 @@ static void delay_wait_and_drain(upstream_ctx_t *u, int delay_ms) {
         if (rem <= 0) break;
         int to = (rem > DELAY_WAIT_POLL_MAX_MS) ? DELAY_WAIT_POLL_MAX_MS : (int)rem;
         short want = POLLIN;
-        if (u->ssl && u->ssl_want_events == EPOLLOUT) want = POLLOUT;
+        if tls_write_retry_pending(u) want = POLLOUT;
         if (u->pre_len >= sizeof(u->pre_buf)) want = 0;
         struct pollfd pfd = { .fd = u->fd, .events = want };
         int rc = poll(&pfd, (nfds_t)(want ? 1 : 0), to);
@@ -2232,10 +2232,59 @@ static void note_upstream_rx_progress(upstream_ctx_t *u, uint64_t rx_before,
         *did_ssh_read = 1;
 }
 
+static int tls_write_retry_pending(const upstream_ctx_t *u) {
+    return u && (u->ssl_want_events & EPOLLOUT) != 0;
+}
+
+static int keepalive_can_start(const upstream_ctx_t *u, pending_op_t pending_op) {
+    /* An inbound-only WANT_READ from an idle SSL_read is not a pinned
+     * OpenSSL operation. WANT_WRITE, by contrast, must be retried first. */
+    return pending_op == PENDING_NONE && !tls_write_retry_pending(u);
+}
+
+static uint32_t upstream_epoll_interest(const upstream_ctx_t *u,
+                                        pending_op_t pending_op,
+                                        int agg_dirs,
+                                        int *idle_rx_paused,
+                                        int opening_client,
+                                        int readable_channel,
+                                        int window_waiter) {
+    uint32_t want = EPOLLRDHUP;
+    if (!idle_rx_paused) return want;
+
+    /* A TLS readiness request is authoritative only for an active serialized
+     * operation, or when OpenSSL needs the socket writable. An idle SSL_read
+     * WANT_READ must pass through the normal backpressure/pause calculation. */
+    if (u && u->ssl && u->ssl_want_events != 0 &&
+        (tls_write_retry_pending(u) || pending_op != PENDING_NONE)) {
+        want |= u->ssl_want_events;
+    } else if (pending_op != PENDING_NONE) {
+        if (agg_dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) want |= EPOLLOUT;
+        if (agg_dirs & LIBSSH2_SESSION_BLOCK_INBOUND)  want |= EPOLLIN;
+        if (window_waiter) want |= EPOLLIN;
+        if ((want & (EPOLLIN | EPOLLOUT)) == 0) want |= EPOLLOUT;
+    } else {
+        int need_read =
+            !*idle_rx_paused ||
+            opening_client ||
+            readable_channel ||
+            window_waiter ||
+            (agg_dirs & LIBSSH2_SESSION_BLOCK_INBOUND);
+        if (need_read) {
+            *idle_rx_paused = 0;
+            want |= EPOLLIN;
+        }
+        if (agg_dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
+            want |= EPOLLOUT;
+        }
+    }
+    return want;
+}
+
 static int pending_op_requires_serial_retry(pending_op_t op, const client_conn_t *c,
                                             int dirs, uint32_t ssl_want_events) {
     int need_out = (dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) ||
-                   ssl_want_events == EPOLLOUT;
+                   ((ssl_want_events & EPOLLOUT) != 0);
     if (need_out || op == PENDING_KEEPALIVE || op == PENDING_SEND_EOF)
         return 1;
     if (op == PENDING_WRITE && c && c->write_pending &&
@@ -2326,6 +2375,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         int rc = libssh2_keepalive_send(session, &next_sec);
         if (rc == 0) {
             u->last_activity = time(NULL);
+            log_blue("SSH keepalive sent");
             clear_pending_operation();
             return 1;
         }
@@ -3662,7 +3712,7 @@ int main(int argc, char **argv) {
             break;
         }
 
-        if (g_pending_op == PENDING_NONE && uctx.ssl_want_events == 0 &&
+        if (keepalive_can_start(&uctx, g_pending_op) &&
             cfg.keepalive_sec > 0 &&
             (now_sec - uctx.last_activity) >= cfg.keepalive_sec &&
             (now_sec - last_ka_try) >= 1) {
@@ -3671,6 +3721,7 @@ int main(int argc, char **argv) {
             int ka_rc = libssh2_keepalive_send(session, &next_sec);
             if (ka_rc == 0) {
                 uctx.last_activity = now_sec;
+                log_blue("SSH keepalive sent");
             } else if (ka_rc == LIBSSH2_ERROR_EAGAIN) {
                 int ka_dirs = libssh2_session_block_directions(session);
                 agg_dirs |= ka_dirs;
@@ -3692,34 +3743,15 @@ int main(int argc, char **argv) {
             force_next_tick = 1;
         }
 
-        uint32_t want_up = EPOLLRDHUP;
-        if (uctx.ssl && uctx.ssl_want_events != 0) {
-            want_up |= uctx.ssl_want_events;
-        } else if (g_pending_op != PENDING_NONE) {
-            if (agg_dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) want_up |= EPOLLOUT;
-            if (agg_dirs & LIBSSH2_SESSION_BLOCK_INBOUND)  want_up |= EPOLLIN;
-            if (has_window_waiter()) want_up |= EPOLLIN;
-            if ((want_up & (EPOLLIN | EPOLLOUT)) == 0) want_up |= EPOLLOUT;
-        } else {
-            int need_read =
-                !idle_rx_paused ||
-                (g_opening_client != NULL) ||
-                has_readable_relay_channel() ||
-                has_window_waiter() ||
-                (agg_dirs & LIBSSH2_SESSION_BLOCK_INBOUND);
-            if (need_read) {
-                idle_rx_paused = 0;
-                want_up |= EPOLLIN;
-            }
-            if (agg_dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
-                want_up |= EPOLLOUT;
-            }
-        }
+        uint32_t want_up = upstream_epoll_interest(
+            &uctx, g_pending_op, agg_dirs, &idle_rx_paused,
+            g_opening_client != NULL,
+            has_readable_relay_channel(), has_window_waiter());
         update_epoll(epfd, upstream_fd, &g_upstream_tag, &upstream_ev, want_up);
     }
 
     if (!g_skip_libssh2_cleanup &&
-        (uctx.ssl_want_events != 0 || has_pending_libssh2_work_for_shutdown())) {
+        (tls_write_retry_pending(&uctx) || has_pending_libssh2_work_for_shutdown())) {
         log_yellow("A libssh2/OpenSSL operation is still pending at process shutdown; skipping further transport I/O");
         g_skip_libssh2_cleanup = 1;
     }
