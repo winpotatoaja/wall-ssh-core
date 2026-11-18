@@ -281,11 +281,16 @@ static int client_cleanup_timeout_due(const client_conn_t *c, long long now_msec
     return now_msec >= c->cleanup_deadline_ms;
 }
 
-/* Only calls held in libssh2's session/channel state must be retried before
- * switching to session-level teardown. Inbound-only channel EAGAIN and queued
- * EOF intent do not retain an in-flight API call or an application pointer. */
+/* Active writes retain the caller's buffer until the same channel_write call
+ * completes. A zero-window wait has not created a packet and is safe to drop.
+ * A channel in ST_CLOSING may still have a channel_free retry to finish. */
 static int has_pending_libssh2_work_for_shutdown(void) {
-    return g_pending_op != PENDING_NONE || g_opening_client != NULL;
+    if (g_pending_op != PENDING_NONE || g_opening_client != NULL) return 1;
+    for (const client_conn_t *c = g_clients; c; c = c->next) {
+        if ((c->write_pending && !c->write_waiting_window) ||
+            (c->state == ST_CLOSING && c->channel != NULL)) return 1;
+    }
+    return 0;
 }
 
 /* ============================================================
@@ -1740,6 +1745,15 @@ static void start_closing_client(int epfd, client_conn_t *c) {
         detach_client_fd(epfd, c);
         return;
     }
+    /* libssh2 channel_write may have built a packet before an SSL callback
+     * returned WANT_READ. Its buffer must remain pinned until the same write
+     * succeeds; only the explicit zero-window wait is safe to discard. */
+    if (c->channel && c->write_pending && !c->write_waiting_window) {
+        c->abort_on_pending = 1;
+        set_client_cleanup_deadline(c);
+        detach_client_fd(epfd, c);
+        return;
+    }
     if (c == g_opening_client && !c->channel) {
         /* The channel-open hard timeout owns this lifetime (30 seconds). */
         c->abort_on_open = 1;
@@ -2217,13 +2231,23 @@ static void note_upstream_rx_progress(upstream_ctx_t *u, uint64_t rx_before,
         *did_ssh_read = 1;
 }
 
+static int pending_op_requires_serial_retry(pending_op_t op, const client_conn_t *c,
+                                            int dirs, uint32_t ssl_want_events) {
+    int need_out = (dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) ||
+                   ssl_want_events == EPOLLOUT;
+    if (need_out || op == PENDING_KEEPALIVE || op == PENDING_SEND_EOF)
+        return 1;
+    if (op == PENDING_WRITE && c && c->write_pending &&
+        !c->write_waiting_window) return 1;
+    return 0;
+}
+
 static void record_eagain(LIBSSH2_SESSION *session, upstream_ctx_t *u,
                           client_conn_t *c, pending_op_t op,
                           int *agg_dirs_out, int *stop_loop_out) {
     int d = libssh2_session_block_directions(session);
     *agg_dirs_out |= d;
-    int need_out = (d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && u->ssl_want_events == EPOLLOUT);
-    if (need_out || op == PENDING_KEEPALIVE) {
+    if (pending_op_requires_serial_retry(op, c, d, u->ssl_want_events)) {
         set_pending_operation(c, op);
         *stop_loop_out = 1;
     }
@@ -2413,9 +2437,15 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             }
             int d = libssh2_session_block_directions(session);
             *agg_dirs_out |= d;
-            if ((d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && u->ssl_want_events == EPOLLOUT)) {
-                return 0;
-            }
+            int need_out = (d & LIBSSH2_SESSION_BLOCK_OUTBOUND) ||
+                           (u->ssl && u->ssl_want_events == EPOLLOUT);
+            /* With a nonzero window, libssh2 has created the channel packet.
+             * Retain the exact buffer and retry this same write even when TLS
+             * asks for inbound readiness (SSL_write WANT_READ). */
+            if (write_window != 0 || need_out) return 0;
+
+            /* A depleted channel window is the sole write EAGAIN that occurs
+             * before packet creation; this is only a WINDOW_ADJUST wait. */
             clear_pending_operation();
             if (c->abort_on_pending) {
                 c->abort_on_pending = 0;
