@@ -2568,13 +2568,13 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         if (pr < 0) {
             *agg_dirs_out = agg_dirs;
             note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+            *did_ssh_read_out = did_ssh_read;
             return -1;
         }
         if (pr == 0) {
             *agg_dirs_out = agg_dirs;
             note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+            *did_ssh_read_out = did_ssh_read;
             return 0;
         }
         if (pr == 1) any_progress = 1;
@@ -2616,7 +2616,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         if (is_libssh2_socket_fatal(err)) {
                             *agg_dirs_out = agg_dirs;
                             note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+                            *did_ssh_read_out = did_ssh_read;
                             return -1;
                         }
                     }
@@ -2630,7 +2630,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     log_red("C2S ring clear rejected while discarding dead-client window wait");
                     *agg_dirs_out = agg_dirs;
                     note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+                    *did_ssh_read_out = did_ssh_read;
                     return -1;
                 }
                 c->write_pending = 0;
@@ -2657,7 +2657,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         log_red("C2S ring slice identity mismatch in relay pump");
                         *agg_dirs_out = agg_dirs;
                         note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+                        *did_ssh_read_out = did_ssh_read;
                         return -1;
                     }
                 } else {
@@ -2677,7 +2677,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                             log_red("C2S ring commit rejected in relay pump");
                             *agg_dirs_out = agg_dirs;
                             note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+                            *did_ssh_read_out = did_ssh_read;
                             return -1;
                         }
                         note_channel_window_recovered(c);
@@ -2732,7 +2732,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         if (w < 0 && is_libssh2_socket_fatal((int)w)) {
                             *agg_dirs_out = agg_dirs;
                             note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+                            *did_ssh_read_out = did_ssh_read;
                             return -1;
                         }
                         c = next;
@@ -2761,7 +2761,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     if (is_libssh2_socket_fatal(rc)) {
                         *agg_dirs_out = agg_dirs;
                         note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+                        *did_ssh_read_out = did_ssh_read;
                         return -1;
                     }
                     c = next;
@@ -2789,7 +2789,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         log_red("S2C ring slice identity mismatch in relay pump");
                         *agg_dirs_out = agg_dirs;
                         note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+                        *did_ssh_read_out = did_ssh_read;
                         return -1;
                     }
                 } else {
@@ -2802,7 +2802,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                             log_red("S2C ring commit rejected in relay pump");
                             *agg_dirs_out = agg_dirs;
                             note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+                            *did_ssh_read_out = did_ssh_read;
                             return -1;
                         }
                         c->read_pending = 0;
@@ -2834,7 +2834,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                             log_red("S2C ring clear rejected after channel read");
                             *agg_dirs_out = agg_dirs;
                             note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+                            *did_ssh_read_out = did_ssh_read;
                             return -1;
                         }
                         if (libssh2_channel_eof(c->channel)) {
@@ -2869,7 +2869,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         if (is_libssh2_socket_fatal((int)r)) {
                             *agg_dirs_out = agg_dirs;
                             note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-        *did_ssh_read_out = did_ssh_read;
+                            *did_ssh_read_out = did_ssh_read;
                             return -1;
                         }
                         c = next;
@@ -2914,6 +2914,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
     }
 
     *agg_dirs_out = agg_dirs;
+    note_upstream_rx_progress(u, rx_before, &did_ssh_read);
     *did_ssh_read_out = did_ssh_read;
     if (any_progress) return 1;
     if (!stop_loop && g_pending_op == PENDING_NONE && u->rx_seq != rx_before) return 2;
@@ -3581,9 +3582,9 @@ int main(int argc, char **argv) {
         if (g_stop) break;
 
         /*
-         * SSL_peek returning WANT_READ/WANT_WRITE must be retried as the same
-         * TLS operation after the requested readiness event. Do this before
-         * any libssh2 operation can use the shared SSL object.
+         * The passive EOF probe has its own readiness state. WANT_WRITE must
+         * be retried before further TLS I/O; WANT_READ may coexist with new
+         * SSH work. A real callback WANT state supersedes the passive probe.
          */
         int retried_eof_peek = 0;
         /* A real libssh2 TLS callback takes precedence over a passive EOF
