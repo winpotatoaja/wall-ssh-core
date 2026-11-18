@@ -68,15 +68,25 @@ file logging inside OpenSSL callbacks. Enable it only for diagnosis with
 The default connection path still reports handshake failures and alternate
 endpoint retries without message-by-message callback logging.
 
-## R17 verification
+## SSH/TLS terminal-state handling (R18)
 
-The parser stage passes focused regressions for the original stale-`errno`
-path: an earlier TCP candidate is refused, a later candidate wins, and a
-successful dial must return with `errno=0`. It also tests OpenSSL callback
-errno preservation, silent-peer handshake timeout retry, unexpected EOF
-retry, alternate endpoint selection, poll HUP/EOF handling, and the
-`TLS_DIAG` default-off configuration. The next stages build this R17 source
-with the OpenWrt 25.12.5 x86_64 SDK and run the resulting APK in QEMU.
+A serialized `PENDING_KEEPALIVE` remains active only while libssh2 returns
+`LIBSSH2_ERROR_EAGAIN`. A terminal transport/session result clears the
+pending marker before the main loop enters shutdown. TLS socket callbacks
+likewise retain `WANT_READ/WANT_WRITE` readiness only while OpenSSL explicitly
+requests a retry; a terminal result such as peer `close_notify` clears stale
+readiness, so shutdown does not mistake a completed operation for an active
+writable retry and skip bounded SSH/TLS cleanup.
+
+## R18 parser verification
+
+The parser stage passes new state-transition regressions proving that a
+pending keepalive is retained on EAGAIN and cleared on terminal error/success,
+and that terminal TLS callback results clear stale WANT_WRITE readiness while
+WANT_READ/WANT_WRITE still request the correct retry. The full existing parser,
+SOCKS, TCP dial, TLS retry, ring-buffer, half-close, pending-cleanup, and core
+state regression suite also passes. The next stages build this R18 source with
+the OpenWrt 25.12.5 x86_64 SDK and run the resulting APK in QEMU.
 
 ## Continuous integration tests
 
