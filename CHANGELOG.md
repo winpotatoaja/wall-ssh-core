@@ -9,8 +9,12 @@
   WANT_READ belonging to a pending serialized libssh2 operation remain armed.
 - Add native regressions for idle TLS WANT_READ, keepalive eligibility,
   shutdown gating, pending SSL-write WANT_READ retries, writable TLS retries,
-  and EPOLLIN pause/re-arm behavior. Log successful SSH keepalives so the
-  manual TLS idle test can verify that keepalives were actually transmitted.
+  and EPOLLIN pause/re-arm behavior. Log successful SSH keepalives only when
+  `LOG_BACKPRESSURE=1`, allowing the manual TLS idle test to verify activity
+  without adding periodic keepalive messages to normal production logs.
+- Add the TLS readiness helper's forward declaration before the early delay
+  helper, avoiding an implicit function declaration under the OpenWrt GCC
+  toolchain; retain the parenthesized call in the delay poller.
 - Extend the manual OpenWrt VM TLS test with idle keepalive verification and a
   two-channel case: saturate one TLS S2C channel with a rate-limited reader,
   close a second idle channel, then verify the slow transfer's exact length
