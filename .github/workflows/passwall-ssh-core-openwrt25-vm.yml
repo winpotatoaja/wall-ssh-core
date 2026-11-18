@@ -43,7 +43,8 @@ jobs:
       - name: Checkout selected branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          # Pin to the triggering commit; the branch tip can advance while a run is queued.
+          ref: ${{ github.sha }}
 
       - name: Install dependencies for the selected stage
         shell: bash
