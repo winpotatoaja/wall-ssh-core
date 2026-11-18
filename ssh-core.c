@@ -1622,6 +1622,26 @@ static int consume_one_http_response(upstream_ctx_t *u,int allow_non_tunnel) {
 /* ============================================================
  * LIBSSH2 CUSTOM I/O CALLBACKS (TLS + TCP + PREBUF + BANNER SPLICE)
  * ============================================================ */
+/* Keep OpenSSL readiness only while the exact operation is retryable.
+ * In particular, a terminal close_notify/error must clear a stale WANT_WRITE,
+ * or shutdown_io_pending() can mistake a completed SSL operation for one that
+ * still needs a writable retry. */
+static ssize_t tls_callback_error_result(upstream_ctx_t *u, int ssl_error,
+                                         int read_operation) {
+    if (!u) return -EIO;
+    if (ssl_error == SSL_ERROR_WANT_READ) {
+        u->ssl_want_events = EPOLLIN;
+        return -EAGAIN;
+    }
+    if (ssl_error == SSL_ERROR_WANT_WRITE) {
+        u->ssl_want_events = EPOLLOUT;
+        return -EAGAIN;
+    }
+    u->ssl_want_events = 0;
+    if (read_operation && ssl_error == SSL_ERROR_ZERO_RETURN) return 0;
+    return -EIO;
+}
+
 static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, int flags, void **abstract) {
     (void)flags;
     upstream_ctx_t *u = (upstream_ctx_t *)(*abstract);
@@ -1655,10 +1675,7 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
             return (ssize_t)r;
         }
         int err = SSL_get_error(u->ssl, r);
-        if (err == SSL_ERROR_WANT_READ) { u->ssl_want_events = EPOLLIN; return -EAGAIN; }
-        if (err == SSL_ERROR_WANT_WRITE) { u->ssl_want_events = EPOLLOUT; return -EAGAIN; }
-        if (err == SSL_ERROR_ZERO_RETURN) return 0;
-        return -EIO;
+        return tls_callback_error_result(u, err, 1);
     }
 
     ssize_t r;
@@ -1695,9 +1712,7 @@ static ssize_t ssh_send_cb(libssh2_socket_t sock, const void *buffer, size_t len
             return (ssize_t)r;
         }
         int err = SSL_get_error(u->ssl, r);
-        if (err == SSL_ERROR_WANT_READ) { u->ssl_want_events = EPOLLIN; return -EAGAIN; }
-        if (err == SSL_ERROR_WANT_WRITE) { u->ssl_want_events = EPOLLOUT; return -EAGAIN; }
-        return -EIO;
+        return tls_callback_error_result(u, err, 0);
     }
 
     ssize_t r;

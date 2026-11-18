@@ -7,6 +7,11 @@
   result now releases the pending slot so shutdown does not mistake a dead
   keepalive for active libssh2 work and skip bounded SSH/TLS cleanup. Add a
   regression for EAGAIN, terminal socket error, and success transitions.
+- Clear stale TLS `WANT_READ/WANT_WRITE` readiness when an SSL callback
+  returns a terminal result. Preserve readiness only while OpenSSL explicitly
+  requests a retry; a received `close_notify` must not leave a stale
+  `EPOLLOUT` flag that makes shutdown incorrectly skip bounded cleanup.
+  Add regression coverage for both retry and terminal callback outcomes.
 - Bump the OpenWrt package release to r18.
 
 

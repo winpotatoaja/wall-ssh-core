@@ -1326,6 +1326,31 @@ static int run_pending_keepalive_terminal_cleanup_regression(void) {
     return failed;
 }
 
+static int run_tls_callback_terminal_result_clears_want_event_regression(void) {
+    upstream_ctx_t u = {.ssl_want_events = EPOLLOUT};
+    int failed = 0;
+
+    ssize_t rc = tls_callback_error_result(&u, SSL_ERROR_ZERO_RETURN, 1);
+    if (rc != 0 || u.ssl_want_events != 0) failed = 1;
+
+    u.ssl_want_events = EPOLLOUT;
+    rc = tls_callback_error_result(&u, SSL_ERROR_SSL, 0);
+    if (rc != -EIO || u.ssl_want_events != 0) failed = 1;
+
+    rc = tls_callback_error_result(&u, SSL_ERROR_WANT_READ, 1);
+    if (rc != -EAGAIN || u.ssl_want_events != EPOLLIN) failed = 1;
+
+    rc = tls_callback_error_result(&u, SSL_ERROR_WANT_WRITE, 0);
+    if (rc != -EAGAIN || u.ssl_want_events != EPOLLOUT) failed = 1;
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] terminal TLS callback results clear stale WANT_WRITE state\n");
+        return 1;
+    }
+    puts("[PASS] terminal TLS callback results clear stale WANT_WRITE state");
+    return 0;
+}
+
 static int run_core_state_regressions(void) {
     int failures = 0;
     failures += run_ipv4_dial_regression();
@@ -1350,6 +1375,7 @@ static int run_core_state_regressions(void) {
     failures += run_pending_op_serialization_regression();
     failures += run_pending_keepalive_terminal_cleanup_regression();
     failures += run_tls_want_event_lifetime_regression();
+    failures += run_tls_callback_terminal_result_clears_want_event_regression();
     failures += run_upstream_rx_progress_regression();
     failures += run_upstream_hup_state_regression();
     failures += run_http_rejection_classification_regression();
