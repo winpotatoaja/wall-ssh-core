@@ -682,6 +682,8 @@ jobs:
           sudo install -m 0644 "$APK" "$ROOT/root/passwall-ssh-core.apk"
           sudo install -m 0755 "$GITHUB_WORKSPACE/test-results/socks-halfclose" "$ROOT/root/socks-halfclose"
           sudo install -m 0644 /tmp/ssh-core-http/half-close-upload-8MiB.bin "$ROOT/root/half-close-upload-8MiB.bin"
+          HALF_CLOSE_UPLOAD_SHA="$(cat /tmp/ssh-core-http/half-close-upload-8MiB.sha256)"
+          printf '%s\n' "$HALF_CLOSE_UPLOAD_SHA" | sudo tee "$ROOT/root/expected-upload.sha256" >/dev/null
           IDLE_ACTIVE_SHA="$(cat /tmp/ssh-core-http/idle-active-6MiB.sha256)"
           printf '%s\n' "$IDLE_ACTIVE_SHA" | sudo tee "$ROOT/root/expected-idle-active.sha256" >/dev/null
           EXPECTED_SHA="$(cat /tmp/ssh-core-http/payload-1MiB.sha256)"
@@ -790,6 +792,23 @@ jobs:
                 pass "client-FIN-first, server-FIN-first and 8 MiB post-EOF upload half-close paths completed"
               else
                 fail "one or more TCP half-close paths failed, including 8 MiB post-EOF upload"
+              fi
+
+              echo "========== TCP 8 MiB UPLOAD WHILE S2C RING IS FULL =========="
+              if /root/socks-halfclose --duplex /root/half-close-upload-8MiB.bin /tmp/tcp-duplex-32MiB.bin 1080; then
+                DUPLEX_SIZE="$(wc -c </tmp/tcp-duplex-32MiB.bin 2>/dev/null | tr -d ' ')"
+                DUPLEX_SHA="$(sha256sum /tmp/tcp-duplex-32MiB.bin 2>/dev/null | awk '{print $1}')"
+                EXPECTED_DUPLEX_SHA="$(cat /root/expected-s2c.sha256)"
+                DUPLEX_FULL_COUNT="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+                DUPLEX_DRAIN_COUNT="$(grep -c "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+                if [ "$DUPLEX_SIZE" = "33554432" ] && [ "$DUPLEX_SHA" = "$EXPECTED_DUPLEX_SHA" ] && \
+                  [ "$DUPLEX_FULL_COUNT" -gt 0 ] && [ "$DUPLEX_DRAIN_COUNT" -gt 0 ]; then
+                  pass "TCP full-duplex 8 MiB upload completed with exact 32 MiB response while S2C reached 32 KiB and drained"
+                else
+                  fail "TCP full-duplex backpressure mismatch (size=$DUPLEX_SIZE sha=$DUPLEX_SHA full=$DUPLEX_FULL_COUNT drained=$DUPLEX_DRAIN_COUNT)"
+                fi
+              else
+                fail "TCP full-duplex upload/S2C saturation helper failed"
               fi
             else
               fail "SSH authentication/listener startup timeout"
@@ -1277,6 +1296,28 @@ jobs:
               fi
 
               if [ "$STATUS" -eq 0 ]; then
+                echo "========== TLS 8 MiB UPLOAD WHILE S2C RING IS FULL =========="
+                TLS_DUPLEX_FULL_BEFORE="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                TLS_DUPLEX_DRAIN_BEFORE="$(grep -c "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                if /root/socks-halfclose --duplex /root/half-close-upload-8MiB.bin /tmp/tls-duplex-32MiB.bin 1082; then
+                  TLS_DUPLEX_SIZE="$(wc -c </tmp/tls-duplex-32MiB.bin 2>/dev/null | tr -d ' ')"
+                  TLS_DUPLEX_SHA="$(sha256sum /tmp/tls-duplex-32MiB.bin 2>/dev/null | awk '{print $1}')"
+                  TLS_DUPLEX_EXPECTED_SHA="$(cat /root/expected-s2c.sha256)"
+                  TLS_DUPLEX_FULL_AFTER="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                  TLS_DUPLEX_DRAIN_AFTER="$(grep -c "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                  if [ "$TLS_DUPLEX_SIZE" = "33554432" ] && [ "$TLS_DUPLEX_SHA" = "$TLS_DUPLEX_EXPECTED_SHA" ] && \
+                    [ "$TLS_DUPLEX_FULL_AFTER" -gt "$TLS_DUPLEX_FULL_BEFORE" ] && \
+                    [ "$TLS_DUPLEX_DRAIN_AFTER" -gt "$TLS_DUPLEX_DRAIN_BEFORE" ]; then
+                    pass "TLS full-duplex 8 MiB upload completed with exact 32 MiB response while S2C reached 32 KiB and drained"
+                  else
+                    fail "TLS full-duplex backpressure mismatch (size=$TLS_DUPLEX_SIZE sha=$TLS_DUPLEX_SHA full=$TLS_DUPLEX_FULL_BEFORE->$TLS_DUPLEX_FULL_AFTER drained=$TLS_DUPLEX_DRAIN_BEFORE->$TLS_DUPLEX_DRAIN_AFTER)"
+                  fi
+                else
+                  fail "TLS full-duplex upload/S2C saturation helper failed"
+                fi
+              fi
+
+              if [ "$STATUS" -eq 0 ]; then
                 echo "========== TLS TWO-CHANNEL S2C BACKPRESSURE / SECOND CHANNEL CLOSE =========="
                 curl -4 -fsS --socks5-hostname 127.0.0.1:1082 \
                   --connect-timeout 20 --max-time 180 --limit-rate 512K \
@@ -1497,9 +1538,11 @@ jobs:
             CLIENT_FIN_COUNT="$(grep -cF "[HALFCLOSE] client FIN observed after complete request body" /tmp/ssh-core-http-server.log 2>/dev/null || true)"
             SERVER_FIN_COUNT="$(grep -cF "[HALFCLOSE] server FIN path received exact client trailer" /tmp/ssh-core-http-server.log 2>/dev/null || true)"
             LARGE_UPLOAD_COUNT="$(grep -cF "[HALFCLOSE-LARGE] PASS received exact 8388608-byte upload SHA-256=" /tmp/ssh-core-http-server.log 2>/dev/null || true)"
+            DUPLEX_UPLOAD_COUNT="$(grep -cF "[DUPLEX] PASS upload=8388608 SHA-256=" /tmp/ssh-core-http-server.log 2>/dev/null || true)"
             if [ "$CLIENT_FIN_COUNT" -ge 2 ] &&
               [ "$SERVER_FIN_COUNT" -ge 2 ] &&
-              [ "$LARGE_UPLOAD_COUNT" -ge 2 ]; then
+              [ "$LARGE_UPLOAD_COUNT" -ge 2 ] &&
+              [ "$DUPLEX_UPLOAD_COUNT" -ge 2 ]; then
               BOTH_HALFCLOSE_SEEN=1
               break
             fi
@@ -1508,8 +1551,9 @@ jobs:
           echo "client-FIN-first observations: $CLIENT_FIN_COUNT"
           echo "server-FIN-first observations: $SERVER_FIN_COUNT"
           echo "exact 8 MiB post-EOF uploads: $LARGE_UPLOAD_COUNT"
+          echo "full-duplex exact 8 MiB uploads with 32 MiB S2C responses: $DUPLEX_UPLOAD_COUNT"
           test "$BOTH_HALFCLOSE_SEEN" -eq 1
-          echo "TCP and TLS half-close FIN directions and both exact 8 MiB post-EOF uploads were verified by the host HTTP fixture."
+          echo "TCP and TLS half-close and full-duplex S2C backpressure uploads were verified by the host HTTP fixture."
 
       - name: Collect OpenWrt guest logs and build manifests
         if: always() && inputs.stage == 'vm'
