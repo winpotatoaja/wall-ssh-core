@@ -1049,10 +1049,19 @@ jobs:
             RST_FD_BEFORE="$(ls "/proc/$APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
             [ -n "$RST_RSS_BEFORE" ] || RST_RSS_BEFORE=0
             [ -n "$RST_FD_BEFORE" ] || RST_FD_BEFORE=0
-            if /root/socks-halfclose --rst-idle 1080; then
-              pass "idle SOCKS channel received an explicit zero-linger TCP RST after read-EAGAIN"
+            RST_ITER=1
+            RST_LOOP_OK=1
+            while [ "$RST_ITER" -le 33 ]; do
+              if ! /root/socks-halfclose --rst-idle 1080; then
+                RST_LOOP_OK=0
+                break
+              fi
+              RST_ITER=$((RST_ITER + 1))
+            done
+            if [ "$RST_LOOP_OK" -eq 1 ]; then
+              pass "33 idle SOCKS channels received explicit zero-linger TCP RSTs without exhausting MAX_CLIENTS=32"
             else
-              fail "explicit RST helper failed to establish and reset an idle SOCKS channel"
+              fail "idle RST loop stopped at iteration $RST_ITER; possible zombie client slot"
             fi
             sleep 3
             RST_RSS_AFTER="$(awk '/VmRSS:/ {print $2}' "/proc/$APP_PID/status" 2>/dev/null)"
