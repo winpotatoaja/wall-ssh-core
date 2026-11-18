@@ -2493,7 +2493,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             int d = libssh2_session_block_directions(session);
             *agg_dirs_out |= d;
             int need_out = (d & LIBSSH2_SESSION_BLOCK_OUTBOUND) ||
-                           (u->ssl && u->ssl_want_events == EPOLLOUT);
+                           (u->ssl && (u->ssl_want_events & EPOLLOUT) != 0);
             /* With a nonzero window, libssh2 has created the channel packet.
              * Retain the exact buffer and retry this same write even when TLS
              * asks for inbound readiness (SSL_write WANT_READ). */
@@ -2600,7 +2600,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             int d = libssh2_session_block_directions(session);
             *agg_dirs_out |= d;
             *did_ssh_read_out = 1;
-            if ((d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && u->ssl_want_events == EPOLLOUT)) {
+            if ((d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && (u->ssl_want_events & EPOLLOUT) != 0)) {
                 return 0;
             }
             clear_pending_operation();
