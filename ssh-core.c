@@ -1157,29 +1157,143 @@ static int poll_fd_until_shutdown(int fd, short events, long long deadline_ms) {
     }
 }
 
+static unsigned int g_tls_diag_message_count = 0;
+
+static const char *tls_handshake_message_name(unsigned int type) {
+    switch (type) {
+        case 0: return "HelloRequest";
+        case 1: return "ClientHello";
+        case 2: return "ServerHello";
+        case 4: return "NewSessionTicket";
+        case 8: return "EncryptedExtensions";
+        case 11: return "Certificate";
+        case 12: return "ServerKeyExchange";
+        case 13: return "CertificateRequest";
+        case 14: return "ServerHelloDone";
+        case 15: return "CertificateVerify";
+        case 16: return "ClientKeyExchange";
+        case 20: return "Finished";
+        case 24: return "KeyUpdate";
+        default: return "OtherHandshake";
+    }
+}
+
+static void tls_message_callback(int write_p, int version, int content_type,
+                                 const void *buf, size_t len,
+                                 SSL *ssl, void *arg) {
+    (void)ssl;
+    (void)arg;
+    if (!buf || len == 0 || g_tls_diag_message_count >= 32) return;
+
+    const unsigned char *bytes = (const unsigned char *)buf;
+    if (content_type == SSL3_RT_HANDSHAKE) {
+        log_blue("[TLS-DIAG] %s %s version=0x%04x message_len=%zu",
+                 write_p ? "TX" : "RX",
+                 tls_handshake_message_name(bytes[0]),
+                 version, len);
+        g_tls_diag_message_count++;
+    } else if (content_type == SSL3_RT_ALERT && len >= 2) {
+        log_yellow("[TLS-DIAG] %s alert level=%s description=%s version=0x%04x",
+                   write_p ? "TX" : "RX",
+                   SSL_alert_type_string_long(bytes[0]),
+                   SSL_alert_desc_string_long(bytes[1]), version);
+        g_tls_diag_message_count++;
+    }
+}
+
+static const char *tls_ssl_error_name(int err) {
+    switch (err) {
+        case SSL_ERROR_NONE: return "NONE";
+        case SSL_ERROR_SSL: return "SSL";
+        case SSL_ERROR_WANT_READ: return "WANT_READ";
+        case SSL_ERROR_WANT_WRITE: return "WANT_WRITE";
+        case SSL_ERROR_WANT_X509_LOOKUP: return "WANT_X509_LOOKUP";
+        case SSL_ERROR_SYSCALL: return "SYSCALL";
+        case SSL_ERROR_ZERO_RETURN: return "ZERO_RETURN";
+#ifdef SSL_ERROR_WANT_CONNECT
+        case SSL_ERROR_WANT_CONNECT: return "WANT_CONNECT";
+#endif
+#ifdef SSL_ERROR_WANT_ACCEPT
+        case SSL_ERROR_WANT_ACCEPT: return "WANT_ACCEPT";
+#endif
+#ifdef SSL_ERROR_WANT_ASYNC
+        case SSL_ERROR_WANT_ASYNC: return "WANT_ASYNC";
+#endif
+#ifdef SSL_ERROR_WANT_ASYNC_JOB
+        case SSL_ERROR_WANT_ASYNC_JOB: return "WANT_ASYNC_JOB";
+#endif
+#ifdef SSL_ERROR_WANT_CLIENT_HELLO_CB
+        case SSL_ERROR_WANT_CLIENT_HELLO_CB: return "WANT_CLIENT_HELLO_CB";
+#endif
+        default: return "UNKNOWN";
+    }
+}
+
 static int tls_connect_nb(upstream_ctx_t *u, int timeout_ms) {
-    long long deadline = now_ms() + timeout_ms;
+    long long started = now_ms();
+    long long deadline = started + timeout_ms;
+    char last_state[128] = "";
+    int last_error = -1;
+    unsigned int attempts = 0;
+
     while (!g_stop) {
+        attempts++;
+        errno = 0;
         int rc = SSL_connect(u->ssl);
+        int call_errno = errno;
         if (rc == 1) {
             u->ssl_want_events = 0;
+            log_blue("[TLS-DIAG] handshake completed attempts=%u elapsed=%lld ms state=%s",
+                     attempts, now_ms() - started, SSL_state_string_long(u->ssl));
             return 0;
         }
+
         int err = SSL_get_error(u->ssl, rc);
+        const char *state = SSL_state_string_long(u->ssl);
+        if (!state) state = "unknown";
+        if (err != last_error || strcmp(state, last_state) != 0) {
+            log_blue("[TLS-DIAG] SSL_connect rc=%d error=%s state=%s errno=%d (%s)",
+                     rc, tls_ssl_error_name(err), state,
+                     call_errno, call_errno ? strerror(call_errno) : "none");
+            snprintf(last_state, sizeof(last_state), "%s", state);
+            last_error = err;
+        }
+
         short ev = 0;
         if (err == SSL_ERROR_WANT_READ) ev = POLLIN;
         else if (err == SSL_ERROR_WANT_WRITE) ev = POLLOUT;
         else {
             unsigned long ecode = ERR_get_error();
-            log_red("TLS handshake gagal: %s", ecode ? ERR_reason_error_string(ecode) : strerror(errno));
+            const char *reason = ecode ? ERR_reason_error_string(ecode) : NULL;
+            log_red("[TLS-DIAG] handshake stopped error=%s state=%s openssl_reason=%s errno=%d (%s)",
+                    tls_ssl_error_name(err), state,
+                    reason ? reason : "none",
+                    call_errno, call_errno ? strerror(call_errno) : "none");
             return -1;
         }
+
         int pr = poll_fd_until(u->fd, ev, deadline);
         if (pr <= 0) {
-            log_red("TLS handshake %s", pr == 0 ? "timeout" : "error");
+            int poll_errno = pr < 0 ? errno : 0;
+            int socket_error = 0;
+            socklen_t socket_error_len = sizeof(socket_error);
+            if (getsockopt(u->fd, SOL_SOCKET, SO_ERROR,
+                           &socket_error, &socket_error_len) < 0) {
+                socket_error = errno;
+            }
+            log_red("[TLS-DIAG] wait ended result=%s wanted=%s elapsed=%lld/%d ms state=%s poll_errno=%d socket_error=%d (%s)",
+                    pr == 0 ? "timeout" : "poll_error",
+                    ev == POLLIN ? "POLLIN" : "POLLOUT",
+                    now_ms() - started, timeout_ms, last_state,
+                    poll_errno, socket_error,
+                    socket_error ? strerror(socket_error) : "none");
+            log_red("TLS handshake %s after %lld ms",
+                    pr == 0 ? "timeout" : "error", now_ms() - started);
             return -1;
         }
     }
+    log_yellow("[TLS-DIAG] handshake loop stopped by signal after %lld ms",
+               now_ms() - started);
     return -1;
 }
 
@@ -3462,7 +3576,12 @@ int main(int argc, char **argv) {
             goto fail_cleanup;
         }
         SSL_CTX_set_mode(ssl_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
-        SSL_CTX_set_alpn_protos(ssl_ctx, alpn_http11, sizeof(alpn_http11));
+        SSL_CTX_set_msg_callback(ssl_ctx, tls_message_callback);
+        if (SSL_CTX_set_alpn_protos(ssl_ctx, alpn_http11, sizeof(alpn_http11)) != 0) {
+            log_red("[TLS-DIAG] failed to configure ALPN http/1.1");
+            write_marker(NEED_RESTART_FILE, "TLS ALPN setup failed");
+            goto fail_cleanup;
+        }
         if (cfg.verify_tls) {
             if (SSL_CTX_set_default_verify_paths(ssl_ctx) != 1) {
                 log_red("SSL_CTX_set_default_verify_paths gagal");
@@ -3489,7 +3608,18 @@ int main(int argc, char **argv) {
             write_marker(NEED_RESTART_FILE, "TLS hostname verify setup failed");
             goto fail_cleanup;
         }
-        SSL_set_fd(uctx.ssl, upstream_fd);
+        if (SSL_set_fd(uctx.ssl, upstream_fd) != 1) {
+            unsigned long ecode = ERR_get_error();
+            log_red("[TLS-DIAG] SSL_set_fd failed: %s",
+                    ecode ? ERR_reason_error_string(ecode) : "unknown OpenSSL error");
+            write_marker(NEED_RESTART_FILE, "TLS socket attach failed");
+            goto fail_cleanup;
+        }
+        int socket_flags = fcntl(upstream_fd, F_GETFL, 0);
+        log_blue("[TLS-DIAG] OpenSSL=%s fd=%d nonblocking=%s verify=%d SNI=%s ALPN=http/1.1",
+                 OpenSSL_version(OPENSSL_VERSION), upstream_fd,
+                 socket_flags >= 0 && (socket_flags & O_NONBLOCK) ? "yes" : "no",
+                 cfg.verify_tls, sni);
 
         if (tls_connect_nb(&uctx, HANDSHAKE_TIMEOUT_MS) < 0) {
             write_marker(NEED_RESTART_FILE, "TLS handshake failed");

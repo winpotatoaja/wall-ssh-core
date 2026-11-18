@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add temporary OpenSSL TLS handshake diagnostics for the physical-router
+  failure: report OpenSSL version, nonblocking socket state, SNI/ALPN, sent
+  and received handshake messages, TLS alerts, SSL_connect state transitions,
+  poll readiness direction, timeout elapsed time, and socket SO_ERROR. Check
+  SSL_set_fd() and ALPN setup failures explicitly. This is diagnostic-only;
+  it does not change SNI, payload, routing, DNS, or TLS policy.
+- Bump the OpenWrt package release to r14 for the diagnostic build.
+
 - Resolve upstream DNS by querying IPv4 (A) and IPv6 (AAAA) independently,
   so a broken AAAA response on musl cannot discard a usable A result. Race
   returned addresses within each family instead of serially aborting each
