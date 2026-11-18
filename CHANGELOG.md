@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve compatibility with OpenWrt 24.10's libssh2 1.11.0 callback API while using the typed `libssh2_session_callback_set2()` API on libssh2 1.11.1 and newer. This keeps the custom SSH socket callbacks enabled across both supported SDK generations.
+
 - Add a full-duplex transport regression on both TCP and TLS: the SOCKS
   client sends an exact 8 MiB C2S upload and half-closes its write side while
   the remote HTTP fixture concurrently streams a 32 MiB S2C response. The
