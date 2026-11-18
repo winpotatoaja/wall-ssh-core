@@ -312,7 +312,7 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     c.write_waiting_window = 1;
     if (has_pending_libssh2_work_for_shutdown()) failed = 1;
     c.write_waiting_window = 0;
-    if (has_pending_libssh2_work_for_shutdown()) failed = 1;
+    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
     c.write_pending = 0;
     c.read_pending = 1;
     if (has_pending_libssh2_work_for_shutdown()) failed = 1;
@@ -322,7 +322,7 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     c.need_send_eof = 0;
     c.state = ST_CLOSING;
     c.channel = (LIBSSH2_CHANNEL *)(uintptr_t)1;
-    if (has_pending_libssh2_work_for_shutdown()) failed = 1;
+    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
     c.channel = NULL;
     c.state = ST_RELAY;
     set_pending_operation(NULL, PENDING_KEEPALIVE);
@@ -562,10 +562,20 @@ static int run_inbound_only_channel_close_regression(void) {
             g_client_count = 1;
             clear_pending_operation();
             start_closing_client(-1, write_c);
-            if (write_c->state != ST_CLOSING || write_c->write_pending ||
-                write_c->c2s.data || write_c->s2c.data || g_pending_op != PENDING_NONE) {
+            if (write_c->state != ST_RELAY || !write_c->abort_on_pending ||
+                !write_c->write_pending || write_c->write_waiting_window ||
+                !write_c->c2s.data || !write_c->s2c.data ||
+                write_c->cleanup_deadline_ms <= 0 || g_pending_op != PENDING_NONE) {
                 failed = 1;
             }
+
+            /* The same write arguments stay pinned until libssh2 reports
+             * completion. After that, the deferred close may release them. */
+            write_c->write_pending = 0;
+            write_c->abort_on_pending = 0;
+            start_closing_client(-1, write_c);
+            if (write_c->state != ST_CLOSING || write_c->c2s.data ||
+                write_c->s2c.data || write_c->write_pending) failed = 1;
         }
         if (g_clients == write_c) {
             write_c->channel = NULL;
