@@ -9,9 +9,10 @@
   then verifies the complete response length and SHA-256 after resuming.
   The host fixture independently verifies the complete upload hash and FIN.
 - Add an explicit zero-linger RST test against an idle channel after it has
-  received response headers and reached the read-EAGAIN wait. Exercise it on
-  TCP and TLS, including while another TLS S2C slow-reader channel remains
-  active; verify daemon liveness and bounded RSS/file-descriptor growth.
+  received response headers and reached the read-EAGAIN wait. Repeat 33 resets
+  on TCP (one more than `MAX_CLIENTS=32`) to detect leaked client slots, and
+  exercise a reset on TLS while another S2C slow-reader channel remains active;
+  verify daemon liveness and bounded RSS/file-descriptor growth.
 - Keep the three-second `IDLE_TIMEOUT` isolation test on its dedicated
   TCP daemon so it cannot expire the TLS half-close fixture during its
   intentional eight-second remote-read pause. Verify `KEEPALIVE=10` produces
