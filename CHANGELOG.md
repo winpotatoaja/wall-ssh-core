@@ -8,7 +8,8 @@
   no live local peer can consume; do not wait for inbound-only EAGAIN or remote
   EOF that may never arrive.
 - Keep aborted channel-open attempts under the existing 30-second hard-open
-  timeout instead of applying the shorter 10-second channel-cleanup deadline.
+  timeout instead of the shorter 10-second cleanup deadline; clear any stale
+  OPEN-pending deadline when the open resolves and begin a fresh close budget.
 - Separate passive TLS EOF-peek readiness from TLS callback retry state.
   A passive WANT_READ no longer blocks SSH channel pumping; WANT_WRITE remains
   serialized, and actual upstream receive progress invalidates the old probe.
