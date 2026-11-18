@@ -247,6 +247,38 @@ static int run_eof_drain_regression(void) {
     return 0;
 }
 
+static int run_graceful_hup_preserves_c2s_regression(void) {
+    int sv[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return 1;
+    int flags = fcntl(sv[0], F_GETFL, 0);
+    if (flags < 0 || fcntl(sv[0], F_SETFL, flags | O_NONBLOCK) < 0) {
+        close(sv[0]); close(sv[1]); return 1;
+    }
+
+    client_conn_t c = {.fd = sv[0], .hup_pending = 1};
+    int failed = rb_init(&c.c2s, 64) < 0;
+    if (!failed && send_test_bytes(sv[1], "upload", 6) < 0) failed = 1;
+    if (!failed && shutdown(sv[1], SHUT_WR) < 0) failed = 1;
+    int rc = failed ? -1 : drain_pending_eof_to_c2s(-1, &c);
+    size_t queued_len = 0;
+    const uint8_t *queued = rb_read_slice(&c.c2s, &queued_len);
+    if (!failed && (rc != 1 || !c.client_eof || !c.need_send_eof ||
+                    !c.client_dead || c.client_reset || c.hup_pending ||
+                    c.fd >= 0 || c.c2s.used != 6 || queued_len < 6 ||
+                    !queued || memcmp(queued, "upload", 6) != 0)) {
+        failed = 1;
+    }
+
+    rb_free(&c.c2s);
+    close(sv[1]);
+    if (failed) {
+        fprintf(stderr, "[FAIL] graceful HUP must preserve queued C2S bytes for SSH delivery\\n");
+        return 1;
+    }
+    puts("[PASS] graceful HUP preserves queued C2S bytes for SSH delivery");
+    return 0;
+}
+
 static int run_deferred_client_cleanup_regression(void) {
     client_conn_t *c = calloc(1, sizeof(*c));
     if (!c) return 1;
@@ -286,10 +318,10 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     if (client_cleanup_timeout_due(&c, 4999) ||
         !client_cleanup_timeout_due(&c, 5000)) failed = 1;
 
-    /* Client death must not wait for inbound-only EAGAIN flags or a remote EOF
-     * that can never arrive after the local socket has been reset. */
+    /* A reset peer closes promptly even when a C2S buffer or retry state exists. */
     c.state = ST_RELAY;
     c.client_dead = 1;
+    c.client_reset = 1;
     c.hup_pending = 0;
     c.c2s.used = 0;
     c.need_send_eof = 1;
@@ -301,8 +333,24 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     c.c2s.used = 0;
     c.hup_pending = 1;
     if (client_dead_ready_to_close(&c)) failed = 1;
+
+    /* A graceful EOF waits for queued C2S writes and the SSH EOF packet. */
     c.hup_pending = 0;
+    c.client_reset = 0;
+    c.client_eof = 1;
+    c.need_send_eof = 1;
+    c.write_pending = 0;
+    c.c2s.used = 1;
+    if (client_dead_ready_to_close(&c) || client_eof_ready_to_close(&c)) failed = 1;
+    c.c2s.used = 0;
+    if (client_eof_ready_to_close(&c)) failed = 1;
+    c.need_send_eof = 0;
+    if (!client_eof_ready_to_close(&c)) failed = 1;
+    c.write_pending = 1;
+    if (client_eof_ready_to_close(&c)) failed = 1;
+
     c.client_dead = 0;
+    c.client_eof = 0;
     c.need_send_eof = 0;
     c.read_pending = 0;
     c.write_pending = 0;
@@ -787,6 +835,7 @@ static int run_core_state_regressions(void) {
     int failures = 0;
     failures += run_ring_buffer_regressions();
     failures += run_eof_drain_regression();
+    failures += run_graceful_hup_preserves_c2s_regression();
     failures += run_deferred_client_cleanup_regression();
     failures += run_cleanup_deadline_and_shutdown_pending_regression();
     failures += run_pending_open_cleanup_deadline_regression();

@@ -150,6 +150,7 @@ typedef struct client_conn {
     int              need_send_eof;
     int              client_eof;
     int              client_dead;
+    int              client_reset;
     int              hup_pending;
     int              rdhup_pending;
     int              ssh_eof;
@@ -270,12 +271,17 @@ static int relay_idle_timeout_due(const client_conn_t *c, int timeout_sec,
     return now_msec - c->last_activity_ms >= (long long)timeout_sec * 1000LL;
 }
 
-/* A reset local peer has no remaining consumer for queued C2S data. Close
- * its channel without waiting for inbound-only read/write EAGAIN or remote
- * EOF. A truly active libssh2 call is still guarded by the global pending slot
- * inside start_closing_client(). */
+/* A reset peer has no remaining consumer or useful C2S stream. Close promptly.
+ * A graceful EOF is different: queued C2S bytes must reach SSH before the
+ * channel can be released, even when the local descriptor has been detached. */
 static int client_dead_ready_to_close(const client_conn_t *c) {
-    return c && c->client_dead && !c->hup_pending;
+    return c && c->client_dead && c->client_reset && !c->hup_pending;
+}
+
+static int client_eof_ready_to_close(const client_conn_t *c) {
+    return c && c->client_dead && !c->client_reset && c->client_eof &&
+           !c->hup_pending && c->c2s.used == 0 && !c->write_pending &&
+           !c->need_send_eof;
 }
 
 static int client_cleanup_timeout_due(const client_conn_t *c, long long now_msec) {
@@ -1931,6 +1937,7 @@ static int drain_pending_eof_to_c2s(int epfd, client_conn_t *c) {
     if (c->c2s.used > before) c->last_activity_ms = now_ms();
     if (rc < 0) {
         c->client_eof = 1; c->need_send_eof = 1; c->client_dead = 1;
+        c->client_reset = 1;
         c->hup_pending = 0; c->rdhup_pending = 0;
         detach_client_fd(epfd, c);
     } else if (eof_hit) {
@@ -2151,6 +2158,7 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
                 c->client_eof = 1;
                 c->need_send_eof = 1;
                 c->client_dead = 1;
+                c->client_reset = 1;
                 c->hup_pending = 0;
                 c->rdhup_pending = 0;
                 detach_client_fd(epfd, c);
@@ -2167,6 +2175,7 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
             size_t s2c_before=c->s2c.used;
             if (send_from_rb(c->fd, &c->s2c, c->read_pending) < 0) {
                 c->client_dead = 1;
+                c->client_reset = 1;
                 c->client_eof = 1;
                 c->need_send_eof = 1;
                 c->hup_pending = 0;
@@ -2183,6 +2192,7 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
                 c->client_eof = 1;
                 c->need_send_eof = 1;
                 c->client_dead = 1;
+                if (recv_rc < 0) c->client_reset = 1;
                 c->hup_pending = 0;
                 c->rdhup_pending = 0;
                 detach_client_fd(epfd, c);
@@ -2350,6 +2360,7 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
     if (c->fd >= 0 && c->ctrl_len == 0) {
         if (send_from_rb(c->fd, &c->s2c, 0) < 0) {
             c->client_dead = 1;
+            c->client_reset = 1;
             c->client_eof = 1;
             c->need_send_eof = 1;
             c->hup_pending = 0;
@@ -2570,8 +2581,10 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             c->last_activity_ms=now_ms();
             *did_ssh_read_out = 1;
             clear_pending_operation();
-            if (c->abort_on_pending ||
-                (c->fd >= 0 && c->ctrl_len == 0 && send_from_rb(c->fd, &c->s2c, 0) < 0)) {
+            int client_send_failed = c->fd >= 0 && c->ctrl_len == 0 &&
+                                     send_from_rb(c->fd, &c->s2c, 0) < 0;
+            if (client_send_failed) c->client_reset = 1;
+            if (c->abort_on_pending || client_send_failed) {
                 c->abort_on_pending = 0;
                 start_closing_client(epfd, c);
             }
@@ -2846,6 +2859,16 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 }
             }
 
+            /* A cleanly closed local peer may no longer consume S2C data, but
+             * any bytes already queued C2S must be written and SSH EOF sent
+             * before releasing the channel. Reset peers use the fast path above. */
+            if (client_eof_ready_to_close(c)) {
+                c->abort_on_pending = 0;
+                start_closing_client(epfd, c);
+                c = next;
+                continue;
+            }
+
             if (!c->ssh_eof && (!c->client_dead || c->read_pending) &&
                 (c->read_pending || rb_free_space(&c->s2c) > 0)) {
                 uint8_t *ptr = NULL;
@@ -2882,8 +2905,10 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         note_s2c_buffer_peak(c);
                         c->last_activity_ms=now_ms();
                         any_progress = 1;
-                        if (c->abort_on_pending ||
-                            (c->fd >= 0 && c->ctrl_len == 0 && send_from_rb(c->fd, &c->s2c, 0) < 0)) {
+                        int client_send_failed = c->fd >= 0 && c->ctrl_len == 0 &&
+                                                 send_from_rb(c->fd, &c->s2c, 0) < 0;
+                        if (client_send_failed) c->client_reset = 1;
+                        if (c->abort_on_pending || client_send_failed) {
                             c->abort_on_pending = 0;
                             c->client_dead = 1;
                             c->client_eof = 1;

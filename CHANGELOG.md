@@ -195,3 +195,7 @@
 - Add S2C backpressure diagnostics: track the reverse-direction ring-buffer high-water mark, detect saturation, and report whether it drains after the client resumes reading.
 - Extend VM coverage with four concurrent 8 MiB uploads, an 8 MiB throttled download with exact SHA-256, client-abort recovery, and 12 repeated SOCKS connections with RSS/FD checks.
 - Bump the OpenWrt package release to 3 for the additional S2C diagnostics.
+
+## Unreleased
+- Fix graceful client EOF/HUP cleanup so queued client-to-SSH data is drained and SSH EOF is sent before releasing the channel; preserve the immediate close path for reset peers.
+- Add a native regression for graceful HUP with queued C2S data, and refine dead-client shutdown state checks.
