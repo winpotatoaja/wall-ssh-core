@@ -1308,6 +1308,13 @@ static int tls_connect_nb(upstream_ctx_t *u, int timeout_ms,
                 *retryable_out = 1;
             }
             unsigned long ecode = ERR_get_error();
+#ifdef SSL_R_UNEXPECTED_EOF_WHILE_READING
+            if (retryable_out && ecode &&
+                ERR_GET_LIB(ecode) == ERR_LIB_SSL &&
+                ERR_GET_REASON(ecode) == SSL_R_UNEXPECTED_EOF_WHILE_READING) {
+                *retryable_out = 1;
+            }
+#endif
             const char *reason = ecode ? ERR_reason_error_string(ecode) : NULL;
             log_red("[TLS-DIAG] handshake stopped error=%s state=%s openssl_reason=%s errno=%d (%s)",
                     tls_ssl_error_name(err), state,

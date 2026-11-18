@@ -7,6 +7,9 @@
   than passing only because successful stdout logging left it unchanged.
 - Apply the same clean OpenSSL error-queue and errno preparation to the
   TLS close_notify read and SSL_shutdown() path, not just connection/data I/O.
+- Treat OpenSSL's TLS 1.3 `unexpected eof while reading` reason as a
+  retryable transport failure, alongside syscall EOF and handshake timeout.
+  Add a socketpair regression where the peer closes without close_notify.
 - Preserve errno across the TLS diagnostic message callback. The callback
   executes inside SSL I/O and its logger uses stdio/file operations; without
   restoration, that logging could corrupt the errno inspected by SSL_get_error().

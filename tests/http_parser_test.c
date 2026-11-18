@@ -1050,6 +1050,67 @@ static int run_tls_message_callback_errno_regression(void) {
     return 0;
 }
 
+static int run_tls_unexpected_eof_retryable_regression(void) {
+    int sv[2] = {-1, -1};
+    SSL_CTX *ctx = NULL;
+    SSL *ssl = NULL;
+    int retryable = 0;
+    int rc = 0;
+    int failed = 0;
+    int saved_stop = g_stop;
+    unsigned int saved_message_count = g_tls_diag_message_count;
+    const char *saved_log_path = g_log_path;
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+        set_nonblock(sv[0], 1) < 0) {
+        fprintf(stderr, "[FAIL] TLS unexpected-EOF retry regression setup: %s\n",
+                strerror(errno));
+        failed = 1;
+        goto done;
+    }
+
+    ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) {
+        fprintf(stderr, "[FAIL] TLS unexpected-EOF retry regression: SSL_CTX_new failed\n");
+        failed = 1;
+        goto done;
+    }
+    SSL_CTX_set_msg_callback(ctx, tls_message_callback);
+    ssl = SSL_new(ctx);
+    if (!ssl || SSL_set_fd(ssl, sv[0]) != 1) {
+        fprintf(stderr, "[FAIL] TLS unexpected-EOF retry regression: SSL setup failed\n");
+        failed = 1;
+        goto done;
+    }
+
+    /* The peer closes without sending a TLS close_notify or handshake reply. */
+    close(sv[1]);
+    sv[1] = -1;
+    upstream_ctx_t u = { .fd = sv[0], .ssl = ssl };
+    g_stop = 0;
+    g_tls_diag_message_count = 0;
+    g_log_path = "/dev/null/passwall-tls-eof-test.log";
+    rc = tls_connect_nb(&u, 1000, &retryable);
+    if (rc == 0 || !retryable) failed = 1;
+
+done:
+    g_stop = saved_stop;
+    g_tls_diag_message_count = saved_message_count;
+    g_log_path = saved_log_path;
+    if (ssl) SSL_free(ssl);
+    if (ctx) SSL_CTX_free(ctx);
+    if (sv[0] >= 0) close(sv[0]);
+    if (sv[1] >= 0) close(sv[1]);
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] peer EOF during TLS handshake is classified as retryable (rc=%d retryable=%d)\n",
+                rc, retryable);
+        return 1;
+    }
+    puts("[PASS] peer EOF during TLS handshake is classified as retryable");
+    return 0;
+}
+
 static int run_core_state_regressions(void) {
     int failures = 0;
     failures += run_ipv4_dial_regression();
@@ -1057,6 +1118,7 @@ static int run_core_state_regressions(void) {
     failures += run_tcp_dial_exclusion_regression();
     failures += run_poll_hup_regression();
     failures += run_tls_message_callback_errno_regression();
+    failures += run_tls_unexpected_eof_retryable_regression();
     failures += run_ring_buffer_regressions();
     failures += run_eof_drain_regression();
     failures += run_graceful_hup_preserves_c2s_regression();
