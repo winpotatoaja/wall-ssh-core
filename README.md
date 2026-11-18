@@ -68,12 +68,15 @@ file logging inside OpenSSL callbacks. Enable it only for diagnosis with
 The default connection path still reports handshake failures and alternate
 endpoint retries without message-by-message callback logging.
 
-## R16 verification
+## R17 verification
 
-The parser stage includes focused regressions for TLS callback `errno`
-preservation, OpenSSL unexpected EOF during handshake, alternate upstream
-endpoint retry, and poll HUP/EOF handling. Build the R16 package with the
-OpenWrt 25.12.5 x86_64 SDK before running the separate QEMU VM stage.
+The parser stage passes focused regressions for the original stale-`errno`
+path: an earlier TCP candidate is refused, a later candidate wins, and a
+successful dial must return with `errno=0`. It also tests OpenSSL callback
+errno preservation, silent-peer handshake timeout retry, unexpected EOF
+retry, alternate endpoint selection, poll HUP/EOF handling, and the
+`TLS_DIAG` default-off configuration. The next stages build this R17 source
+with the OpenWrt 25.12.5 x86_64 SDK and run the resulting APK in QEMU.
 
 ## Continuous integration tests
 
