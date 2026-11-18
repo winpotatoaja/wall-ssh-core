@@ -270,7 +270,8 @@ static int relay_idle_timeout_due(const client_conn_t *c, int timeout_sec,
 
 static int client_cleanup_timeout_due(const client_conn_t *c, long long now_msec) {
     if (!c || c->cleanup_deadline_ms <= 0 ||
-        (!c->abort_on_pending && c->state != ST_CLOSING)) return 0;
+        (!c->abort_on_pending && !c->abort_on_open &&
+         c->state != ST_CLOSING)) return 0;
     return now_msec >= c->cleanup_deadline_ms;
 }
 
