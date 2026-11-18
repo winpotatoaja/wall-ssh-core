@@ -384,7 +384,9 @@ static int test_idle_client_rst(void)
         headers[used] = '\0';
         if (strstr(headers, "\r\n\r\n")) break;
     }
-    if (!strstr(headers, "\r\n\r\n")) {
+    if (!strstr(headers, "\r\n\r\n") ||
+        strncmp(headers, "HTTP/1.1 200 ", 13) != 0 ||
+        !strstr(headers, "Content-Length: 64")) {
         close(fd);
         return -1;
     }
