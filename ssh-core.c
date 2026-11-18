@@ -3561,10 +3561,9 @@ int main(int argc, char **argv) {
         if (g_stop) break;
 
         /*
-         * Never issue a passive SSL_peek on the shared TLS object: a
-         * nonblocking WANT result belongs to that read operation and must be
-         * resumed as the same operation. The SSH channel pump is the sole
-         * consumer of upstream TLS application data.
+         * Do not issue a passive TLS EOF-read probe on the shared object.
+         * Nonblocking WANT state belongs to the active I/O callback; the SSH
+         * channel pump remains the sole consumer of upstream application data.
          */
         /*
          * SSH WINDOW_ADJUST arrives on the upstream transport. A local client
