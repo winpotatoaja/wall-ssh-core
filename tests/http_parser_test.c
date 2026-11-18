@@ -69,14 +69,17 @@ static int run_followup_case(const char *name, const char *wire) {
     memcpy(u.pre_buf, wire, len);
     u.pre_len = len;
     int first = consume_one_http_response(&u, 0);
-    int failed = (first != 0 || u.tunnel_established);
+    int failed = (first != 0 || u.tunnel_established || u.last_http_code != 200);
     int second = failed ? first : consume_one_http_response(&u, 0);
-    if (second != -1 || u.tunnel_established) failed = 1;
+    if (second != -1 || u.tunnel_established ||
+        !upstream_http_response_rejected(&u) || u.last_http_code != 200)
+        failed = 1;
     if (failed) {
-        fprintf(stderr, "[FAIL] %s: first_rc=%d second_rc=%d tunnel=%d\n",
-                name, first, second, u.tunnel_established);
+        fprintf(stderr, "[FAIL] %s: first_rc=%d second_rc=%d tunnel=%d status=%d rejected=%d\n",
+                name, first, second, u.tunnel_established, u.last_http_code,
+                upstream_http_response_rejected(&u));
     } else {
-        printf("[PASS] %s\n", name);
+        printf("[PASS] %s (HTTP/Proxy Rejected %d)\n", name, u.last_http_code);
     }
     close(sv[0]);
     close(sv[1]);
