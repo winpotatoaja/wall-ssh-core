@@ -1022,12 +1022,39 @@ static int run_poll_hup_regression(void) {
     return failed;
 }
 
+static int run_tls_message_callback_errno_regression(void) {
+    const unsigned char message[] = {1};
+    unsigned int saved_count = g_tls_diag_message_count;
+    const char *saved_log_path = g_log_path;
+    int saved_errno = errno;
+
+    g_tls_diag_message_count = 0;
+    g_log_path = "-";
+    errno = EAGAIN;
+    tls_message_callback(1, TLS1_2_VERSION, SSL3_RT_HANDSHAKE,
+                         message, sizeof(message), NULL, NULL);
+    int callback_errno = errno;
+
+    g_tls_diag_message_count = saved_count;
+    g_log_path = saved_log_path;
+    errno = saved_errno;
+
+    if (callback_errno != EAGAIN) {
+        fprintf(stderr, "[FAIL] TLS message callback logger changed errno (%d -> %d)\n",
+                EAGAIN, callback_errno);
+        return 1;
+    }
+    puts("[PASS] TLS message callback preserves errno for SSL_get_error");
+    return 0;
+}
+
 static int run_core_state_regressions(void) {
     int failures = 0;
     failures += run_ipv4_dial_regression();
     failures += run_ipv6_dial_regression();
     failures += run_tcp_dial_exclusion_regression();
     failures += run_poll_hup_regression();
+    failures += run_tls_message_callback_errno_regression();
     failures += run_ring_buffer_regressions();
     failures += run_eof_drain_regression();
     failures += run_graceful_hup_preserves_c2s_regression();

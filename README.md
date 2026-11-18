@@ -52,7 +52,9 @@ remain dynamic, so the core does not bind to a fixed WAN interface.
 
 OpenSSL non-blocking I/O clears the thread error queue before each
 `SSL_connect()`, `SSL_read()`, and `SSL_write()` operation so
-`SSL_get_error()` can classify retry readiness consistently.
+`SSL_get_error()` can classify retry readiness consistently. The TLS
+message-logging callback also restores `errno` before returning, preventing
+stdio/file logging from contaminating OpenSSL's error classification.
 
 ## Continuous integration tests
 

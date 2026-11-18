@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Preserve errno across the TLS diagnostic message callback. The callback
+  executes inside SSL I/O and its logger uses stdio/file operations; without
+  restoration, that logging could corrupt the errno inspected by SSL_get_error().
+  Add a regression that checks the callback leaves errno unchanged.
+- Bump the OpenWrt package release to r16.
+
+
 - Retry a failed or stalled TLS transport on other DNS-resolved upstream
   addresses. R13 selected the first TCP-connected CloudFront edge and did not
   try another address if that endpoint then stalled during TLS. The retry

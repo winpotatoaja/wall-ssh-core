@@ -1209,9 +1209,15 @@ static const char *tls_handshake_message_name(unsigned int type) {
 static void tls_message_callback(int write_p, int version, int content_type,
                                  const void *buf, size_t len,
                                  SSL *ssl, void *arg) {
+    /* The callback runs inside OpenSSL I/O. Logger stdio calls may modify
+     * errno, which SSL_get_error() inspects immediately after the I/O returns. */
+    int saved_errno = errno;
     (void)ssl;
     (void)arg;
-    if (!buf || len == 0 || g_tls_diag_message_count >= 32) return;
+    if (!buf || len == 0 || g_tls_diag_message_count >= 32) {
+        errno = saved_errno;
+        return;
+    }
 
     const unsigned char *bytes = (const unsigned char *)buf;
     if (content_type == SSL3_RT_HANDSHAKE) {
@@ -1227,6 +1233,7 @@ static void tls_message_callback(int write_p, int version, int content_type,
                    SSL_alert_desc_string_long(bytes[1]), version);
         g_tls_diag_message_count++;
     }
+    errno = saved_errno;
 }
 
 static const char *tls_ssl_error_name(int err) {
