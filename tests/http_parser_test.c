@@ -271,6 +271,11 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     int failed = client_cleanup_timeout_due(&c, 4999) ||
                  !client_cleanup_timeout_due(&c, 5000);
     c.abort_on_pending = 0;
+    c.abort_on_open = 1;
+    c.state = ST_SSH_OPENING;
+    if (client_cleanup_timeout_due(&c, 4999) ||
+        !client_cleanup_timeout_due(&c, 5000)) failed = 1;
+    c.abort_on_open = 0;
     c.state = ST_CLOSING;
     if (client_cleanup_timeout_due(&c, 4999) ||
         !client_cleanup_timeout_due(&c, 5000)) failed = 1;
