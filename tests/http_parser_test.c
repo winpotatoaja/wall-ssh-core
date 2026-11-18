@@ -653,20 +653,24 @@ static int run_tls_want_event_lifetime_regression(void) {
      * it must not defeat the S2C backpressure pause or block keepalive. */
     if ((want & EPOLLIN) != 0 || (want & EPOLLRDHUP) == 0 ||
         !idle_rx_paused || !keepalive_can_start(&u, PENDING_NONE) ||
-        tls_write_retry_pending(&u)) {
+        tls_write_retry_pending(&u) || shutdown_io_pending(&u)) {
         failed = 1;
     }
 
     /* The same WANT_READ is authoritative when it belongs to a serialized
-     * operation such as SSL_write; the pending retry must keep EPOLLIN armed. */
+     * operation such as SSL_write; the pending retry must keep EPOLLIN armed
+     * and must protect both keepalive and shutdown from interleaving. */
     idle_rx_paused = 1;
     want = upstream_epoll_interest(
         &u, PENDING_WRITE, LIBSSH2_SESSION_BLOCK_OUTBOUND,
         &idle_rx_paused, 0, 0, 0);
+    set_pending_operation(NULL, PENDING_WRITE);
     if ((want & EPOLLIN) == 0 ||
-        keepalive_can_start(&u, PENDING_WRITE)) {
+        keepalive_can_start(&u, PENDING_WRITE) ||
+        !shutdown_io_pending(&u)) {
         failed = 1;
     }
+    clear_pending_operation();
 
     /* WANT_WRITE remains an active TLS retry even without a libssh2 pending
      * marker and must block both keepalive and teardown I/O. */
@@ -676,7 +680,8 @@ static int run_tls_want_event_lifetime_regression(void) {
         &u, PENDING_NONE, 0, &idle_rx_paused, 0, 0, 0);
     if ((want & EPOLLOUT) == 0 ||
         keepalive_can_start(&u, PENDING_NONE) ||
-        !tls_write_retry_pending(&u)) {
+        !tls_write_retry_pending(&u) ||
+        !shutdown_io_pending(&u)) {
         failed = 1;
     }
 
