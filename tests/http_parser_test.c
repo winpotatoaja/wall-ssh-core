@@ -270,43 +270,68 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     };
     int failed = client_cleanup_timeout_due(&c, 4999) ||
                  !client_cleanup_timeout_due(&c, 5000);
+
+    /* Aborted opens remain governed by SSH_OPEN_HARD_TO_MS, not cleanup's
+     * shorter channel-close deadline. */
     c.abort_on_pending = 0;
     c.abort_on_open = 1;
     c.state = ST_SSH_OPENING;
     if (client_cleanup_timeout_due(&c, 4999) ||
-        !client_cleanup_timeout_due(&c, 5000)) failed = 1;
+        client_cleanup_timeout_due(&c, 5000)) failed = 1;
     c.abort_on_open = 0;
     c.state = ST_CLOSING;
     if (client_cleanup_timeout_due(&c, 4999) ||
         !client_cleanup_timeout_due(&c, 5000)) failed = 1;
 
+    /* Client death must not wait for inbound-only EAGAIN flags or a remote EOF
+     * that can never arrive after the local socket has been reset. */
+    c.state = ST_RELAY;
+    c.client_dead = 1;
+    c.hup_pending = 0;
+    c.c2s.used = 0;
+    c.need_send_eof = 1;
+    c.read_pending = 1;
+    c.write_pending = 1;
+    if (!client_dead_ready_to_close(&c)) failed = 1;
+    c.c2s.used = 1;
+    if (client_dead_ready_to_close(&c)) failed = 1;
+    c.c2s.used = 0;
+    c.hup_pending = 1;
+    if (client_dead_ready_to_close(&c)) failed = 1;
+    c.hup_pending = 0;
+    c.client_dead = 0;
+    c.need_send_eof = 0;
+    c.read_pending = 0;
+    c.write_pending = 0;
+
     g_clients = &c;
     g_opening_client = NULL;
     clear_pending_operation();
-    c.state = ST_RELAY;
     c.cleanup_deadline_ms = 0;
-    c.abort_on_pending = 0;
     c.write_pending = 1;
     c.write_waiting_window = 1;
     if (has_pending_libssh2_work_for_shutdown()) failed = 1;
     c.write_waiting_window = 0;
-    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
+    if (has_pending_libssh2_work_for_shutdown()) failed = 1;
     c.write_pending = 0;
     c.read_pending = 1;
-    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
+    if (has_pending_libssh2_work_for_shutdown()) failed = 1;
     c.read_pending = 0;
     c.need_send_eof = 1;
-    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
+    if (has_pending_libssh2_work_for_shutdown()) failed = 1;
     c.need_send_eof = 0;
     c.state = ST_CLOSING;
     c.channel = (LIBSSH2_CHANNEL *)(uintptr_t)1;
-    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
+    if (has_pending_libssh2_work_for_shutdown()) failed = 1;
     c.channel = NULL;
     c.state = ST_RELAY;
-    g_clients = NULL;
     set_pending_operation(NULL, PENDING_KEEPALIVE);
     if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
     clear_pending_operation();
+    g_opening_client = &c;
+    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
+    g_opening_client = NULL;
+    g_clients = NULL;
 
     if (failed) {
         fprintf(stderr, "[FAIL] bounded cleanup deadline and shutdown pending detection\n");
@@ -371,7 +396,7 @@ static int run_pending_channel_close_buffer_regression(void) {
         g_clients = c;
         g_client_count = 1;
         g_opening_client = NULL;
-        clear_pending_operation();
+        set_pending_operation(c, PENDING_WRITE);
         start_closing_client(-1, c);
 
         const uint8_t *c2s_read = rb_read_slice_pinned(
@@ -379,16 +404,24 @@ static int run_pending_channel_close_buffer_regression(void) {
         uint8_t *s2c_retry = rb_write_slice_pinned(
             &c->s2c, c->read_pending_tail, c->read_pending_generation, c->read_pending_len);
         if (g_clients != c || g_client_count != 1 || c->state != ST_RELAY ||
-            !c->abort_on_pending || !c->write_pending || !c->read_pending ||
+            !c->abort_on_pending || g_pending_client != c || g_pending_op != PENDING_WRITE ||
+            !c->write_pending || !c->read_pending ||
             !c2s_read || memcmp(c2s_read, "upload", 6) != 0 || s2c_retry != s2c_write) {
             failed = 1;
         }
+
+        /* Once the pinned write has completed, a leftover inbound read EAGAIN
+         * must not keep the client object or ring buffers alive. */
+        clear_pending_operation();
+        c->abort_on_pending = 0;
+        c->write_pending = 0;
+        start_closing_client(-1, c);
+        if (c->state != ST_CLOSING || c->c2s.data || c->s2c.data ||
+            c->read_pending || c->write_pending) failed = 1;
     }
 
     if (g_clients == c) {
         c->channel = NULL;
-        c->write_pending = 0;
-        c->read_pending = 0;
         remove_client(-1, c);
     } else {
         c->channel = NULL;
@@ -396,8 +429,111 @@ static int run_pending_channel_close_buffer_regression(void) {
         rb_free(&c->s2c);
         free(c);
     }
-    if (failed) { fprintf(stderr, "[FAIL] pending channel close preserves ring buffers\n"); return 1; }
-    puts("[PASS] pending channel close preserves ring buffers");
+    clear_pending_operation();
+    if (failed) { fprintf(stderr, "[FAIL] global pending write alone pins channel buffers\n"); return 1; }
+    puts("[PASS] global pending write alone pins channel buffers");
+    return 0;
+}
+
+static int run_inbound_only_channel_close_regression(void) {
+    client_conn_t *c = calloc(1, sizeof(*c));
+    if (!c) return 1;
+    c->fd = -1;
+    c->state = ST_RELAY;
+    c->channel = (LIBSSH2_CHANNEL *)(uintptr_t)1;
+
+    int failed = rb_init(&c->c2s, 64) < 0 || rb_init(&c->s2c, 64) < 0;
+    if (!failed && rb_push(&c->c2s, (const uint8_t *)"queued", 6) < 0) failed = 1;
+    if (!failed) {
+        c->read_pending = 1;
+        c->read_pending_tail = c->s2c.tail;
+        c->read_pending_generation = c->s2c.generation;
+        c->read_pending_len = 8;
+        c->write_pending = 1;
+        c->write_waiting_window = 1;
+        c->write_pending_head = c->c2s.head;
+        c->write_pending_generation = c->c2s.generation;
+        c->write_pending_len = c->c2s.used;
+
+        g_clients = c;
+        g_client_count = 1;
+        g_opening_client = NULL;
+        clear_pending_operation();
+        start_closing_client(-1, c);
+        if (c->state != ST_CLOSING || c->read_pending || c->write_pending ||
+            c->c2s.data || c->s2c.data || c->cleanup_deadline_ms <= 0 ||
+            c->abort_on_pending) failed = 1;
+    }
+
+    if (g_clients == c) {
+        c->channel = NULL;
+        remove_client(-1, c);
+    } else {
+        c->channel = NULL;
+        rb_free(&c->c2s);
+        rb_free(&c->s2c);
+        free(c);
+    }
+    clear_pending_operation();
+    g_opening_client = NULL;
+    g_clients = NULL;
+    g_client_count = 0;
+    if (failed) { fprintf(stderr, "[FAIL] inbound-only EAGAIN does not defer channel close\n"); return 1; }
+    puts("[PASS] inbound-only EAGAIN does not defer channel close");
+    return 0;
+}
+
+static int run_tls_peek_state_regression(void) {
+    upstream_ctx_t u = {
+        .eof_peek_pending = 1,
+        .eof_peek_want_events = EPOLLIN
+    };
+    int failed = !upstream_peek_retry_ready(&u, EPOLLIN) ||
+                 upstream_peek_blocks_ssh(&u);
+    u.eof_peek_want_events = EPOLLOUT;
+    if (!upstream_peek_retry_ready(&u, EPOLLOUT) ||
+        !upstream_peek_blocks_ssh(&u) ||
+        upstream_peek_retry_ready(&u, EPOLLIN)) failed = 1;
+
+    /* A libssh2 callback's WANT state is independent from the passive probe. */
+    u.ssl_want_events = EPOLLIN;
+    clear_upstream_eof_peek(&u);
+    if (u.eof_peek_pending || u.eof_peek_want_events != 0 ||
+        u.ssl_want_events != EPOLLIN) failed = 1;
+
+    u.eof_peek_pending = 1;
+    u.eof_peek_want_events = EPOLLIN;
+    u.rx_seq = 12;
+    int did_ssh_read = 0;
+    note_upstream_rx_progress(&u, 11, &did_ssh_read);
+    if (!did_ssh_read || u.eof_peek_pending ||
+        u.eof_peek_want_events != 0 || u.ssl_want_events != EPOLLIN) failed = 1;
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] TLS EOF peek is independent and WANT_READ does not block SSH pump\n");
+        return 1;
+    }
+    puts("[PASS] TLS EOF peek is independent and WANT_READ does not block SSH pump");
+    return 0;
+}
+
+static int run_http_rejection_classification_regression(void) {
+    upstream_ctx_t u = {.last_http_code = 200};
+    int failed = !upstream_http_response_rejected(&u);
+    u.last_http_code = 407;
+    if (!upstream_http_response_rejected(&u)) failed = 1;
+    u.last_http_code = 101;
+    if (!upstream_http_response_rejected(&u)) failed = 1;
+    u.tunnel_established = 1;
+    if (upstream_http_response_rejected(&u)) failed = 1;
+    u.tunnel_established = 0;
+    u.last_http_code = 0;
+    if (upstream_http_response_rejected(&u)) failed = 1;
+    if (failed) {
+        fprintf(stderr, "[FAIL] rejected non-tunnel HTTP responses are classified as proxy failures\n");
+        return 1;
+    }
+    puts("[PASS] rejected non-tunnel HTTP responses are classified as proxy failures");
     return 0;
 }
 
@@ -426,6 +562,9 @@ static int run_core_state_regressions(void) {
     failures += run_cleanup_deadline_and_shutdown_pending_regression();
     failures += run_shutdown_poll_ignores_stop_regression();
     failures += run_pending_channel_close_buffer_regression();
+    failures += run_inbound_only_channel_close_regression();
+    failures += run_tls_peek_state_regression();
+    failures += run_http_rejection_classification_regression();
     failures += run_socks_listener_address_regression();
 
     size_t parsed_hex = 0;
@@ -465,7 +604,7 @@ static int run_core_state_regressions(void) {
     failures += run_ipv6_dial_regression();
 
     upstream_ctx_t peek = {
-        .ssl_want_events = EPOLLOUT,
+        .eof_peek_want_events = EPOLLOUT,
         .eof_peek_pending = 1
     };
     if (upstream_peek_retry_ready(&peek, EPOLLIN) ||
