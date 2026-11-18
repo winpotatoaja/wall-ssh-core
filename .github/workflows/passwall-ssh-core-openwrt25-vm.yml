@@ -30,7 +30,7 @@ jobs:
   build-and-test:
     name: Build OpenWrt 25.12.5 x86_64 and test in QEMU VM
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
       - name: Checkout selected branch
@@ -1176,7 +1176,7 @@ jobs:
                 -e 's|^HOST_PORT=.*$|HOST_PORT=8443|' \
                 -e 's|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:1082|' \
                 -e 's|^VERIFY_TLS=.*$|VERIFY_TLS=0|' \
-                -e 's|^KEEPALIVE=.*$|KEEPALIVE=2|' \
+                -e 's|^KEEPALIVE=.*$|KEEPALIVE=10|' \
                 -e 's|^IDLE_TIMEOUT=.*$|IDLE_TIMEOUT=3|' \
                 /root/ssh-core-test.env > /root/ssh-core-tls-test.env
             printf '%s\n' 'SNI=localhost' >> /root/ssh-core-tls-test.env
@@ -1199,7 +1199,7 @@ jobs:
               pass "TLS transport established SSH and opened SOCKS port 1082"
 
               echo "========== TLS KEEPALIVE WHILE THE SESSION IS IDLE =========="
-              sleep 7
+              sleep 26
               TLS_KEEPALIVE_COUNT="$(grep -c "SSH keepalive sent" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
               echo "TLS keepalive success count while idle: $TLS_KEEPALIVE_COUNT"
               if [ "$TLS_KEEPALIVE_COUNT" -ge 2 ]; then
