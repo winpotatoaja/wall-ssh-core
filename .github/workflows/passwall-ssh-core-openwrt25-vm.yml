@@ -1245,10 +1245,27 @@ jobs:
                   cat "$LOGDIR/tls-second-idle-channel.log" 2>/dev/null || true
                 fi
 
-                if kill -0 "$TLS_SLOW_PID" 2>/dev/null; then
-                  pass "first TLS slow-reader channel remained active after second-channel close"
+                echo "========== TLS IDLE READ-PENDING CLIENT RST DURING ACTIVE S2C =========="
+                TLS_RST_RSS_BEFORE="$(awk '/VmRSS:/ {print $2}' "/proc/$TLS_APP_PID/status" 2>/dev/null)"
+                TLS_RST_FD_BEFORE="$(ls "/proc/$TLS_APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
+                [ -n "$TLS_RST_RSS_BEFORE" ] || TLS_RST_RSS_BEFORE=0
+                [ -n "$TLS_RST_FD_BEFORE" ] || TLS_RST_FD_BEFORE=0
+                if /root/socks-halfclose --rst-idle 1082; then
+                  pass "idle TLS channel was reset with TCP RST while another TLS S2C channel was active"
                 else
-                  fail "closing the second TLS channel interrupted the slow-reader transfer"
+                  fail "TLS idle-channel RST helper failed"
+                fi
+                sleep 2
+                TLS_RST_RSS_AFTER="$(awk '/VmRSS:/ {print $2}' "/proc/$TLS_APP_PID/status" 2>/dev/null)"
+                TLS_RST_FD_AFTER="$(ls "/proc/$TLS_APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
+                [ -n "$TLS_RST_RSS_AFTER" ] || TLS_RST_RSS_AFTER=0
+                [ -n "$TLS_RST_FD_AFTER" ] || TLS_RST_FD_AFTER=0
+                if [ "$TLS_RST_RSS_AFTER" -le $((TLS_RST_RSS_BEFORE + 16384)) ] && \
+                  [ "$TLS_RST_FD_AFTER" -le $((TLS_RST_FD_BEFORE + 4)) ] && \
+                  kill -0 "$TLS_APP_PID" 2>/dev/null && kill -0 "$TLS_SLOW_PID" 2>/dev/null; then
+                  pass "TLS idle RST released its client resources without interrupting active S2C (RSS $TLS_RST_RSS_BEFORE->$TLS_RST_RSS_AFTER KiB; FD $TLS_RST_FD_BEFORE->$TLS_RST_FD_AFTER)"
+                else
+                  fail "TLS idle RST left leaked resources or interrupted the active S2C transfer"
                 fi
 
                 TLS_SLOW_RC=0
