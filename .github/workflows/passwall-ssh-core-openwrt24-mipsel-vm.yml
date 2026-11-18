@@ -1,0 +1,24 @@
+name: Passwall SSH core - OpenWrt 24.10.7 mipsel
+on:
+  push:
+    branches: [fix/pending-cleanup-bounded-shutdown]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  sdk:
+    if: ${{ contains(github.event.head_commit.message, '[mips-stage=sdk]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - run: echo "MIPS SDK stage placeholder"
+  vm:
+    if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - run: echo "MIPS VM stage placeholder"
