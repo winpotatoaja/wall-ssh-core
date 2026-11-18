@@ -3406,8 +3406,15 @@ int main(int argc, char **argv) {
         log_red("libssh2_session_init gagal");
         goto fail_cleanup;
     }
+#if LIBSSH2_VERSION_NUM >= 0x010b01
+    /* libssh2 1.11.1+ has the typed callback API. */
     libssh2_session_callback_set2(session, LIBSSH2_CALLBACK_RECV, (libssh2_cb_generic *)ssh_recv_cb);
     libssh2_session_callback_set2(session, LIBSSH2_CALLBACK_SEND, (libssh2_cb_generic *)ssh_send_cb);
+#else
+    /* OpenWrt 24.10 ships libssh2 1.11.0, which still uses the legacy API. */
+    libssh2_session_callback_set(session, LIBSSH2_CALLBACK_RECV, (void *)ssh_recv_cb);
+    libssh2_session_callback_set(session, LIBSSH2_CALLBACK_SEND, (void *)ssh_send_cb);
+#endif
     libssh2_session_banner_set(session, SSH_CLIENT_BANNER);
     libssh2_session_flag(session, LIBSSH2_FLAG_SIGPIPE, 0);
     libssh2_session_set_blocking(session, 0);
