@@ -914,10 +914,120 @@ static int run_socks_listener_address_regression(void) {
     return 0;
 }
 
+static int run_tcp_dial_exclusion_regression(void) {
+    int listeners[2] = {-1, -1};
+    struct sockaddr_in addresses[2];
+    socklen_t address_lengths[2] = {sizeof(addresses[0]), sizeof(addresses[1])};
+    struct addrinfo entries[2];
+    int client = -1, accepted = -1, failed = 0;
+    char excluded_address[INET6_ADDRSTRLEN + 24] = {0};
+    char expected_address[INET6_ADDRSTRLEN + 24] = {0};
+    char selected_address[INET6_ADDRSTRLEN + 24] = {0};
+
+    memset(addresses, 0, sizeof(addresses));
+    memset(entries, 0, sizeof(entries));
+    for (int i = 0; i < 2; i++) {
+        listeners[i] = socket(AF_INET, SOCK_STREAM, 0);
+        if (listeners[i] < 0) { failed = 1; break; }
+        int one = 1;
+        (void)setsockopt(listeners[i], SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        addresses[i].sin_family = AF_INET;
+        addresses[i].sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        if (bind(listeners[i], (struct sockaddr *)&addresses[i], sizeof(addresses[i])) < 0 ||
+            listen(listeners[i], 1) < 0 ||
+            getsockname(listeners[i], (struct sockaddr *)&addresses[i],
+                        &address_lengths[i]) < 0 ||
+            set_nonblock(listeners[i], 1) < 0) {
+            failed = 1;
+            break;
+        }
+        entries[i].ai_family = AF_INET;
+        entries[i].ai_socktype = SOCK_STREAM;
+        entries[i].ai_protocol = IPPROTO_TCP;
+        entries[i].ai_addr = (struct sockaddr *)&addresses[i];
+        entries[i].ai_addrlen = sizeof(addresses[i]);
+        entries[i].ai_next = i == 0 ? &entries[1] : NULL;
+    }
+
+    if (!failed) {
+        tcp_format_address((struct sockaddr *)&addresses[0],
+                           excluded_address, sizeof(excluded_address));
+        tcp_format_address((struct sockaddr *)&addresses[1],
+                           expected_address, sizeof(expected_address));
+        const char *excluded[] = {excluded_address};
+        int old_debug = g_tcp_dial_debug;
+        g_tcp_dial_debug = 0;
+        int last_error = 0;
+        client = tcp_connect_addrinfo_list(
+            &entries[0], AF_INET, now_ms() + 2000,
+            excluded, 1, selected_address, sizeof(selected_address), &last_error);
+        g_tcp_dial_debug = old_debug;
+
+        if (client < 0 || strcmp(selected_address, expected_address) != 0) {
+            failed = 1;
+        } else {
+            accepted = accept(listeners[1], NULL, NULL);
+            if (accepted < 0) failed = 1;
+        }
+
+        int unwanted = accept(listeners[0], NULL, NULL);
+        if (unwanted >= 0) {
+            close(unwanted);
+            failed = 1;
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            failed = 1;
+        }
+    }
+
+    if (failed)
+        fprintf(stderr, "[FAIL] TCP dial excludes a TLS-failed endpoint and selects an alternate address\n");
+    else
+        puts("[PASS] TCP dial excludes a TLS-failed endpoint and selects an alternate address");
+
+    if (accepted >= 0) close(accepted);
+    if (client >= 0) close(client);
+    for (int i = 0; i < 2; i++) if (listeners[i] >= 0) close(listeners[i]);
+    return failed;
+}
+
+static int run_poll_hup_regression(void) {
+    int sv[2] = {-1, -1};
+    int failed = 0;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        fprintf(stderr, "[FAIL] poll HUP regression: socketpair: %s\n", strerror(errno));
+        return 1;
+    }
+
+    if (send(sv[1], "x", 1, MSG_NOSIGNAL) != 1 ||
+        shutdown(sv[1], SHUT_WR) < 0) {
+        failed = 1;
+    } else {
+        int rc = poll_fd_until(sv[0], POLLIN, now_ms() + 500);
+        char byte = 0;
+        ssize_t n = recv(sv[0], &byte, 1, 0);
+        int eof_rc = poll_fd_until(sv[0], POLLIN, now_ms() + 500);
+        char eof_byte = 0;
+        ssize_t eof_n = recv(sv[0], &eof_byte, 1, 0);
+        if (rc != 1 || n != 1 || byte != 'x' ||
+            eof_rc != 1 || eof_n != 0) failed = 1;
+    }
+
+    if (failed)
+        fprintf(stderr, "[FAIL] poll HUP is surfaced as readable EOF without losing buffered data\n");
+    else
+        puts("[PASS] poll HUP is surfaced as readable EOF without losing buffered data");
+
+    close(sv[0]);
+    close(sv[1]);
+    return failed;
+}
+
 static int run_core_state_regressions(void) {
     int failures = 0;
     failures += run_ipv4_dial_regression();
     failures += run_ipv6_dial_regression();
+    failures += run_tcp_dial_exclusion_regression();
+    failures += run_poll_hup_regression();
     failures += run_ring_buffer_regressions();
     failures += run_eof_drain_regression();
     failures += run_graceful_hup_preserves_c2s_regression();

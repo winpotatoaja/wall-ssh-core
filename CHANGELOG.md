@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Retry a failed or stalled TLS transport on other DNS-resolved upstream
+  addresses. R13 selected the first TCP-connected CloudFront edge and did not
+  try another address if that endpoint then stalled during TLS. The retry
+  excludes the failed endpoint and preserves the system resolver and kernel
+  routing behavior; certificate/protocol errors remain non-retryable.
+- Clear the OpenSSL error queue and errno before SSL_connect/SSL_read/SSL_write
+  so SSL_get_error() classifies nonblocking results reliably. Distinguish
+  read-side POLLHUP/EOF from write readiness and propagate socket SO_ERROR.
+- Add regressions for failed-endpoint exclusion and poll HUP/EOF handling.
+- Bump the OpenWrt package release to r15.
+
+
 - Add temporary OpenSSL TLS handshake diagnostics for the physical-router
   failure: report OpenSSL version, nonblocking socket state, SNI/ALPN, sent
   and received handshake messages, TLS alerts, SSL_connect state transitions,

@@ -45,6 +45,7 @@
 #define HANDSHAKE_TIMEOUT_MS   15000
 #define TCP_CONNECT_FAMILY_TIMEOUT_MS 4000
 #define TCP_CONNECT_MAX_ADDRS 32
+#define TLS_CONNECT_MAX_ADDR_ATTEMPTS 4
 
 static int (*g_tcp_getaddrinfo)(const char *, const char *, const struct addrinfo *, struct addrinfo **) = getaddrinfo;
 static int g_tcp_dial_debug = 1;
@@ -1118,6 +1119,13 @@ static long long now_ms(void) {
     return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
 }
 
+/* OpenSSL requires a clean per-thread error queue before SSL I/O so that
+ * SSL_get_error() can classify WANT_READ/WANT_WRITE and syscall failures. */
+static void ssl_prepare_io(void) {
+    ERR_clear_error();
+    errno = 0;
+}
+
 static int poll_fd_until(int fd, short events, long long deadline_ms) {
     while (!g_stop) {
         long long rem = deadline_ms - now_ms();
@@ -1130,8 +1138,28 @@ static int poll_fd_until(int fd, short events, long long deadline_ms) {
             return -1;
         }
         if (rc == 0) continue;
-        if (pfd.revents & (POLLERR | POLLNVAL)) return -1;
-        return 1;
+        if (pfd.revents & POLLNVAL) {
+            errno = EBADF;
+            return -1;
+        }
+        if (pfd.revents & POLLERR) {
+            int socket_error = 0;
+            socklen_t error_len = sizeof(socket_error);
+            if (getsockopt(fd, SOL_SOCKET, SO_ERROR,
+                           &socket_error, &error_len) < 0) return -1;
+            errno = socket_error ? socket_error : EIO;
+            return -1;
+        }
+        if (pfd.revents & POLLHUP) {
+            if (events & POLLIN) return 1;
+            errno = EPIPE;
+            return -1;
+        }
+        if (pfd.revents & events) return 1;
+        if (pfd.revents != 0) {
+            errno = EIO;
+            return -1;
+        }
     }
     return -1;
 }
@@ -1229,7 +1257,9 @@ static const char *tls_ssl_error_name(int err) {
     }
 }
 
-static int tls_connect_nb(upstream_ctx_t *u, int timeout_ms) {
+static int tls_connect_nb(upstream_ctx_t *u, int timeout_ms,
+                           int *retryable_out) {
+    if (retryable_out) *retryable_out = 0;
     long long started = now_ms();
     long long deadline = started + timeout_ms;
     char last_state[128] = "";
@@ -1238,7 +1268,7 @@ static int tls_connect_nb(upstream_ctx_t *u, int timeout_ms) {
 
     while (!g_stop) {
         attempts++;
-        errno = 0;
+        ssl_prepare_io();
         int rc = SSL_connect(u->ssl);
         int call_errno = errno;
         if (rc == 1) {
@@ -1263,6 +1293,13 @@ static int tls_connect_nb(upstream_ctx_t *u, int timeout_ms) {
         if (err == SSL_ERROR_WANT_READ) ev = POLLIN;
         else if (err == SSL_ERROR_WANT_WRITE) ev = POLLOUT;
         else {
+            /* Protocol/certificate errors are configuration failures, not
+             * reasons to silently try another endpoint. Retry transport EOF. */
+            if (retryable_out &&
+                (err == SSL_ERROR_SYSCALL || err == SSL_ERROR_ZERO_RETURN) &&
+                call_errno != EBADF && call_errno != EINVAL) {
+                *retryable_out = 1;
+            }
             unsigned long ecode = ERR_get_error();
             const char *reason = ecode ? ERR_reason_error_string(ecode) : NULL;
             log_red("[TLS-DIAG] handshake stopped error=%s state=%s openssl_reason=%s errno=%d (%s)",
@@ -1287,6 +1324,14 @@ static int tls_connect_nb(upstream_ctx_t *u, int timeout_ms) {
                     now_ms() - started, timeout_ms, last_state,
                     poll_errno, socket_error,
                     socket_error ? strerror(socket_error) : "none");
+            if (retryable_out &&
+                (pr == 0 ||
+                 (pr < 0 && poll_errno != 0 &&
+                  poll_errno != EBADF && poll_errno != EINVAL) ||
+                 (socket_error != 0 &&
+                  socket_error != EBADF && socket_error != EINVAL))) {
+                *retryable_out = 1;
+            }
             log_red("TLS handshake %s after %lld ms",
                     pr == 0 ? "timeout" : "error", now_ms() - started);
             return -1;
@@ -1305,6 +1350,7 @@ static int raw_write_all_nb(upstream_ctx_t *u, const void *data, size_t len, int
     while (left > 0 && !g_stop) {
         if (u->ssl) {
             int chunk = (int)(left > 16384U ? 16384U : left);
+            ssl_prepare_io();
             int n = SSL_write(u->ssl, p, chunk);
             if (n > 0) {
                 u->ssl_want_events = 0;
@@ -1360,6 +1406,7 @@ static ssize_t pre_read_more(upstream_ctx_t *u) {
     size_t space = sizeof(u->pre_buf) - u->pre_len;
 
     if (u->ssl) {
+        ssl_prepare_io();
         int n = SSL_read(u->ssl, u->pre_buf + u->pre_len, (int)space);
         if (n > 0) {
             u->ssl_want_events = 0;
@@ -1581,6 +1628,7 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
 
     if (u->ssl) {
         int rlen = (int)(length > 32768U ? 32768U : length);
+        ssl_prepare_io();
         int r = SSL_read(u->ssl, buffer, rlen);
         if (r > 0) {
             u->ssl_want_events = 0;
@@ -1621,6 +1669,7 @@ static ssize_t ssh_send_cb(libssh2_socket_t sock, const void *buffer, size_t len
 
     if (u->ssl) {
         int wlen = (int)(length > 32768U ? 32768U : length);
+        ssl_prepare_io();
         int r = SSL_write(u->ssl, buffer, wlen);
         if (r > 0) {
             u->ssl_want_events = 0;
@@ -1682,6 +1731,7 @@ static int wait_ssh_nb(LIBSSH2_SESSION *session, upstream_ctx_t *u, long long de
  * ============================================================ */
 typedef struct {
     int fd;
+    const struct addrinfo *ai;
     char address[INET6_ADDRSTRLEN + 24];
 } tcp_connect_candidate_t;
 
@@ -1714,8 +1764,21 @@ static void close_connect_fd(int *fd) {
     (void)close(old_fd);
 }
 
+static int tcp_address_is_excluded(const char *address,
+                                   const char *const *excluded_addresses,
+                                   size_t excluded_count) {
+    if (!address || !excluded_addresses) return 0;
+    for (size_t i = 0; i < excluded_count; i++) {
+        if (excluded_addresses[i] &&
+            strcmp(address, excluded_addresses[i]) == 0) return 1;
+    }
+    return 0;
+}
+
 static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
                                      long long deadline_ms,
+                                     const char *const *excluded_addresses,
+                                     size_t excluded_count,
                                      char *connected_address,
                                      size_t connected_address_size,
                                      int *last_errno_out) {
@@ -1727,6 +1790,7 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
 
     for (size_t i = 0; i < TCP_CONNECT_MAX_ADDRS; i++) {
         candidates[i].fd = -1;
+        candidates[i].ai = NULL;
         candidates[i].address[0] = '\0';
         pfds[i].fd = -1;
         pfds[i].events = POLLOUT;
@@ -1741,8 +1805,18 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
                            tcp_family_name(family), TCP_CONNECT_MAX_ADDRS);
             break;
         }
-        tcp_format_address(rp->ai_addr, candidates[count].address,
-                           sizeof(candidates[count].address));
+
+        char address[INET6_ADDRSTRLEN + 24] = {0};
+        tcp_format_address(rp->ai_addr, address, sizeof(address));
+        if (tcp_address_is_excluded(address, excluded_addresses, excluded_count)) {
+            if (g_tcp_dial_debug)
+                log_yellow("[TCP-DIAL] skipping previously failed TLS endpoint %s", address);
+            continue;
+        }
+
+        candidates[count].ai = rp;
+        snprintf(candidates[count].address, sizeof(candidates[count].address),
+                 "%s", address);
         count++;
     }
 
@@ -1750,6 +1824,7 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
         last_error = EADDRNOTAVAIL;
         if (last_errno_out) *last_errno_out = last_error;
         errno = last_error;
+        if (connected_address && connected_address_size) connected_address[0] = '\0';
         return -1;
     }
 
@@ -1757,17 +1832,14 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
         log_blue("[TCP-DIAL] racing %zu %s address(es), timeout=%d ms",
                  count, tcp_family_name(family), TCP_CONNECT_FAMILY_TIMEOUT_MS);
 
-    size_t index = 0;
-    for (const struct addrinfo *rp = res; rp && index < count; rp = rp->ai_next) {
-        if (rp->ai_family != family) continue;
-
+    for (size_t index = 0; index < count; index++) {
+        const struct addrinfo *rp = candidates[index].ai;
         const char *target = candidates[index].address;
         int fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
         if (fd < 0) {
             last_error = errno;
             log_yellow("[TCP-DIAL] socket %s failed: %s (%d)",
                        target, strerror(last_error), last_error);
-            index++;
             continue;
         }
 
@@ -1777,7 +1849,6 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
             log_yellow("[TCP-DIAL] nonblock %s failed: %s (%d)",
                        target, strerror(last_error), last_error);
             close(fd);
-            index++;
             continue;
         }
 
@@ -1804,16 +1875,12 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
                        target, strerror(last_error), last_error);
             close(fd);
         }
-        index++;
     }
 
     if (active > 0) {
         for (;;) {
             long long remaining = deadline_ms - now_ms();
-            if (remaining <= 0) {
-                last_error = ETIMEDOUT;
-                break;
-            }
+            if (remaining <= 0) { last_error = ETIMEDOUT; break; }
             int timeout_ms = remaining > INT_MAX ? INT_MAX : (int)remaining;
             int rc = poll(pfds, (nfds_t)count, timeout_ms);
             if (rc < 0) {
@@ -1821,10 +1888,7 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
                 last_error = errno;
                 break;
             }
-            if (rc == 0) {
-                last_error = ETIMEDOUT;
-                break;
-            }
+            if (rc == 0) { last_error = ETIMEDOUT; break; }
 
             for (size_t i = 0; i < count; i++) {
                 if (candidates[i].fd < 0 || pfds[i].revents == 0) continue;
@@ -1875,14 +1939,22 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
 
     if (last_errno_out) *last_errno_out = last_error;
     errno = last_error;
+    if (connected_address && connected_address_size) connected_address[0] = '\0';
     return -1;
 }
 
-static int tcp_connect_host(const char *host, const char *port) {
+static int tcp_connect_host_excluding(const char *host, const char *port,
+                                      const char *const *excluded_addresses,
+                                      size_t excluded_count,
+                                      char *connected_address_out,
+                                      size_t connected_address_out_size) {
     const int families[] = {AF_INET, AF_INET6};
     const char *family_names[] = {"A/IPv4", "AAAA/IPv6"};
     int last_error = EHOSTUNREACH;
     long long total_started = now_ms();
+
+    if (connected_address_out && connected_address_out_size)
+        connected_address_out[0] = '\0';
 
     for (size_t family_index = 0; family_index < 2 && !g_stop; family_index++) {
         int family = families[family_index];
@@ -1910,18 +1982,13 @@ static int tcp_connect_host(const char *host, const char *port) {
             log_blue("[TCP-DIAL] DNS %s returned %zu address(es) for %s:%s in %lld ms",
                      family_names[family_index], addresses, host, port, dns_elapsed);
 
-        if (addresses == 0) {
-            last_error = EADDRNOTAVAIL;
-            freeaddrinfo(res);
-            continue;
-        }
-
-        char connected_address[INET6_ADDRSTRLEN + 24] = {0};
+        char family_connected_address[INET6_ADDRSTRLEN + 24] = {0};
         int family_error = 0;
         long long connect_started = now_ms();
         int fd = tcp_connect_addrinfo_list(
             res, family, connect_started + TCP_CONNECT_FAMILY_TIMEOUT_MS,
-            connected_address, sizeof(connected_address), &family_error);
+            excluded_addresses, excluded_count,
+            family_connected_address, sizeof(family_connected_address), &family_error);
         long long connect_elapsed = now_ms() - connect_started;
         freeaddrinfo(res);
 
@@ -1930,12 +1997,14 @@ static int tcp_connect_host(const char *host, const char *port) {
             struct sockaddr_storage local_sa;
             socklen_t local_len = sizeof(local_sa);
             if (getsockname(fd, (struct sockaddr *)&local_sa, &local_len) == 0)
-                tcp_format_address((struct sockaddr *)&local_sa,
-                                   local_address, sizeof(local_address));
+                tcp_format_address((struct sockaddr *)&local_sa, local_address, sizeof(local_address));
+            if (connected_address_out && connected_address_out_size)
+                snprintf(connected_address_out, connected_address_out_size, "%s",
+                         family_connected_address);
             if (g_tcp_dial_debug)
                 log_blue("[TCP-DIAL] connected family=%s remote=%s local=%s connect=%lld ms total=%lld ms",
                          family_names[family_index],
-                         connected_address[0] ? connected_address : host,
+                         family_connected_address[0] ? family_connected_address : host,
                          local_address, connect_elapsed, now_ms() - total_started);
             return fd;
         }
@@ -1950,6 +2019,10 @@ static int tcp_connect_host(const char *host, const char *port) {
     log_red("[TCP-DIAL] failed to connect %s:%s after %lld ms; final error: %s (%d)",
             host, port, now_ms() - total_started, strerror(last_error), last_error);
     return -1;
+}
+
+static int tcp_connect_host(const char *host, const char *port) {
+    return tcp_connect_host_excluding(host, port, NULL, 0, NULL, 0);
 }
 
 /* ============================================================
@@ -3552,7 +3625,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    int upstream_fd = tcp_connect_host(dial_host, dial_port);
+    char upstream_address[INET6_ADDRSTRLEN + 24] = {0};
+    int upstream_fd = tcp_connect_host_excluding(
+        dial_host, dial_port, NULL, 0, upstream_address, sizeof(upstream_address));
     if (upstream_fd < 0) {
         log_red("Koneksi TCP upstream gagal ke %s:%s", dial_host, dial_port);
         write_marker(NEED_RESTART_FILE, "TCP connect failed");
@@ -3591,41 +3666,92 @@ int main(int argc, char **argv) {
             SSL_CTX_set_verify(ssl_ctx, SSL_VERIFY_PEER, NULL);
         }
 
-        uctx.ssl = SSL_new(ssl_ctx);
-        if (!uctx.ssl) {
-            log_red("SSL_new gagal");
-            write_marker(NEED_RESTART_FILE, "SSL_new failed");
-            goto fail_cleanup;
-        }
         const char *sni = cfg.sni[0] ? cfg.sni : cfg.host;
-        if (SSL_set_tlsext_host_name(uctx.ssl, sni) != 1) {
-            log_red("SSL_set_tlsext_host_name gagal");
-            write_marker(NEED_RESTART_FILE, "TLS SNI setup failed");
-            goto fail_cleanup;
-        }
-        if (cfg.verify_tls && SSL_set1_host(uctx.ssl, sni) != 1) {
-            log_red("SSL_set1_host gagal untuk %s", sni);
-            write_marker(NEED_RESTART_FILE, "TLS hostname verify setup failed");
-            goto fail_cleanup;
-        }
-        if (SSL_set_fd(uctx.ssl, upstream_fd) != 1) {
-            unsigned long ecode = ERR_get_error();
-            log_red("[TLS-DIAG] SSL_set_fd failed: %s",
-                    ecode ? ERR_reason_error_string(ecode) : "unknown OpenSSL error");
-            write_marker(NEED_RESTART_FILE, "TLS socket attach failed");
-            goto fail_cleanup;
-        }
-        int socket_flags = fcntl(upstream_fd, F_GETFL, 0);
-        log_blue("[TLS-DIAG] OpenSSL=%s fd=%d nonblocking=%s verify=%d SNI=%s ALPN=http/1.1",
-                 OpenSSL_version(OPENSSL_VERSION), upstream_fd,
-                 socket_flags >= 0 && (socket_flags & O_NONBLOCK) ? "yes" : "no",
-                 cfg.verify_tls, sni);
+        char failed_tls_addresses[TLS_CONNECT_MAX_ADDR_ATTEMPTS][INET6_ADDRSTRLEN + 24];
+        const char *excluded_tls_addresses[TLS_CONNECT_MAX_ADDR_ATTEMPTS];
+        size_t excluded_tls_count = 0;
+        size_t tls_attempt = 0;
 
-        if (tls_connect_nb(&uctx, HANDSHAKE_TIMEOUT_MS) < 0) {
-            write_marker(NEED_RESTART_FILE, "TLS handshake failed");
-            goto fail_cleanup;
+        for (;;) {
+            uctx.ssl = SSL_new(ssl_ctx);
+            if (!uctx.ssl) {
+                log_red("SSL_new gagal");
+                write_marker(NEED_RESTART_FILE, "SSL_new failed");
+                goto fail_cleanup;
+            }
+            uctx.ssl_want_events = 0;
+
+            if (SSL_set_tlsext_host_name(uctx.ssl, sni) != 1) {
+                log_red("SSL_set_tlsext_host_name gagal");
+                write_marker(NEED_RESTART_FILE, "TLS SNI setup failed");
+                goto fail_cleanup;
+            }
+            if (cfg.verify_tls && SSL_set1_host(uctx.ssl, sni) != 1) {
+                log_red("SSL_set1_host gagal untuk %s", sni);
+                write_marker(NEED_RESTART_FILE, "TLS hostname verify setup failed");
+                goto fail_cleanup;
+            }
+            if (SSL_set_fd(uctx.ssl, upstream_fd) != 1) {
+                unsigned long ecode = ERR_get_error();
+                log_red("[TLS-DIAG] SSL_set_fd failed: %s",
+                        ecode ? ERR_reason_error_string(ecode) : "unknown OpenSSL error");
+                write_marker(NEED_RESTART_FILE, "TLS socket attach failed");
+                goto fail_cleanup;
+            }
+
+            int socket_flags = fcntl(upstream_fd, F_GETFL, 0);
+            log_blue("[TLS-DIAG] OpenSSL=%s fd=%d nonblocking=%s verify=%d SNI=%s ALPN=http/1.1 address=%s attempt=%zu/%d",
+                     OpenSSL_version(OPENSSL_VERSION), upstream_fd,
+                     socket_flags >= 0 && (socket_flags & O_NONBLOCK) ? "yes" : "no",
+                     cfg.verify_tls, sni, upstream_address,
+                     tls_attempt + 1, TLS_CONNECT_MAX_ADDR_ATTEMPTS);
+
+            int retryable_tls_failure = 0;
+            if (tls_connect_nb(&uctx, HANDSHAKE_TIMEOUT_MS,
+                               &retryable_tls_failure) == 0) {
+                break;
+            }
+
+            SSL_free(uctx.ssl);
+            uctx.ssl = NULL;
+            close(upstream_fd);
+            upstream_fd = -1;
+            uctx.fd = -1;
+
+            if (!retryable_tls_failure ||
+                tls_attempt + 1 >= TLS_CONNECT_MAX_ADDR_ATTEMPTS) {
+                write_marker(NEED_RESTART_FILE, "TLS handshake failed");
+                goto fail_cleanup;
+            }
+
+            snprintf(failed_tls_addresses[excluded_tls_count],
+                     sizeof(failed_tls_addresses[excluded_tls_count]), "%s",
+                     upstream_address);
+            excluded_tls_addresses[excluded_tls_count] =
+                failed_tls_addresses[excluded_tls_count];
+            excluded_tls_count++;
+            tls_attempt++;
+
+            log_yellow("[TLS-DIAG] TLS transport failed at %s; trying another resolved address",
+                       failed_tls_addresses[excluded_tls_count - 1]);
+
+            upstream_fd = tcp_connect_host_excluding(
+                dial_host, dial_port, excluded_tls_addresses, excluded_tls_count,
+                upstream_address, sizeof(upstream_address));
+            if (upstream_fd < 0) {
+                log_red("[TLS-DIAG] no alternate upstream address available after TLS failure");
+                write_marker(NEED_RESTART_FILE,
+                             "TLS handshake failed; no alternate address");
+                goto fail_cleanup;
+            }
+
+            uctx.fd = upstream_fd;
+            uctx.last_activity = time(NULL);
         }
-        log_blue("TLS Connected: %s (%s)", SSL_get_version(uctx.ssl), SSL_get_cipher_name(uctx.ssl));
+
+        log_blue("TLS Connected: %s (%s) remote=%s attempts=%zu",
+                 SSL_get_version(uctx.ssl), SSL_get_cipher_name(uctx.ssl),
+                 upstream_address, tls_attempt + 1);
     }
 
     int has_embedded_banner = 0;
