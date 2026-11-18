@@ -99,6 +99,9 @@ typedef struct {
     time_t   last_activity;
 } upstream_ctx_t;
 
+/* Used by the early TLS delay/drain helper and defined with relay state helpers. */
+static int tls_write_retry_pending(const upstream_ctx_t *u);
+
 typedef enum {
     ST_SOCKS_GREETING = 0,
     ST_SOCKS_REQUEST,
@@ -1273,7 +1276,7 @@ static void delay_wait_and_drain(upstream_ctx_t *u, int delay_ms) {
         if (rem <= 0) break;
         int to = (rem > DELAY_WAIT_POLL_MAX_MS) ? DELAY_WAIT_POLL_MAX_MS : (int)rem;
         short want = POLLIN;
-        if tls_write_retry_pending(u) want = POLLOUT;
+        if (tls_write_retry_pending(u)) want = POLLOUT;
         if (u->pre_len >= sizeof(u->pre_buf)) want = 0;
         struct pollfd pfd = { .fd = u->fd, .events = want };
         int rc = poll(&pfd, (nfds_t)(want ? 1 : 0), to);
@@ -2379,7 +2382,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         int rc = libssh2_keepalive_send(session, &next_sec);
         if (rc == 0) {
             u->last_activity = time(NULL);
-            log_blue("SSH keepalive sent");
+            if (g_log_backpressure) log_blue("SSH keepalive sent");
             clear_pending_operation();
             return 1;
         }
@@ -3725,7 +3728,7 @@ int main(int argc, char **argv) {
             int ka_rc = libssh2_keepalive_send(session, &next_sec);
             if (ka_rc == 0) {
                 uctx.last_activity = now_sec;
-                log_blue("SSH keepalive sent");
+                if (g_log_backpressure) log_blue("SSH keepalive sent");
             } else if (ka_rc == LIBSSH2_ERROR_EAGAIN) {
                 int ka_dirs = libssh2_session_block_directions(session);
                 agg_dirs |= ka_dirs;
