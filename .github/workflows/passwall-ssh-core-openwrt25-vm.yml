@@ -2,6 +2,7 @@ name: Passwall SSH core - OpenWrt 25.12.5 staged pipeline
 run-name: ${{ format('Passwall SSH Core / {0}', inputs.stage || (contains(github.event.head_commit.message, '[stage=vm]') && 'vm') || (contains(github.event.head_commit.message, '[stage=sdk]') && 'sdk') || 'parser') }}
 
 on:
+  # Push commits marked [stage=parser], [stage=sdk], or [stage=vm] run one stage at a time.
   push:
     branches:
       - fix/pending-cleanup-bounded-shutdown
