@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Distinguish an idle TLS `SSL_read()` WANT_READ from a live serialized TLS
+  operation. Stale inbound-only readiness no longer permanently suppresses
+  SSH keepalive, forces upstream EPOLLIN through S2C backpressure pauses, or
+  causes graceful SSH/TLS cleanup to be skipped at shutdown. WANT_WRITE and
+  WANT_READ belonging to a pending serialized libssh2 operation remain armed.
+- Add native regressions for idle TLS WANT_READ, keepalive eligibility,
+  shutdown gating, pending SSL-write WANT_READ retries, writable TLS retries,
+  and EPOLLIN pause/re-arm behavior. Log successful SSH keepalives so the
+  manual TLS idle test can verify that keepalives were actually transmitted.
+- Extend the manual OpenWrt VM TLS test with idle keepalive verification and a
+  two-channel case: saturate one TLS S2C channel with a rate-limited reader,
+  close a second idle channel, then verify the slow transfer's exact length
+  and SHA-256 and confirm its S2C buffer drains.
+- Bump the OpenWrt package release to r11.
+
+
 - Allow channel cleanup after inbound-only channel-read EAGAIN and zero-window
   write waits. Retain buffers for active channel writes even when a TLS callback
   reports WANT_READ, and serialize pending send-EOF operations before retry.
