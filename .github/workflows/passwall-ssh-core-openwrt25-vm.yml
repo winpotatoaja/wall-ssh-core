@@ -1276,16 +1276,22 @@ jobs:
           set -euo pipefail
           BOTH_HALFCLOSE_SEEN=0
           for attempt in $(seq 1 10); do
-            if grep -qF "[HALFCLOSE] client FIN observed after complete request body" /tmp/ssh-core-http-server.log &&
-              grep -qF "[HALFCLOSE] server FIN path received exact client trailer" /tmp/ssh-core-http-server.log &&
-              grep -qF "[HALFCLOSE-LARGE] PASS received exact 8388608-byte upload SHA-256=" /tmp/ssh-core-http-server.log; then
+            CLIENT_FIN_COUNT="$(grep -cF "[HALFCLOSE] client FIN observed after complete request body" /tmp/ssh-core-http-server.log 2>/dev/null || true)"
+            SERVER_FIN_COUNT="$(grep -cF "[HALFCLOSE] server FIN path received exact client trailer" /tmp/ssh-core-http-server.log 2>/dev/null || true)"
+            LARGE_UPLOAD_COUNT="$(grep -cF "[HALFCLOSE-LARGE] PASS received exact 8388608-byte upload SHA-256=" /tmp/ssh-core-http-server.log 2>/dev/null || true)"
+            if [ "$CLIENT_FIN_COUNT" -ge 2 ] &&
+              [ "$SERVER_FIN_COUNT" -ge 2 ] &&
+              [ "$LARGE_UPLOAD_COUNT" -ge 2 ]; then
               BOTH_HALFCLOSE_SEEN=1
               break
             fi
             sleep 1
           done
+          echo "client-FIN-first observations: $CLIENT_FIN_COUNT"
+          echo "server-FIN-first observations: $SERVER_FIN_COUNT"
+          echo "exact 8 MiB post-EOF uploads: $LARGE_UPLOAD_COUNT"
           test "$BOTH_HALFCLOSE_SEEN" -eq 1
-          echo "Both half-close FIN directions and exact 8 MiB upload after remote EOF were verified by the host HTTP fixture."
+          echo "TCP and TLS half-close FIN directions and both exact 8 MiB post-EOF uploads were verified by the host HTTP fixture."
 
       - name: Collect OpenWrt guest logs and build manifests
         if: always() && inputs.stage == 'vm'
