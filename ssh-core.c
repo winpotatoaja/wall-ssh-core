@@ -49,7 +49,7 @@
 #define SSH_OPEN_SOFT_TO_MS    15000
 #define SSH_OPEN_HARD_TO_MS    30000
 #define SSH_CHANNEL_CLEANUP_TIMEOUT_MS 10000
-#define TLS_SHUTDOWN_TIMEOUT_MS 2500
+#define SHUTDOWN_IO_TIMEOUT_MS 2500
 #ifndef DELAY_WAIT_POLL_MAX_MS
 #define DELAY_WAIT_POLL_MAX_MS 60000
 #endif
@@ -3683,8 +3683,10 @@ int main(int argc, char **argv) {
         update_epoll(epfd, upstream_fd, &g_upstream_tag, &upstream_ev, want_up);
     }
 
-    if (!g_skip_libssh2_cleanup && has_pending_libssh2_work_for_shutdown()) {
-        log_yellow("A libssh2 operation is still pending at process shutdown; skipping further libssh2 I/O");
+    if (!g_skip_libssh2_cleanup &&
+        (uctx.eof_peek_pending || uctx.ssl_want_events != 0 ||
+         has_pending_libssh2_work_for_shutdown())) {
+        log_yellow("A libssh2/OpenSSL operation is still pending at process shutdown; skipping further transport I/O");
         g_skip_libssh2_cleanup = 1;
     }
     while (g_clients) {
@@ -3700,7 +3702,7 @@ int main(int argc, char **argv) {
         int disconnect_rc = 0;
         if (exit_code == 0) {
             disconnect_rc = session_disconnect_with_deadline(
-                session, upstream_fd, now_ms() + TLS_SHUTDOWN_TIMEOUT_MS);
+                session, upstream_fd, now_ms() + SHUTDOWN_IO_TIMEOUT_MS);
             if (disconnect_rc == LIBSSH2_ERROR_EAGAIN) {
                 log_yellow("SSH disconnect remained pending after deadline; skipping session_free and TLS shutdown");
                 g_skip_libssh2_cleanup = 1;
@@ -3710,7 +3712,7 @@ int main(int argc, char **argv) {
         }
         if (!g_skip_libssh2_cleanup) {
             int free_rc = session_free_with_deadline(
-                &session, upstream_fd, now_ms() + TLS_SHUTDOWN_TIMEOUT_MS);
+                &session, upstream_fd, now_ms() + SHUTDOWN_IO_TIMEOUT_MS);
             if (free_rc == LIBSSH2_ERROR_EAGAIN) {
                 log_yellow("Session cleanup remained pending after deadline; skipping TLS shutdown");
                 g_skip_libssh2_cleanup = 1;
@@ -3727,7 +3729,7 @@ int main(int argc, char **argv) {
     if (uctx.ssl) {
         if (exit_code == 0 && !g_skip_libssh2_cleanup && session == NULL) {
             int tls_rc = ssl_shutdown_with_deadline(
-                uctx.ssl, upstream_fd, now_ms() + TLS_SHUTDOWN_TIMEOUT_MS);
+                uctx.ssl, upstream_fd, now_ms() + SHUTDOWN_IO_TIMEOUT_MS);
             if (tls_rc <= 0)
                 log_yellow("TLS close_notify did not complete before shutdown deadline");
         } else if (g_skip_libssh2_cleanup) {
