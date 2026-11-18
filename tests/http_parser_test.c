@@ -317,10 +317,10 @@ static int run_shutdown_poll_ignores_stop_regression(void) {
         fprintf(stderr, "[FAIL] shutdown poll stop-state: socketpair: %s\\n", strerror(errno));
         return 1;
     }
-    if (send_test_bytes(sv[1], "x", 1) < 0) {
+    if (send_test_bytes(sv[1], "x", 1) < 0 || shutdown(sv[1], SHUT_WR) < 0) {
         close(sv[0]);
         close(sv[1]);
-        fprintf(stderr, "[FAIL] shutdown poll stop-state: send\\n");
+        fprintf(stderr, "[FAIL] shutdown poll stop-state: send/shutdown\\n");
         return 1;
     }
 
@@ -333,7 +333,7 @@ static int run_shutdown_poll_ignores_stop_regression(void) {
     close(sv[0]);
     close(sv[1]);
     if (normal_rc >= 0 || shutdown_rc <= 0) {
-        fprintf(stderr, "[FAIL] shutdown poll must ignore g_stop while honoring readiness\\n");
+        fprintf(stderr, "[FAIL] shutdown poll must ignore g_stop and accept POLLIN with HUP\\n");
         return 1;
     }
     puts("[PASS] shutdown poll remains usable after g_stop");
