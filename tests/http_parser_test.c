@@ -206,6 +206,13 @@ static int run_ring_buffer_regressions(void) {
     const uint8_t *pin = rb_read_slice_pinned(&r, r.head, r.generation, 3);
     if (!pin || memcmp(pin, "xyz", 3) != 0) failed = 1;
     if (rb_commit_read(&r, 1, 1) < 0 || rb_read_slice_pinned(&r, 0, r.generation, 3) != NULL) failed = 1;
+    uint64_t old_generation = r.generation;
+    if (rb_clear(&r) < 0 || !rb_state_valid(&r) || r.used != 0 ||
+        r.head != 0 || r.tail != 0 || r.generation == old_generation ||
+        rb_read_slice_pinned(&r, 0, old_generation, 1) != NULL) failed = 1;
+    if (rb_push(&r, (const uint8_t *)"12345678", 8) < 0 ||
+        r.used != r.cap || r.head != r.tail || rb_clear(&r) < 0 ||
+        !rb_state_valid(&r) || r.used != 0) failed = 1;
     rb_free(&r);
     if (failed) { fprintf(stderr, "[FAIL] ring-buffer invariant checks\\n"); return 1; }
     puts("[PASS] ring-buffer invariant checks");
@@ -252,6 +259,55 @@ static int run_deferred_client_cleanup_regression(void) {
     if (g_clients) while (g_clients) remove_client(-1, g_clients);
     if (failed) { fprintf(stderr, "[FAIL] deferred client cleanup\\n"); return 1; }
     puts("[PASS] deferred client cleanup");
+    return 0;
+}
+
+static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
+    client_conn_t c = {
+        .state = ST_RELAY,
+        .abort_on_pending = 1,
+        .cleanup_deadline_ms = 5000
+    };
+    int failed = client_cleanup_timeout_due(&c, 4999) ||
+                 !client_cleanup_timeout_due(&c, 5000);
+    c.abort_on_pending = 0;
+    c.state = ST_CLOSING;
+    if (client_cleanup_timeout_due(&c, 4999) ||
+        !client_cleanup_timeout_due(&c, 5000)) failed = 1;
+
+    g_clients = &c;
+    g_opening_client = NULL;
+    clear_pending_operation();
+    c.state = ST_RELAY;
+    c.cleanup_deadline_ms = 0;
+    c.abort_on_pending = 0;
+    c.write_pending = 1;
+    c.write_waiting_window = 1;
+    if (has_pending_libssh2_work_for_shutdown()) failed = 1;
+    c.write_waiting_window = 0;
+    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
+    c.write_pending = 0;
+    c.read_pending = 1;
+    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
+    c.read_pending = 0;
+    c.need_send_eof = 1;
+    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
+    c.need_send_eof = 0;
+    c.state = ST_CLOSING;
+    c.channel = (LIBSSH2_CHANNEL *)(uintptr_t)1;
+    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
+    c.channel = NULL;
+    c.state = ST_RELAY;
+    g_clients = NULL;
+    set_pending_operation(NULL, PENDING_KEEPALIVE);
+    if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
+    clear_pending_operation();
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] bounded cleanup deadline and shutdown pending detection\n");
+        return 1;
+    }
+    puts("[PASS] bounded cleanup deadline and shutdown pending detection");
     return 0;
 }
 
@@ -333,6 +389,7 @@ static int run_core_state_regressions(void) {
     failures += run_ring_buffer_regressions();
     failures += run_eof_drain_regression();
     failures += run_deferred_client_cleanup_regression();
+    failures += run_cleanup_deadline_and_shutdown_pending_regression();
     failures += run_pending_channel_close_buffer_regression();
     failures += run_socks_listener_address_regression();
 
