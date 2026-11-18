@@ -978,6 +978,8 @@ jobs:
 
           if [ "$STATUS" -eq 0 ]; then
             echo "========== S2C SLOW-READER BACKPRESSURE (32 MiB DOWNLOAD) =========="
+            S2C_FULL_BEFORE="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
+            S2C_DRAINED_BEFORE="$(grep -c "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
             if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 \
               --connect-timeout 20 --max-time 420 --limit-rate 128K \
               http://127.0.0.1:18080/slow-download -o /tmp/slow-download-32MiB.bin; then
@@ -998,7 +1000,9 @@ jobs:
             echo "S2C full-buffer events: $S2C_FULL_COUNT"
             echo "S2C drained-buffer reports: $S2C_DRAINED_COUNT"
             echo "S2C not-drained reports: $S2C_NOT_DRAINED_COUNT"
-            if [ "$S2C_FULL_COUNT" -gt 0 ] && [ "$S2C_DRAINED_COUNT" -gt 0 ] && [ "$S2C_NOT_DRAINED_COUNT" -eq 0 ]; then
+            if [ "$S2C_FULL_COUNT" -gt "$S2C_FULL_BEFORE" ] && \
+              [ "$S2C_DRAINED_COUNT" -gt "$S2C_DRAINED_BEFORE" ] && \
+              [ "$S2C_NOT_DRAINED_COUNT" -eq 0 ]; then
               if grep "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core.log" | \
                 sed -n 's/.*peak=\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1 \2/p' | \
                 awk '$1 > $2 || $1 != 32768 { bad=1 } END { if (NR == 0 || bad) exit 1 }'; then
@@ -1319,6 +1323,9 @@ jobs:
 
               if [ "$STATUS" -eq 0 ]; then
                 echo "========== TLS TWO-CHANNEL S2C BACKPRESSURE / SECOND CHANNEL CLOSE =========="
+                TLS_TWO_FULL_BEFORE="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                TLS_TWO_DRAINED_BEFORE="$(grep -c "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                TLS_TWO_NOT_DRAINED_BEFORE="$(grep -c "SSH channel s2c buffer not drained at close" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
                 curl -4 -fsS --socks5-hostname 127.0.0.1:1082 \
                   --connect-timeout 20 --max-time 180 --limit-rate 512K \
                   http://127.0.0.1:18080/slow-download -o /tmp/tls-slow-download-32MiB.bin \
@@ -1327,7 +1334,8 @@ jobs:
 
                 TLS_S2C_WAIT=0
                 while [ "$TLS_S2C_WAIT" -lt 30 ]; do
-                  if grep -q "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null; then
+                  TLS_TWO_FULL_NOW="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                  if [ "$TLS_TWO_FULL_NOW" -gt "$TLS_TWO_FULL_BEFORE" ]; then
                     break
                   fi
                   if ! kill -0 "$TLS_SLOW_PID" 2>/dev/null; then
@@ -1336,8 +1344,9 @@ jobs:
                   TLS_S2C_WAIT=$((TLS_S2C_WAIT + 1))
                   sleep 1
                 done
-                if grep -q "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null; then
-                  pass "TLS slow-reader channel filled its S2C ring buffer"
+                TLS_TWO_FULL_NOW="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                if [ "$TLS_TWO_FULL_NOW" -gt "$TLS_TWO_FULL_BEFORE" ]; then
+                  pass "TLS slow-reader channel independently filled its S2C ring buffer"
                 else
                   fail "TLS slow-reader channel did not reach S2C backpressure"
                 fi
@@ -1392,8 +1401,9 @@ jobs:
                 TLS_S2C_FULL_COUNT="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
                 TLS_S2C_DRAINED_COUNT="$(grep -c "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
                 TLS_S2C_NOT_DRAINED_COUNT="$(grep -c "SSH channel s2c buffer not drained at close" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
-                if [ "$TLS_S2C_FULL_COUNT" -gt 0 ] && [ "$TLS_S2C_DRAINED_COUNT" -gt 0 ] && \
-                  [ "$TLS_S2C_NOT_DRAINED_COUNT" -eq 0 ]; then
+                if [ "$TLS_S2C_FULL_COUNT" -gt "$TLS_TWO_FULL_BEFORE" ] && \
+                  [ "$TLS_S2C_DRAINED_COUNT" -gt "$TLS_TWO_DRAINED_BEFORE" ] && \
+                  [ "$TLS_S2C_NOT_DRAINED_COUNT" -eq "$TLS_TWO_NOT_DRAINED_BEFORE" ]; then
                   pass "TLS S2C backpressure drained cleanly after the slow reader resumed"
                 else
                   fail "TLS S2C backpressure did not report a clean drain after the two-channel test"
@@ -1440,6 +1450,7 @@ jobs:
                 ! grep -q "Skipping libssh2 disconnect/free" "$LOGDIR/ssh-core-tls.log" 2>/dev/null && \
                 ! grep -q "TLS close_notify did not complete before shutdown deadline" "$LOGDIR/ssh-core-tls.log" 2>/dev/null && \
                 ! grep -q "libssh2_session_disconnect returned" "$LOGDIR/ssh-core-tls.log" 2>/dev/null && \
+                ! grep -q "libssh2_session_free returned" "$LOGDIR/ssh-core-tls.log" 2>/dev/null && \
                 grep -q "close_notify exchange completed" /tmp/ssh-core-tls-relay.log 2>/dev/null; then
                 pass "SIGTERM completed graceful SSH disconnect and TLS shutdown without pending-operation skip"
               else
