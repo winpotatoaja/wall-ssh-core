@@ -41,6 +41,19 @@ libssh2 from the packages feed.
   CI integration test enables this flag explicitly; it does not affect buffering
   or retry behavior.
 
+## TLS upstream resilience (R15)
+
+The TLS transport retries a stalled or disconnected handshake on another
+DNS-resolved upstream address, excluding endpoints that already failed. The
+retry is bounded to four endpoints and applies only to transport-level
+failures/timeouts; certificate validation and TLS protocol/configuration
+failures remain fatal. DNS resolution and the operating-system routing table
+remain dynamic, so the core does not bind to a fixed WAN interface.
+
+OpenSSL non-blocking I/O clears the thread error queue before each
+`SSL_connect()`, `SSL_read()`, and `SSL_write()` operation so
+`SSL_get_error()` can classify retry readiness consistently.
+
 ## Continuous integration tests
 
 Pushes to `main` that change `ssh-core.c`, the package `Makefile`, tests, or this
