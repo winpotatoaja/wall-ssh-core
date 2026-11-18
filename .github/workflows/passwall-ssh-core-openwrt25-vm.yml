@@ -1059,8 +1059,8 @@ jobs:
             RST_FD_AFTER="$(ls "/proc/$APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
             [ -n "$RST_RSS_AFTER" ] || RST_RSS_AFTER=0
             [ -n "$RST_FD_AFTER" ] || RST_FD_AFTER=0
-            if [ "$RST_RSS_AFTER" -le $((RST_RSS_BEFORE + 16384)) ] && \
-              [ "$RST_FD_AFTER" -le $((RST_FD_BEFORE + 4)) ] && kill -0 "$APP_PID" 2>/dev/null; then
+            if [ "$RST_RSS_AFTER" -le $((RST_RSS_BEFORE + 1024)) ] && \
+              [ "$RST_FD_AFTER" -le "$RST_FD_BEFORE" ] && kill -0 "$APP_PID" 2>/dev/null; then
               pass "idle RST cleanup left no material RSS/FD growth and daemon remained alive (RSS $RST_RSS_BEFORE->$RST_RSS_AFTER KiB; FD $RST_FD_BEFORE->$RST_FD_AFTER)"
             else
               fail "idle RST may have leaked client/channel state (RSS $RST_RSS_BEFORE->$RST_RSS_AFTER KiB; FD $RST_FD_BEFORE->$RST_FD_AFTER)"
@@ -1377,8 +1377,8 @@ jobs:
                 TLS_RST_FD_AFTER="$(ls "/proc/$TLS_APP_PID/fd" 2>/dev/null | wc -l | tr -d ' ')"
                 [ -n "$TLS_RST_RSS_AFTER" ] || TLS_RST_RSS_AFTER=0
                 [ -n "$TLS_RST_FD_AFTER" ] || TLS_RST_FD_AFTER=0
-                if [ "$TLS_RST_RSS_AFTER" -le $((TLS_RST_RSS_BEFORE + 16384)) ] && \
-                  [ "$TLS_RST_FD_AFTER" -le $((TLS_RST_FD_BEFORE + 4)) ] && \
+                if [ "$TLS_RST_RSS_AFTER" -le $((TLS_RST_RSS_BEFORE + 1024)) ] && \
+                  [ "$TLS_RST_FD_AFTER" -le "$TLS_RST_FD_BEFORE" ] && \
                   kill -0 "$TLS_APP_PID" 2>/dev/null && kill -0 "$TLS_SLOW_PID" 2>/dev/null; then
                   pass "TLS idle RST released its client resources without interrupting active S2C (RSS $TLS_RST_RSS_BEFORE->$TLS_RST_RSS_AFTER KiB; FD $TLS_RST_FD_BEFORE->$TLS_RST_FD_AFTER)"
                 else
