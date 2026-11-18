@@ -79,8 +79,6 @@ typedef struct {
     int      fd;
     SSL     *ssl;
     uint32_t ssl_want_events; /* readiness requested by an active TLS I/O callback */
-    uint32_t eof_peek_want_events; /* readiness requested by the passive EOF probe */
-    int      eof_peek_pending; /* SSL_peek harus diulang setelah readiness yang diminta */
     uint64_t rx_seq;
     size_t   skip_ssh_banner_bytes;
     int      expect_connect_resp;
@@ -1726,6 +1724,16 @@ static void remove_client(int epfd, client_conn_t *c) {
 
 static void start_closing_client(int epfd, client_conn_t *c) {
     if (!c) return;
+    /* A pending channel OPEN follows SSH_OPEN_HARD_TO_MS, not the shorter
+     * channel cleanup budget. Keep retrying the same open until it resolves
+     * or the existing 30-second hard deadline restarts the session. */
+    if (c == g_opening_client && c == g_pending_client &&
+        g_pending_op == PENDING_OPEN) {
+        c->abort_on_open = 1;
+        c->cleanup_deadline_ms = 0;
+        detach_client_fd(epfd, c);
+        return;
+    }
     if (c == g_pending_client && g_pending_op != PENDING_NONE) {
         c->abort_on_pending = 1;
         set_client_cleanup_deadline(c);
@@ -2203,23 +2211,10 @@ static int is_libssh2_socket_fatal(int err) {
             err == LIBSSH2_ERROR_SOCKET_DISCONNECT);
 }
 
-static void clear_upstream_eof_peek(upstream_ctx_t *u) {
-    if (!u) return;
-    u->eof_peek_pending = 0;
-    u->eof_peek_want_events = 0;
-}
-
-static int upstream_peek_blocks_ssh(const upstream_ctx_t *u) {
-    return u && u->eof_peek_pending &&
-           (u->eof_peek_want_events & EPOLLOUT) != 0;
-}
-
 static void note_upstream_rx_progress(upstream_ctx_t *u, uint64_t rx_before,
                                       int *did_ssh_read) {
-    if (u && u->rx_seq != rx_before) {
-        if (did_ssh_read) *did_ssh_read = 1;
-        clear_upstream_eof_peek(u);
-    }
+    if (u && u->rx_seq != rx_before && did_ssh_read)
+        *did_ssh_read = 1;
 }
 
 static void record_eagain(LIBSSH2_SESSION *session, upstream_ctx_t *u,
@@ -2934,44 +2929,6 @@ static void retry_window_waiters(void) {
     }
 }
 
-static int upstream_peek_retry_ready(const upstream_ctx_t *u, uint32_t events) {
-    if (!u || !u->eof_peek_pending) return 0;
-    if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) return 1;
-    return u->eof_peek_want_events != 0 &&
-           (events & u->eof_peek_want_events) != 0;
-}
-
-static int check_upstream_eof_peek(upstream_ctx_t *u) {
-    uint8_t tmp[1];
-    if (u->ssl) {
-        int r = SSL_peek(u->ssl, tmp, 1);
-        if (r > 0) {
-            clear_upstream_eof_peek(u);
-            return 1;
-        }
-        int err = SSL_get_error(u->ssl, r);
-        if (err == SSL_ERROR_WANT_READ) {
-            u->eof_peek_want_events = EPOLLIN;
-            u->eof_peek_pending = 1;
-            return -2;
-        }
-        if (err == SSL_ERROR_WANT_WRITE) {
-            u->eof_peek_want_events = EPOLLOUT;
-            u->eof_peek_pending = 1;
-            return -2;
-        }
-        clear_upstream_eof_peek(u);
-        return -1;
-    }
-    ssize_t n;
-    do {
-        n = recv(u->fd, tmp, 1, MSG_PEEK);
-    } while (n < 0 && errno == EINTR);
-    if (n > 0) return 1;
-    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return -2;
-    return -1;
-}
-
 static int upstream_http_response_rejected(const upstream_ctx_t *u) {
     return u && !u->tunnel_established &&
            (u->last_http_code >= 200 || u->last_http_code == 101);
@@ -3498,7 +3455,7 @@ int main(int argc, char **argv) {
         }
 
         int upstream_readable = 0;
-        uint32_t upstream_events = 0;
+        int upstream_hup = 0;
 
         for (int i = 0; i < nfds; i++) {
             void *ptr = events[i].data.ptr;
@@ -3549,7 +3506,6 @@ int main(int argc, char **argv) {
                     g_client_count++;
                 }
             } else if (ptr == &g_upstream_tag) {
-                upstream_events |= e;
                 if(e&EPOLLERR){
                     int so_err=0;socklen_t so_len=sizeof(so_err);
                     if(getsockopt(upstream_fd,SOL_SOCKET,SO_ERROR,&so_err,&so_len)==0&&so_err){
@@ -3559,6 +3515,7 @@ int main(int argc, char **argv) {
                     upstream_readable=1;
                 }
                 if(e&(EPOLLIN|EPOLLHUP|EPOLLRDHUP))upstream_readable=1;
+                if(e&(EPOLLHUP|EPOLLRDHUP))upstream_hup=1;
             } else {
                 client_conn_t *c = (client_conn_t *)ptr;
                 handle_client_io(epfd, c, e);
@@ -3568,34 +3525,11 @@ int main(int argc, char **argv) {
         if (g_stop) break;
 
         /*
-         * The passive EOF probe has its own readiness state. WANT_WRITE must
-         * be retried before further TLS I/O; WANT_READ may coexist with new
-         * SSH work. A real callback WANT state supersedes the passive probe.
+         * Never issue a passive SSL_peek on the shared TLS object: a
+         * nonblocking WANT result belongs to that read operation and must be
+         * resumed as the same operation. The SSH channel pump is the sole
+         * consumer of upstream TLS application data.
          */
-        int retried_eof_peek = 0;
-        /* A real libssh2 TLS callback takes precedence over a passive EOF
-         * probe. Do not interleave the two SSL operations. */
-        if (uctx.eof_peek_pending && uctx.ssl_want_events != 0) {
-            clear_upstream_eof_peek(&uctx);
-        }
-        if (uctx.eof_peek_pending &&
-            upstream_peek_retry_ready(&uctx, upstream_events)) {
-            int pk = check_upstream_eof_peek(&uctx);
-            retried_eof_peek = 1;
-            if (pk == -1) {
-                log_red("Koneksi upstream ditutup oleh server");
-                write_marker(NEED_RESTART_FILE, "upstream eof");
-                exit_code = 1;
-                g_stop = 1;
-                break;
-            } else if (pk == 1) {
-                idle_rx_paused = 1;
-            }
-        }
-        /* WANT_READ is passive: new SSH work may run and can satisfy that
-         * read. WANT_WRITE must be retried before any other TLS I/O. */
-        int tls_peek_waiting = upstream_peek_blocks_ssh(&uctx);
-
         /*
          * SSH WINDOW_ADJUST arrives on the upstream transport. A local client
          * socket may already be half-closed, so its events cannot wake this path.
@@ -3653,7 +3587,8 @@ int main(int argc, char **argv) {
         int did_ssh_read = 0;
         force_next_tick = 0;
 
-        while (!g_stop && !tls_peek_waiting && rounds < 16) {
+        uint64_t upstream_rx_before_pump = uctx.rx_seq;
+        while (!g_stop && rounds < 16) {
             int round_dirs = 0;
             int round_read = 0;
             int pump_rc = pump_ssh_channels(epfd, session, &uctx, &round_dirs, &round_read);
@@ -3672,24 +3607,27 @@ int main(int argc, char **argv) {
 
         if (g_stop) break;
 
-        if (!tls_peek_waiting && !retried_eof_peek && upstream_readable &&
-            !did_ssh_read && g_opening_client == NULL && g_pending_op == PENDING_NONE &&
-            uctx.ssl_want_events == 0 && !has_window_waiter()) {
-            int pk = check_upstream_eof_peek(&uctx);
-            if (pk == -1) {
-                log_red("Koneksi upstream ditutup oleh server");
-                write_marker(NEED_RESTART_FILE, "upstream eof");
-                exit_code = 1;
-                g_stop = 1;
-                break;
-            } else if (pk == 1) {
-                idle_rx_paused = 1;
-            }
-        } else if (did_ssh_read || g_opening_client != NULL || has_readable_relay_channel()) {
+        if (did_ssh_read || g_opening_client != NULL ||
+            has_readable_relay_channel() || has_window_waiter()) {
             idle_rx_paused = 0;
+        } else if (upstream_readable && g_pending_op == PENDING_NONE &&
+                   uctx.rx_seq == upstream_rx_before_pump) {
+            /* Avoid a level-triggered EPOLLIN spin when no channel currently
+             * has room to consume buffered SSH transport data. A new OPEN,
+             * reader, or window waiter re-arms upstream input below. */
+            idle_rx_paused = 1;
         }
 
-        if (!uctx.eof_peek_pending && g_pending_op == PENDING_NONE &&
+        if (upstream_hup && uctx.rx_seq == upstream_rx_before_pump &&
+            rounds < 16) {
+            log_red("Koneksi upstream SSH ditutup oleh peer");
+            write_marker(NEED_RESTART_FILE, "upstream eof");
+            exit_code = 1;
+            g_stop = 1;
+            break;
+        }
+
+        if (g_pending_op == PENDING_NONE && uctx.ssl_want_events == 0 &&
             cfg.keepalive_sec > 0 &&
             (now_sec - uctx.last_activity) >= cfg.keepalive_sec &&
             (now_sec - last_ka_try) >= 1) {
@@ -3712,7 +3650,7 @@ int main(int argc, char **argv) {
         }
 
         if (rounds == 16 ||
-            (!uctx.eof_peek_pending && uctx.ssl && SSL_pending(uctx.ssl) > 0 &&
+            (uctx.ssl && SSL_pending(uctx.ssl) > 0 &&
              (uctx.ssl_want_events & EPOLLOUT) == 0 &&
              (g_opening_client != NULL || has_readable_relay_channel() ||
               has_window_waiter()))) {
@@ -3720,9 +3658,6 @@ int main(int argc, char **argv) {
         }
 
         uint32_t want_up = EPOLLRDHUP;
-        if (uctx.eof_peek_pending) {
-            want_up |= uctx.eof_peek_want_events;
-        }
         if (uctx.ssl && uctx.ssl_want_events != 0) {
             want_up |= uctx.ssl_want_events;
         } else if (g_pending_op != PENDING_NONE) {
@@ -3749,8 +3684,7 @@ int main(int argc, char **argv) {
     }
 
     if (!g_skip_libssh2_cleanup &&
-        (uctx.eof_peek_pending || uctx.ssl_want_events != 0 ||
-         has_pending_libssh2_work_for_shutdown())) {
+        (uctx.ssl_want_events != 0 || has_pending_libssh2_work_for_shutdown())) {
         log_yellow("A libssh2/OpenSSL operation is still pending at process shutdown; skipping further transport I/O");
         g_skip_libssh2_cleanup = 1;
     }
