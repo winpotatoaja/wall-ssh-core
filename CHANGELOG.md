@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Extend the SOCKS half-close helper with an explicit zero-linger client RST
+  against an idle response channel after it has received headers and entered
+  the read-EAGAIN wait. Exercise the reset on TCP and TLS, including while a
+  separate TLS slow-reader S2C channel remains active, and verify daemon
+  liveness plus bounded RSS/file-descriptor growth.
+- Make the TLS VM daemon use `IDLE_TIMEOUT=3` so the idle second channel must
+  expire independently while the 32 MiB TLS slow-reader transfer completes.
+- Verify `SIGTERM` on an idle TLS session returns successfully and does not
+  skip SSH disconnect/session cleanup due only to a stale inbound WANT_READ.
+- Extend the four-worker OpenWrt VM stress duration from 90 seconds to
+  30 minutes and increase the expect timeout to accommodate the longer run.
+- Strengthen HTTP 200 follow-up parser regressions: after a zero-length 200
+  response followed by non-HTTP data, assert the tunnel remains unestablished
+  and the rejection classifier reports HTTP/Proxy Rejected (200).
+
+
 - Distinguish an idle TLS `SSL_read()` WANT_READ from a live serialized TLS
   operation. Stale inbound-only readiness no longer permanently suppresses
   SSH keepalive, forces upstream EPOLLIN through S2C backpressure pauses, or
