@@ -4,8 +4,9 @@
 
 - Allow channel cleanup after inbound-only `libssh2` EAGAIN; only an operation
   held in the global pending slot pins its original channel buffers.
-- Close dead-client channels once queued C2S data is drained, without waiting
-  for stale read-pending state or a remote EOF that may never arrive.
+- Close reset-client channels immediately, discarding queued C2S data that
+  no live local peer can consume; do not wait for inbound-only EAGAIN or remote
+  EOF that may never arrive.
 - Keep aborted channel-open attempts under the existing 30-second hard-open
   timeout instead of applying the shorter 10-second channel-cleanup deadline.
 - Separate passive TLS EOF-peek readiness from TLS callback retry state.
