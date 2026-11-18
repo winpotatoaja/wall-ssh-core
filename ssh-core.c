@@ -2761,6 +2761,16 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
 
 /* Return: 1 progres nyata, 2 pending dilepas tanpa progres data (lanjut scan),
  * 0 masih tertahan EAGAIN di op yang sama, -1 session fatal. */
+/* Only EAGAIN leaves a libssh2 keepalive operation active. A terminal
+ * socket/session result must release the serialized-operation slot before
+ * the main loop enters shutdown; otherwise shutdown falsely treats a dead
+ * keepalive as an operation that still needs a retry. */
+static int settle_pending_keepalive_result(int rc) {
+    if (rc == LIBSSH2_ERROR_EAGAIN) return 0;
+    clear_pending_operation();
+    return rc == 0 ? 1 : -1;
+}
+
 static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t *u,
                              int *agg_dirs_out, int *did_ssh_read_out,
                              client_conn_t **retried_open_out) {
@@ -2771,16 +2781,17 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
     if (op == PENDING_KEEPALIVE) {
         int next_sec = 0;
         int rc = libssh2_keepalive_send(session, &next_sec);
-        if (rc == 0) {
+        int settled = settle_pending_keepalive_result(rc);
+        if (settled > 0) {
             u->last_activity = time(NULL);
             if (g_log_backpressure) log_blue("SSH keepalive sent");
-            clear_pending_operation();
             return 1;
         }
-        if (rc == LIBSSH2_ERROR_EAGAIN) {
+        if (settled == 0) {
             *agg_dirs_out |= libssh2_session_block_directions(session);
             return 0;
         }
+        log_red("SSH keepalive retry failed: %d", rc);
         return -1;
     }
 

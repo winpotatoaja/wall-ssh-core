@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Clear the serialized `PENDING_KEEPALIVE` state after any terminal libssh2
+  result. Only `LIBSSH2_ERROR_EAGAIN` retains it for retry; a fatal transport
+  result now releases the pending slot so shutdown does not mistake a dead
+  keepalive for active libssh2 work and skip bounded SSH/TLS cleanup. Add a
+  regression for EAGAIN, terminal socket error, and success transitions.
+- Bump the OpenWrt package release to r18.
+
+
 - Strengthen the callback errno regression by forcing the logger's
   fopen() to fail with ENOTDIR, proving the callback restores errno rather
   than passing only because successful stdout logging left it unchanged.

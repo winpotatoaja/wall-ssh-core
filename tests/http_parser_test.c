@@ -1293,6 +1293,39 @@ done:
     return failed;
 }
 
+static int run_pending_keepalive_terminal_cleanup_regression(void) {
+    int failed = 0;
+
+    set_pending_operation(NULL, PENDING_KEEPALIVE);
+    int eagain_state = settle_pending_keepalive_result(LIBSSH2_ERROR_EAGAIN);
+    if (eagain_state != 0 || g_pending_op != PENDING_KEEPALIVE ||
+        g_pending_client != NULL) {
+        failed = 1;
+        fprintf(stderr, "[FAIL] pending keepalive retains state only on EAGAIN\n");
+    }
+
+    set_pending_operation(NULL, PENDING_KEEPALIVE);
+    int error_state = settle_pending_keepalive_result(LIBSSH2_ERROR_SOCKET_RECV);
+    if (error_state != -1 || g_pending_op != PENDING_NONE ||
+        g_pending_client != NULL) {
+        failed = 1;
+        fprintf(stderr, "[FAIL] terminal keepalive socket error clears pending state\n");
+    }
+
+    set_pending_operation(NULL, PENDING_KEEPALIVE);
+    int success_state = settle_pending_keepalive_result(0);
+    if (success_state != 1 || g_pending_op != PENDING_NONE ||
+        g_pending_client != NULL) {
+        failed = 1;
+        fprintf(stderr, "[FAIL] successful keepalive clears pending state\n");
+    }
+
+    clear_pending_operation();
+    if (!failed)
+        puts("[PASS] pending keepalive is retained on EAGAIN and cleared on terminal results");
+    return failed;
+}
+
 static int run_core_state_regressions(void) {
     int failures = 0;
     failures += run_ipv4_dial_regression();
@@ -1315,6 +1348,7 @@ static int run_core_state_regressions(void) {
     failures += run_pending_channel_close_buffer_regression();
     failures += run_inbound_only_channel_close_regression();
     failures += run_pending_op_serialization_regression();
+    failures += run_pending_keepalive_terminal_cleanup_regression();
     failures += run_tls_want_event_lifetime_regression();
     failures += run_upstream_rx_progress_regression();
     failures += run_upstream_hup_state_regression();
