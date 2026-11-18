@@ -58,6 +58,13 @@ TLS message-logging callback also restores `errno` before returning,
 preventing stdio/file logging from contaminating OpenSSL's error
 classification.
 
+## R16 verification
+
+The parser stage includes focused regressions for TLS callback `errno`
+preservation, OpenSSL unexpected EOF during handshake, alternate upstream
+endpoint retry, and poll HUP/EOF handling. Build the R16 package with the
+OpenWrt 25.12.5 x86_64 SDK before running the separate QEMU VM stage.
+
 ## Continuous integration tests
 
 Pushes to `main` that change `ssh-core.c`, the package `Makefile`, tests, or this
