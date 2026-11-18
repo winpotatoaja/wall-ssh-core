@@ -5,6 +5,8 @@
 - Strengthen the callback errno regression by forcing the logger's
   fopen() to fail with ENOTDIR, proving the callback restores errno rather
   than passing only because successful stdout logging left it unchanged.
+- Apply the same clean OpenSSL error-queue and errno preparation to the
+  TLS close_notify read and SSL_shutdown() path, not just connection/data I/O.
 - Preserve errno across the TLS diagnostic message callback. The callback
   executes inside SSL I/O and its logger uses stdio/file operations; without
   restoration, that logging could corrupt the errno inspected by SSL_get_error().

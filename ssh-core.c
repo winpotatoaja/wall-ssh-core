@@ -3455,7 +3455,7 @@ static int session_free_with_deadline(LIBSSH2_SESSION **session,
 static int ssl_wait_peer_close_notify(SSL *ssl, int fd, long long deadline_ms) {
     uint8_t discard[4096];
     while (now_ms() < deadline_ms) {
-        ERR_clear_error();
+        ssl_prepare_io();
         int n = SSL_read(ssl, discard, sizeof(discard));
         if (n > 0) continue;
 
@@ -3475,7 +3475,7 @@ static int ssl_wait_peer_close_notify(SSL *ssl, int fd, long long deadline_ms) {
 static int ssl_shutdown_with_deadline(SSL *ssl, int fd, long long deadline_ms) {
     if (!ssl) return 1;
     while (now_ms() < deadline_ms) {
-        ERR_clear_error();
+        ssl_prepare_io();
         int rc = SSL_shutdown(ssl);
         if (rc == 1) return 1;
 
