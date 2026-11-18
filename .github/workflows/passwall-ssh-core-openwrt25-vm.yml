@@ -1244,19 +1244,21 @@ jobs:
                   cat "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true
                 fi
               fi
-              if [ "$STATUS" -eq 0 ] && kill -0 "$TLS_APP_PID" 2>/dev/null && \
-                curl -4 -fsS --socks5-hostname 127.0.0.1:1082 \
-                  --connect-timeout 10 --max-time 30 \
-                  http://127.0.0.1:18080/payload -o /tmp/tls-post-halfclose.bin; then
-                TLS_POST_SHA="$(sha256sum /tmp/tls-post-halfclose.bin | awk '{print $1}')"
-                TLS_EXPECTED_SHA="$(cat /root/expected-payload.sha256)"
-                if [ "$TLS_POST_SHA" = "$TLS_EXPECTED_SHA" ]; then
-                  pass "TLS SSH daemon remained usable after remote-EOF upload"
+              if [ "$STATUS" -eq 0 ]; then
+                if kill -0 "$TLS_APP_PID" 2>/dev/null && \
+                  curl -4 -fsS --socks5-hostname 127.0.0.1:1082 \
+                    --connect-timeout 10 --max-time 30 \
+                    http://127.0.0.1:18080/payload -o /tmp/tls-post-halfclose.bin; then
+                  TLS_POST_SHA="$(sha256sum /tmp/tls-post-halfclose.bin | awk '{print $1}')"
+                  TLS_EXPECTED_SHA="$(cat /root/expected-payload.sha256)"
+                  if [ "$TLS_POST_SHA" = "$TLS_EXPECTED_SHA" ]; then
+                    pass "TLS SSH daemon remained usable after remote-EOF upload"
+                  else
+                    fail "TLS post-half-close transfer returned a bad SHA-256"
+                  fi
                 else
-                  fail "TLS post-half-close transfer returned a bad SHA-256"
+                  fail "TLS SSH daemon stopped or failed to accept a connection after TLS regression tests"
                 fi
-              else
-                fail "TLS SSH daemon stopped or failed to accept a connection after TLS regression tests"
               fi
             else
               fail "TLS transport daemon did not reach SOCKS5 Listening"
