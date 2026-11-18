@@ -341,6 +341,40 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     return 0;
 }
 
+static int run_aborted_open_completion_cleanup_regression(void) {
+    client_conn_t *c = calloc(1, sizeof(*c));
+    if (!c) return 1;
+    c->fd = -1;
+    c->state = ST_SSH_OPENING;
+    c->abort_on_pending = 1;
+    c->cleanup_deadline_ms = 1; /* stale 10-second deadline from pending OPEN */
+    g_clients = c;
+    g_client_count = 1;
+    g_opening_client = c;
+    clear_pending_operation();
+
+    int rc = finish_open_channel(-1, c, (LIBSSH2_CHANNEL *)(uintptr_t)1);
+    long long now = now_ms();
+    int failed = rc != 1 || g_opening_client != NULL ||
+                 c->state != ST_CLOSING || c->cleanup_deadline_ms <= now ||
+                 client_cleanup_timeout_due(c, now);
+
+    c->channel = NULL;
+    if (g_clients == c) remove_client(-1, c);
+    else free(c);
+    clear_pending_operation();
+    g_opening_client = NULL;
+    g_clients = NULL;
+    g_client_count = 0;
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] aborted OPEN completion receives a fresh channel cleanup deadline\n");
+        return 1;
+    }
+    puts("[PASS] aborted OPEN completion receives a fresh channel cleanup deadline");
+    return 0;
+}
+
 static int run_shutdown_poll_ignores_stop_regression(void) {
     int sv[2] = {-1, -1};
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
@@ -599,6 +633,7 @@ static int run_core_state_regressions(void) {
     failures += run_eof_drain_regression();
     failures += run_deferred_client_cleanup_regression();
     failures += run_cleanup_deadline_and_shutdown_pending_regression();
+    failures += run_aborted_open_completion_cleanup_regression();
     failures += run_shutdown_poll_ignores_stop_regression();
     failures += run_pending_channel_close_buffer_regression();
     failures += run_inbound_only_channel_close_regression();
