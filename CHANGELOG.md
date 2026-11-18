@@ -28,6 +28,11 @@
   daemon: hold one SOCKS channel idle while a second channel streams 6 MiB
   over 24 seconds, then verify only the idle channel closes, the active
   transfer hash remains exact, and the daemon accepts a subsequent request.
+- Add a host-side TLS-to-SSH relay and run the half-close helper over
+  `TRANSPORT=TLS`, including an 8 MiB upload after the remote TCP write side
+  has sent FIN; verify the TLS daemon remains usable for a new SOCKS channel.
+- Allow the cross-compiled half-close helper to select a SOCKS listener port
+  so TCP and TLS transport integration tests can run in separate daemons.
 - Bump the OpenWrt package release to r10.
 
 - Treat HUP/RDHUP as drain hints rather than EOF: EAGAIN keeps the drain
