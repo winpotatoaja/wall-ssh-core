@@ -1139,6 +1139,7 @@ jobs:
                 -e 's|^HOST_PORT=.*$|HOST_PORT=8443|' \
                 -e 's|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:1082|' \
                 -e 's|^VERIFY_TLS=.*$|VERIFY_TLS=0|' \
+                -e 's|^KEEPALIVE=.*$|KEEPALIVE=2|' \
                 /root/ssh-core-test.env > /root/ssh-core-tls-test.env
             printf '%s\n' 'SNI=localhost' >> /root/ssh-core-tls-test.env
             "$BIN" -env /root/ssh-core-tls-test.env -log "$LOGDIR/ssh-core-tls.log" \
@@ -1158,13 +1159,92 @@ jobs:
 
             if grep -q "SOCKS5 Listening" "$LOGDIR/ssh-core-tls.log" 2>/dev/null; then
               pass "TLS transport established SSH and opened SOCKS port 1082"
-              if /root/socks-halfclose /root/half-close-upload-8MiB.bin 1082; then
-                pass "TLS transport preserved both half-close directions and 8 MiB upload after remote EOF"
+
+              echo "========== TLS KEEPALIVE WHILE THE SESSION IS IDLE =========="
+              sleep 7
+              TLS_KEEPALIVE_COUNT="$(grep -c "SSH keepalive sent" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+              echo "TLS keepalive success count while idle: $TLS_KEEPALIVE_COUNT"
+              if [ "$TLS_KEEPALIVE_COUNT" -ge 2 ]; then
+                pass "TLS SSH keepalives were transmitted repeatedly while no SOCKS channel was active"
               else
-                fail "TLS transport half-close or 8 MiB post-EOF upload failed"
-                cat "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true
+                fail "TLS SSH keepalive did not run repeatedly during idle time"
               fi
-              if kill -0 "$TLS_APP_PID" 2>/dev/null && \
+
+              if [ "$STATUS" -eq 0 ]; then
+                echo "========== TLS TWO-CHANNEL S2C BACKPRESSURE / SECOND CHANNEL CLOSE =========="
+                curl -4 -fsS --socks5-hostname 127.0.0.1:1082 \
+                  --connect-timeout 20 --max-time 180 --limit-rate 512K \
+                  http://127.0.0.1:18080/slow-download -o /tmp/tls-slow-download-32MiB.bin \
+                  >"$LOGDIR/tls-slow-download.log" 2>&1 &
+                TLS_SLOW_PID=$!
+
+                TLS_S2C_WAIT=0
+                while [ "$TLS_S2C_WAIT" -lt 30 ]; do
+                  if grep -q "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null; then
+                    break
+                  fi
+                  if ! kill -0 "$TLS_SLOW_PID" 2>/dev/null; then
+                    break
+                  fi
+                  TLS_S2C_WAIT=$((TLS_S2C_WAIT + 1))
+                  sleep 1
+                done
+                if grep -q "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null; then
+                  pass "TLS slow-reader channel filled its S2C ring buffer"
+                else
+                  fail "TLS slow-reader channel did not reach S2C backpressure"
+                fi
+
+                TLS_IDLE_RC=0
+                curl -4 -sS --socks5-hostname 127.0.0.1:1082 \
+                  --connect-timeout 10 --max-time 3 \
+                  http://127.0.0.1:18080/idle -o /dev/null \
+                  >"$LOGDIR/tls-second-idle-channel.log" 2>&1 || TLS_IDLE_RC=$?
+                if [ "$TLS_IDLE_RC" -eq 28 ]; then
+                  pass "second TLS SOCKS channel was closed by its local idle reader"
+                else
+                  fail "second TLS channel returned unexpected curl status $TLS_IDLE_RC"
+                  cat "$LOGDIR/tls-second-idle-channel.log" 2>/dev/null || true
+                fi
+
+                if kill -0 "$TLS_SLOW_PID" 2>/dev/null; then
+                  pass "first TLS slow-reader channel remained active after second-channel close"
+                else
+                  fail "closing the second TLS channel interrupted the slow-reader transfer"
+                fi
+
+                TLS_SLOW_RC=0
+                wait "$TLS_SLOW_PID" || TLS_SLOW_RC=$?
+                TLS_SLOW_SIZE="$(wc -c </tmp/tls-slow-download-32MiB.bin 2>/dev/null | tr -d ' ')"
+                TLS_SLOW_SHA="$(sha256sum /tmp/tls-slow-download-32MiB.bin 2>/dev/null | awk '{print $1}')"
+                TLS_EXPECTED_S2C_SHA="$(cat /root/expected-s2c.sha256)"
+                if [ "$TLS_SLOW_RC" -eq 0 ] && [ "$TLS_SLOW_SIZE" = "33554432" ] && \
+                  [ "$TLS_SLOW_SHA" = "$TLS_EXPECTED_S2C_SHA" ]; then
+                  pass "TLS two-channel slow-reader transfer retained exact 32 MiB length and SHA-256"
+                else
+                  fail "TLS slow-reader transfer failed or changed after second-channel close (rc=$TLS_SLOW_RC size=$TLS_SLOW_SIZE sha=$TLS_SLOW_SHA)"
+                fi
+
+                TLS_S2C_FULL_COUNT="$(grep -c "SSH channel s2c buffer full" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                TLS_S2C_DRAINED_COUNT="$(grep -c "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                TLS_S2C_NOT_DRAINED_COUNT="$(grep -c "SSH channel s2c buffer not drained at close" "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true)"
+                if [ "$TLS_S2C_FULL_COUNT" -gt 0 ] && [ "$TLS_S2C_DRAINED_COUNT" -gt 0 ] && \
+                  [ "$TLS_S2C_NOT_DRAINED_COUNT" -eq 0 ]; then
+                  pass "TLS S2C backpressure drained cleanly after the slow reader resumed"
+                else
+                  fail "TLS S2C backpressure did not report a clean drain after the two-channel test"
+                fi
+              fi
+
+              if [ "$STATUS" -eq 0 ]; then
+                if /root/socks-halfclose /root/half-close-upload-8MiB.bin 1082; then
+                pass "TLS transport preserved both half-close directions and 8 MiB upload after remote EOF"
+                else
+                  fail "TLS transport half-close or 8 MiB post-EOF upload failed"
+                  cat "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true
+                fi
+              fi
+              if [ "$STATUS" -eq 0 ] && kill -0 "$TLS_APP_PID" 2>/dev/null && \
                 curl -4 -fsS --socks5-hostname 127.0.0.1:1082 \
                   --connect-timeout 10 --max-time 30 \
                   http://127.0.0.1:18080/payload -o /tmp/tls-post-halfclose.bin; then
@@ -1176,7 +1256,7 @@ jobs:
                   fail "TLS post-half-close transfer returned a bad SHA-256"
                 fi
               else
-                fail "TLS SSH daemon stopped or failed to accept a connection after half-close"
+                fail "TLS SSH daemon stopped or failed to accept a connection after TLS regression tests"
               fi
             else
               fail "TLS transport daemon did not reach SOCKS5 Listening"
