@@ -84,8 +84,8 @@
   write-buffer retention under WANT_READ, globally pending write serialization,
   reset-client disposal, pending-OPEN and channel-close deadlines, upstream
   receive-sequence tracking, HUP drain handling, and HTTP rejection classification.
-- Extend the manual OpenWrt VM suite with an isolated `IDLE_TIMEOUT=3`
-  daemon: hold one SOCKS channel idle while a second channel streams 6 MiB
+- Extend the manual OpenWrt VM suite with an isolated `IDLE_TIMEOUT=3` daemon:
+  hold one SOCKS channel idle while a second channel streams 6 MiB
   over 24 seconds, then verify only the idle channel closes, the active
   transfer hash remains exact, and the daemon accepts a subsequent request.
 - Add a host-side TLS-to-SSH relay and run the half-close helper over
@@ -96,6 +96,7 @@
 - Allow the cross-compiled half-close helper to select a SOCKS listener port
   so TCP and TLS transport integration tests can run in separate daemons.
 - Bump the OpenWrt package release to r10.
+
 
 - Treat HUP/RDHUP as drain hints rather than EOF: EAGAIN keeps the drain
   pending, and only recv()==0 confirms the client's write-side EOF.
@@ -138,6 +139,7 @@
   listener parsing, strict HTTP status lines, and unframed HTTP 200 responses.
 - Bump the OpenWrt package release to r9.
 
+
 - Reject unexpected non-HTTP bytes after a non-CONNECT HTTP 1xx/2xx response so
   a completed HTTP 200 response cannot silently become an SSH tunnel when
   HTTP_200_TUNNEL=0.
@@ -157,25 +159,29 @@
   deadline across IPv4-first and IPv6 fallback attempts.
 - Bump the OpenWrt package release to r8.
 
+
 - Retry TLS EOF peeks on the readiness event requested by OpenSSL, without interleaving another libssh2 operation while the peek is pending; this prevents a writable-socket spin on `SSL_ERROR_WANT_WRITE`.
 - Suppress repeated idle-timeout handling while a relay is already marked `abort_on_pending` and waiting for a libssh2 operation to unwind.
 - Keep `DELAY` waits alive across the 60-second poll slices until the configured deadline expires.
 - Add native regressions for TLS peek readiness, pending-abort idle timeout, and delay deadlines spanning multiple poll slices.
 - Bump the OpenWrt package release to r7.
 
+
 - Fix C2S half-close stalls when an SSH channel write window reaches zero. Keep upstream reads armed while a channel is waiting for `WINDOW_ADJUST`, retry the pinned write when upstream data becomes readable (including already-decrypted TLS data), and preserve the window-wait state when resuming a pending write.
 - Bump the OpenWrt package release to r6.
 
+
 - Align the package payload, service executable name, and VM checks on `/usr/bin/passwall-ssh-core`; fresh installs and upgrades no longer require a manual rename. Bump the OpenWrt package release to r5.
+
 
 - Gate verbose per-channel C2S/S2C backpressure, SSH window EAGAIN/recovery, and ring-buffer close diagnostics behind `LOG_BACKPRESSURE=1`; default production logs no longer emit these high-frequency test diagnostics. Preserve the diagnostic path for CI and opt-in troubleshooting.
 - Bump OpenWrt package release to r4.
+
 
 - Increase the S2C slow-reader regression from 8 MiB to 32 MiB, with a 128 KiB/s receiver, a 420-second transfer bound, and exact byte-count/SHA-256 verification.
 - Add a target-ABI static half-close test client cross-compiled by the OpenWrt 25.12.5 SDK. Exercise client-FIN-first while reading the server response, and server-FIN-first while continuing to send to the server; verify both FIN directions independently in the host fixture.
 - Add a 90-second stress run with four concurrent SOCKS workers. Verify each 1 MiB response by length and SHA-256, and sample peak process RSS/file-descriptor usage.
 - Include the half-close helper and its SHA-256 manifest in the SDK artifact, and verify the helper source matches the VM run's source commit.
-
 - Add OpenWrt 25.12.5 x86_64 SDK package integration using the official 25.12 OpenWrt package makefiles and packages feed.
 - Use the repository's real OpenWrt package Makefile for SDK packaging; verify the source file is copied and the target binary is produced. Compile with TARGET_CPPFLAGS and GNU11.
 - Tighten HTTP status-line parsing to accept only valid HTTP/1.0 and HTTP/1.1 response versions.
@@ -201,3 +207,4 @@
 - Add a native regression for graceful HUP with queued C2S data, and refine dead-client shutdown state checks.
 - Bump OpenWrt package release to r12 so devices on r11 can upgrade to the graceful EOF fix.
 - Native parser/core-state regression for the graceful EOF cleanup fix passed in GitHub Actions run #20 (commit 2697caad).
+- The OpenWrt 25.12.5 x86_64 SDK build for r12 succeeded in GitHub Actions run #24; the resulting artifact is reserved for the separate QEMU VM validation stage.
