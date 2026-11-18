@@ -2336,6 +2336,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             if (c->abort_on_pending) {
                 c->abort_on_open = 1;
                 c->abort_on_pending = 0;
+                c->cleanup_deadline_ms = 0;
             }
             clear_pending_operation();
             *retried_open_out = c;
