@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Allow channel cleanup after inbound-only `libssh2` EAGAIN; only an operation
+  held in the global pending slot pins its original channel buffers.
+- Close dead-client channels once queued C2S data is drained, without waiting
+  for stale read-pending state or a remote EOF that may never arrive.
+- Keep aborted channel-open attempts under the existing 30-second hard-open
+  timeout instead of applying the shorter 10-second channel-cleanup deadline.
+- Separate passive TLS EOF-peek readiness from TLS callback retry state.
+  A passive WANT_READ no longer blocks SSH channel pumping; WANT_WRITE remains
+  serialized, and actual upstream receive progress invalidates the old probe.
+- Classify rejected non-tunnel HTTP 200 and invalid 101 responses as proxy
+  failures rather than SSH KEX failures.
+- Add regressions for inbound-only read/write EAGAIN cleanup, globally pending
+  write buffer retention, dead-client cleanup readiness, TLS EOF-peek state,
+  receive-sequence tracking, HTTP rejection classification, and aborted-open
+  deadline behavior.
+- Bump the OpenWrt package release to r10.
+
 - Treat HUP/RDHUP as drain hints rather than EOF: EAGAIN keeps the drain
   pending, and only recv()==0 confirms the client's write-side EOF.
 - Validate ring-buffer state and commit lengths/contiguous slices. Replace
