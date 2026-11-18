@@ -5,6 +5,10 @@ on:
 permissions:
   contents: read
   actions: read
+
+concurrency:
+  group: openwrt24-mipsel-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   sdk:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=sdk]') }}
@@ -25,7 +29,7 @@ jobs:
           set -euo pipefail
           BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
           FILE="openwrt-sdk-24.10.7-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
-          curl -fL --retry 3 "$BASE/$FILE" -o /tmp/openwrt-sdk.tar.zst
+          curl -fL --retry 3 --connect-timeout 20 --max-time 1200 "$BASE/$FILE" -o /tmp/openwrt-sdk.tar.zst
           echo "014cd0f69b2b28088fd89e5b00e4f4d5087e2fe6da52cbaa48cd521087ebf10d  /tmp/openwrt-sdk.tar.zst" | sha256sum -c -
           tar --zstd -xf /tmp/openwrt-sdk.tar.zst
           SDK_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-sdk-24.10.7-ramips-mt7621_*' | head -n 1)"
@@ -86,7 +90,7 @@ jobs:
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum "$(basename "$IPK")" > ipk.sha256)
           file "$IPK"
           sha256sum "$IPK"
-          BIN="$(find "$PKG_DIR" -type f -name passwall-ssh-core -perm -111 | head -n 1)"
+          BIN="$(find "$GITHUB_WORKSPACE/sdk/build_dir" -type f -name passwall-ssh-core -perm -111 | head -n 1)"
           test -n "$BIN"
           readelf -h "$BIN" | tee "$GITHUB_WORKSPACE/test-results/elf-header.txt"
           CROSS_CC="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -path '*/bin/*-openwrt-linux-musl-gcc' -print | head -n 1)"
