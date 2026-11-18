@@ -579,6 +579,7 @@ typedef struct {
     char socks_addr[128];
     int  keepalive_sec;
     int  verify_tls;
+    int  tls_diag;
     int  allow_remote_socks;
     int  allow_http_200_tunnel;
     int  idle_timeout_sec;
@@ -671,6 +672,9 @@ static void load_env(const char *path, app_cfg_t *cfg) {
             if(parse_int_range(v,0,1,&n)==0) cfg->fix_crlf=n; else log_yellow("FIX_CRLF harus 0 atau 1");
         } else if (!strcmp(k,"VERIFY_TLS")) {
             if(parse_int_range(v,0,1,&n)==0) cfg->verify_tls=n; else log_yellow("VERIFY_TLS harus 0 atau 1");
+        } else if (!strcmp(k,"TLS_DIAG")) {
+            if(parse_int_range(v,0,1,&n)==0) cfg->tls_diag=n;
+            else log_yellow("TLS_DIAG harus 0 atau 1; diagnostik pesan TLS dinonaktifkan");
         } else if (!strcmp(k,"ALLOW_REMOTE_SOCKS")) {
             if(parse_int_range(v,0,1,&n)==0) cfg->allow_remote_socks=n; else log_yellow("ALLOW_REMOTE_SOCKS harus 0 atau 1");
         } else if (!strcmp(k,"HTTP_200_TUNNEL")) {
@@ -3518,6 +3522,7 @@ int main(int argc, char **argv) {
         .socks_addr = "127.0.0.1:1080",
         .keepalive_sec = 15,
         .verify_tls = 1,
+        .tls_diag = 0,
         .allow_remote_socks = 0,
         .allow_http_200_tunnel = 0,
         .idle_timeout_sec = DEFAULT_IDLE_TIMEOUT,
@@ -3531,7 +3536,7 @@ int main(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            printf("Usage: %s [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-verify-tls 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log-backpressure 0|1] [-log FILE|-]\\n", argv[0]);
+            printf("Usage: %s [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-verify-tls 0|1] [-tls-diag 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log-backpressure 0|1] [-log FILE|-]\\n", argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-env") == 0 && i + 1 < argc) {
             env_file = argv[++i];
@@ -3560,6 +3565,7 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "-keepalive") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,3600,&cfg.keepalive_sec)<0){log_red("Nilai -keepalive tidak valid");return 1;} }
         else if (strcmp(argv[i], "-fix-crlf") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,1,&cfg.fix_crlf)<0){log_red("Nilai -fix-crlf tidak valid");return 1;} }
         else if (strcmp(argv[i], "-verify-tls") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,1,&cfg.verify_tls)<0){log_red("Nilai -verify-tls tidak valid");return 1;} }
+        else if (strcmp(argv[i], "-tls-diag") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,1,&cfg.tls_diag)<0){log_red("Nilai -tls-diag tidak valid");return 1;} }
         else if (strcmp(argv[i], "-allow-remote-socks") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,1,&cfg.allow_remote_socks)<0){log_red("Nilai -allow-remote-socks tidak valid");return 1;} }
         else if (strcmp(argv[i], "-http-200-tunnel") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,1,&cfg.allow_http_200_tunnel)<0){log_red("Nilai -http-200-tunnel tidak valid");return 1;} }
         else if (strcmp(argv[i], "-idle-timeout") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,86400,&cfg.idle_timeout_sec)<0){log_red("Nilai -idle-timeout tidak valid");return 1;} }
@@ -3665,7 +3671,10 @@ int main(int argc, char **argv) {
             goto fail_cleanup;
         }
         SSL_CTX_set_mode(ssl_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
-        SSL_CTX_set_msg_callback(ssl_ctx, tls_message_callback);
+        if (cfg.tls_diag) {
+            SSL_CTX_set_msg_callback(ssl_ctx, tls_message_callback);
+            log_blue("TLS message tracing enabled (TLS_DIAG=1)");
+        }
         if (SSL_CTX_set_alpn_protos(ssl_ctx, alpn_http11, sizeof(alpn_http11)) != 0) {
             log_red("[TLS-DIAG] failed to configure ALPN http/1.1");
             write_marker(NEED_RESTART_FILE, "TLS ALPN setup failed");

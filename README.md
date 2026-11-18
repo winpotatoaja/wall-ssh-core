@@ -58,6 +58,14 @@ TLS message-logging callback also restores `errno` before returning,
 preventing stdio/file logging from contaminating OpenSSL's error
 classification.
 
+## TLS diagnostics (R17)
+
+TLS handshake message tracing is disabled by default to avoid synchronous
+file logging inside OpenSSL callbacks. Enable it only for diagnosis with
+`TLS_DIAG=1` in the env file or `-tls-diag 1` on the core command line.
+The default connection path still reports handshake failures and alternate
+endpoint retries without message-by-message callback logging.
+
 ## R16 verification
 
 The parser stage includes focused regressions for TLS callback `errno`

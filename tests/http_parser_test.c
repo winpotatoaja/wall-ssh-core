@@ -1111,6 +1111,40 @@ done:
     return 0;
 }
 
+static int run_tls_diag_config_regression(void) {
+    char path[] = "/tmp/passwall-tls-diag-test-XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) {
+        fprintf(stderr, "[FAIL] TLS_DIAG config regression: mkstemp: %s\n", strerror(errno));
+        return 1;
+    }
+
+    const char enabled[] = "TLS_DIAG=1\n";
+    ssize_t written = write(fd, enabled, sizeof(enabled) - 1);
+    close(fd);
+    if (written != (ssize_t)(sizeof(enabled) - 1)) {
+        unlink(path);
+        fprintf(stderr, "[FAIL] TLS_DIAG config regression: write failed\n");
+        return 1;
+    }
+
+    app_cfg_t cfg = {0};
+    if (cfg.tls_diag != 0) {
+        unlink(path);
+        fprintf(stderr, "[FAIL] TLS_DIAG defaults to off\n");
+        return 1;
+    }
+    load_env(path, &cfg);
+    unlink(path);
+
+    if (cfg.tls_diag != 1) {
+        fprintf(stderr, "[FAIL] TLS_DIAG=1 was not parsed (value=%d)\n", cfg.tls_diag);
+        return 1;
+    }
+    puts("[PASS] TLS message tracing is opt-in and TLS_DIAG=1 is parsed");
+    return 0;
+}
+
 static int run_core_state_regressions(void) {
     int failures = 0;
     failures += run_ipv4_dial_regression();
@@ -1118,6 +1152,7 @@ static int run_core_state_regressions(void) {
     failures += run_tcp_dial_exclusion_regression();
     failures += run_poll_hup_regression();
     failures += run_tls_message_callback_errno_regression();
+    failures += run_tls_diag_config_regression();
     failures += run_tls_unexpected_eof_retryable_regression();
     failures += run_ring_buffer_regressions();
     failures += run_eof_drain_regression();

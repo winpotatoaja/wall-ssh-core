@@ -7,6 +7,12 @@
   than passing only because successful stdout logging left it unchanged.
 - Apply the same clean OpenSSL error-queue and errno preparation to the
   TLS close_notify read and SSL_shutdown() path, not just connection/data I/O.
+- Disable the synchronous TLS message callback by default. Enable it
+  only with `TLS_DIAG=1` in the env file (or `-tls-diag 1`), so normal
+  handshakes are not affected by per-message file logging; keep the callback's
+  errno-preservation regression for diagnostic mode.
+- Bump the OpenWrt package release to r17.
+
 - Treat OpenSSL's TLS 1.3 `unexpected eof while reading` reason as a
   retryable transport failure, alongside syscall EOF and handshake timeout.
   Add a socketpair regression where the peer closes without close_notify.
