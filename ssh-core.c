@@ -1878,6 +1878,7 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
             if (connected_address && connected_address_size)
                 snprintf(connected_address, connected_address_size, "%s", target);
             if (last_errno_out) *last_errno_out = 0;
+            errno = 0;
             return fd;
         }
 
@@ -1928,6 +1929,7 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
                         snprintf(connected_address, connected_address_size, "%s",
                                  candidates[i].address);
                     if (last_errno_out) *last_errno_out = 0;
+                    errno = 0;
                     return winner;
                 } else if (candidate_error == 0) {
                     candidate_error = ECONNRESET;
@@ -2024,6 +2026,7 @@ static int tcp_connect_host_excluding(const char *host, const char *port,
                          family_names[family_index],
                          family_connected_address[0] ? family_connected_address : host,
                          local_address, connect_elapsed, now_ms() - total_started);
+            errno = 0;
             return fd;
         }
 

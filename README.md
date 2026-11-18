@@ -47,8 +47,10 @@ The TLS transport retries a stalled or disconnected handshake on another
 DNS-resolved upstream address, excluding endpoints that already failed. The
 retry is bounded to four endpoints and applies only to transport-level
 failures/timeouts; certificate validation and TLS protocol/configuration
-failures remain fatal. DNS resolution and the operating-system routing table
-remain dynamic, so the core does not bind to a fixed WAN interface.
+failures remain fatal. The TCP racer also clears errno when a candidate wins,
+so a refused earlier candidate cannot leak an error into the TLS layer. DNS
+resolution and the operating-system routing table remain dynamic, so the
+core does not bind to a fixed WAN interface.
 
 OpenSSL non-blocking I/O clears the thread error queue before each
 `SSL_connect()`, `SSL_read()`, `SSL_write()`, and shutdown I/O so

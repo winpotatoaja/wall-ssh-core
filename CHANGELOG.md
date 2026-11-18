@@ -7,6 +7,10 @@
   than passing only because successful stdout logging left it unchanged.
 - Apply the same clean OpenSSL error-queue and errno preparation to the
   TLS close_notify read and SSL_shutdown() path, not just connection/data I/O.
+- Clear errno on successful TCP dial returns as well as before SSL I/O.
+  The happy-eyeballs dialer may have observed a refused earlier candidate
+  before a later candidate wins; that stale errno must not escape the dialer.
+  Add a regression for refused-first/successful-second candidate selection.
 - Add a silent-peer handshake timeout regression to verify the timeout path
   is classified as retryable and therefore eligible for an alternate endpoint.
 - Disable the synchronous TLS message callback by default. Enable it

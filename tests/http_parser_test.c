@@ -1205,11 +1205,97 @@ done:
     return 0;
 }
 
+static int run_tcp_dial_success_clears_errno_regression(void) {
+    int refused_fd = -1;
+    int listener = -1;
+    int client = -1;
+    int accepted = -1;
+    int failed = 0;
+    struct sockaddr_in refused_addr, live_addr;
+    socklen_t addr_len = sizeof(struct sockaddr_in);
+    struct addrinfo entries[2];
+    char selected[INET6_ADDRSTRLEN + 24] = {0};
+    int last_error = 0;
+
+    memset(&refused_addr, 0, sizeof(refused_addr));
+    memset(&live_addr, 0, sizeof(live_addr));
+    memset(entries, 0, sizeof(entries));
+
+    refused_fd = socket(AF_INET, SOCK_STREAM, 0);
+    listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (refused_fd < 0 || listener < 0) { failed = 1; goto done; }
+
+    refused_addr.sin_family = AF_INET;
+    refused_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    refused_addr.sin_port = 0;
+    if (bind(refused_fd, (struct sockaddr *)&refused_addr, sizeof(refused_addr)) < 0 ||
+        getsockname(refused_fd, (struct sockaddr *)&refused_addr, &addr_len) < 0) {
+        failed = 1;
+        goto done;
+    }
+    close(refused_fd);
+    refused_fd = -1;
+
+    live_addr.sin_family = AF_INET;
+    live_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    live_addr.sin_port = 0;
+    if (bind(listener, (struct sockaddr *)&live_addr, sizeof(live_addr)) < 0 ||
+        listen(listener, 1) < 0 ||
+        getsockname(listener, (struct sockaddr *)&live_addr, &addr_len) < 0) {
+        failed = 1;
+        goto done;
+    }
+
+    entries[0].ai_family = AF_INET;
+    entries[0].ai_socktype = SOCK_STREAM;
+    entries[0].ai_protocol = IPPROTO_TCP;
+    entries[0].ai_addr = (struct sockaddr *)&refused_addr;
+    entries[0].ai_addrlen = sizeof(refused_addr);
+    entries[0].ai_next = &entries[1];
+
+    entries[1].ai_family = AF_INET;
+    entries[1].ai_socktype = SOCK_STREAM;
+    entries[1].ai_protocol = IPPROTO_TCP;
+    entries[1].ai_addr = (struct sockaddr *)&live_addr;
+    entries[1].ai_addrlen = sizeof(live_addr);
+
+    int old_debug = g_tcp_dial_debug;
+    g_tcp_dial_debug = 0;
+    errno = 0;
+    client = tcp_connect_addrinfo_list(
+        &entries[0], AF_INET, now_ms() + 2000,
+        NULL, 0, selected, sizeof(selected), &last_error);
+    int result_errno = errno;
+    g_tcp_dial_debug = old_debug;
+
+    if (client < 0 || last_error != 0 || result_errno != 0)
+        failed = 1;
+    if (!failed) {
+        accepted = accept(listener, NULL, NULL);
+        if (accepted < 0) failed = 1;
+    }
+
+done:
+    if (failed)
+        fprintf(stderr,
+                "[FAIL] successful TCP race clears stale errno after an earlier refused candidate (errno=%d last_error=%d)\n",
+                errno, last_error);
+    else
+        puts("[PASS] successful TCP race clears stale errno after an earlier refused candidate");
+
+    if (accepted >= 0) close(accepted);
+    if (client >= 0) close(client);
+    if (listener >= 0) close(listener);
+    if (refused_fd >= 0) close(refused_fd);
+    return failed;
+}
+
 static int run_core_state_regressions(void) {
     int failures = 0;
     failures += run_ipv4_dial_regression();
     failures += run_ipv6_dial_regression();
     failures += run_tcp_dial_exclusion_regression();
+    failures += run_tcp_dial_success_clears_errno_regression();
     failures += run_poll_hup_regression();
     failures += run_tls_message_callback_errno_regression();
     failures += run_tls_diag_config_regression();
