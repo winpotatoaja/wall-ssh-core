@@ -597,6 +597,44 @@ static int run_inbound_only_channel_close_regression(void) {
     return 0;
 }
 
+static int run_pending_op_serialization_regression(void) {
+    client_conn_t c = {
+        .write_pending = 1,
+        .write_waiting_window = 0
+    };
+    int inbound = LIBSSH2_SESSION_BLOCK_INBOUND;
+    int outbound = LIBSSH2_SESSION_BLOCK_OUTBOUND;
+    int failed = 0;
+
+    /* An active write must keep its exact caller buffer even if TLS reports
+     * WANT_READ; only a zero-window wait is safe to release. */
+    if (!pending_op_requires_serial_retry(PENDING_WRITE, &c, inbound, EPOLLIN))
+        failed = 1;
+    c.write_waiting_window = 1;
+    if (pending_op_requires_serial_retry(PENDING_WRITE, &c, inbound, EPOLLIN))
+        failed = 1;
+    if (!pending_op_requires_serial_retry(PENDING_WRITE, &c, outbound, 0))
+        failed = 1;
+
+    if (!pending_op_requires_serial_retry(PENDING_SEND_EOF, &c, inbound, EPOLLIN))
+        failed = 1;
+    if (pending_op_requires_serial_retry(PENDING_READ, &c, inbound, EPOLLIN))
+        failed = 1;
+    if (pending_op_requires_serial_retry(PENDING_FREE, &c, inbound, EPOLLIN))
+        failed = 1;
+    if (!pending_op_requires_serial_retry(PENDING_FREE, &c, outbound, 0))
+        failed = 1;
+    if (!pending_op_requires_serial_retry(PENDING_KEEPALIVE, NULL, inbound, EPOLLIN))
+        failed = 1;
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] libssh2 EAGAIN serialization preserves active write and send operations\n");
+        return 1;
+    }
+    puts("[PASS] libssh2 EAGAIN serialization preserves active write and send operations");
+    return 0;
+}
+
 static int run_upstream_rx_progress_regression(void) {
     upstream_ctx_t u = {.rx_seq = 12, .ssl_want_events = EPOLLIN};
     int did_ssh_read = 0;
@@ -677,6 +715,7 @@ static int run_core_state_regressions(void) {
     failures += run_shutdown_poll_ignores_stop_regression();
     failures += run_pending_channel_close_buffer_regression();
     failures += run_inbound_only_channel_close_regression();
+    failures += run_pending_op_serialization_regression();
     failures += run_upstream_rx_progress_regression();
     failures += run_upstream_hup_state_regression();
     failures += run_http_rejection_classification_regression();
