@@ -12,10 +12,11 @@
   received response headers and reached the read-EAGAIN wait. Exercise it on
   TCP and TLS, including while another TLS S2C slow-reader channel remains
   active; verify daemon liveness and bounded RSS/file-descriptor growth.
-- Run TLS idle-channel cleanup with `IDLE_TIMEOUT=3` beside an active
-  32 MiB transfer, verify `KEEPALIVE=10` produces repeated idle TLS
-  keepalives, and require a clean SIGTERM exit without skipped SSH cleanup
-  or an incomplete TLS close_notify exchange.
+- Keep the three-second `IDLE_TIMEOUT` isolation test on its dedicated
+  TCP daemon so it cannot expire the TLS half-close fixture during its
+  intentional eight-second remote-read pause. Verify `KEEPALIVE=10` produces
+  repeated idle TLS keepalives and require a clean SIGTERM exit without
+  skipped SSH cleanup or an incomplete TLS close_notify exchange.
 - Extend the four-worker VM stress period from 90 seconds to 30 minutes.
   Update the QEMU expect and Actions job timeouts to accommodate the run.
 - Strengthen the HTTP 200 follow-up regression so trailing non-HTTP data
