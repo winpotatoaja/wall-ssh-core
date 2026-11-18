@@ -56,7 +56,7 @@ jobs:
             vm)
               sudo apt-get install -y --no-install-recommends \
                 qemu-system-x86 qemu-utils expect e2fsprogs openssh-server \
-                python3 curl ca-certificates
+                python3 curl ca-certificates openssl
               ;;
             all)
               sudo apt-get install -y --no-install-recommends \
@@ -516,7 +516,77 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:18080/health
-          sudo ss -lntp | grep -E ':2222|:18080'
+
+          echo "========== PREPARE TLS-TERMINATED SSH RELAY =========="
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /tmp/ssh-core-tls.key -out /tmp/ssh-core-tls.crt \
+            -subj '/CN=localhost' -days 2 >/tmp/ssh-core-tls-cert.log 2>&1
+          cat > /tmp/ssh-core-tls-relay.py <<'PY_TLS'
+          import socket
+          import ssl
+          import threading
+
+          context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+          context.load_cert_chain('/tmp/ssh-core-tls.crt', '/tmp/ssh-core-tls.key')
+
+          def pump(source, destination):
+              try:
+                  while True:
+                      block = source.recv(65536)
+                      if not block:
+                          break
+                      destination.sendall(block)
+              except (BrokenPipeError, ConnectionResetError, OSError, ssl.SSLError):
+                  pass
+              try:
+                  destination.shutdown(socket.SHUT_WR)
+              except OSError:
+                  pass
+
+          def handle(raw, address):
+              tls = None
+              upstream = None
+              try:
+                  tls = context.wrap_socket(raw, server_side=True)
+                  upstream = socket.create_connection(('127.0.0.1', 2222), timeout=10)
+                  tls.settimeout(None)
+                  upstream.settimeout(None)
+                  print('[TLS-RELAY] TLS client connected from %s' % (address,), flush=True)
+                  client_to_ssh = threading.Thread(target=pump, args=(tls, upstream), daemon=True)
+                  ssh_to_client = threading.Thread(target=pump, args=(upstream, tls), daemon=True)
+                  client_to_ssh.start()
+                  ssh_to_client.start()
+                  client_to_ssh.join()
+                  ssh_to_client.join()
+              except Exception as exc:
+                  print('[TLS-RELAY] connection error: %r' % (exc,), flush=True)
+              finally:
+                  for item in (upstream, tls, raw):
+                      if item is not None:
+                          try:
+                              item.close()
+                          except OSError:
+                              pass
+
+          listener = socket.socket()
+          listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          listener.bind(('0.0.0.0', 8443))
+          listener.listen(64)
+          print('[TLS-RELAY] listening on 0.0.0.0:8443 -> 127.0.0.1:2222', flush=True)
+          while True:
+              connection, address = listener.accept()
+              threading.Thread(target=handle, args=(connection, address), daemon=True).start()
+          PY_TLS
+          python3 -m py_compile /tmp/ssh-core-tls-relay.py
+          python3 /tmp/ssh-core-tls-relay.py >/tmp/ssh-core-tls-relay.log 2>&1 &
+          echo "$!" >/tmp/ssh-core-tls-relay.pid
+          for attempt in $(seq 1 30); do
+            if sudo ss -lnt | grep -q ':8443'; then
+              break
+            fi
+            sleep 1
+          done
+          sudo ss -lntp | grep -E ':2222|:8443|:18080'
 
       - name: Download and prepare OpenWrt 25.12.5 x86_64 VM rootfs
         if: inputs.stage == 'vm'
@@ -1063,6 +1133,62 @@ jobs:
             fi
           fi
 
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== TLS TRANSPORT / REMOTE EOF / 8 MiB POST-EOF UPLOAD =========="
+            sed -e 's|^TRANSPORT=.*$|TRANSPORT=TLS|' \
+                -e 's|^HOST_PORT=.*$|HOST_PORT=8443|' \
+                -e 's|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:1082|' \
+                -e 's|^VERIFY_TLS=.*$|VERIFY_TLS=0|' \
+                /root/ssh-core-test.env > /root/ssh-core-tls-test.env
+            printf '%s\n' 'SNI=localhost' >> /root/ssh-core-tls-test.env
+            "$BIN" -env /root/ssh-core-tls-test.env -log "$LOGDIR/ssh-core-tls.log" \
+              >"$LOGDIR/ssh-core-tls-stdout.log" 2>&1 &
+            TLS_APP_PID=$!
+            TLS_START_COUNT=0
+            while [ "$TLS_START_COUNT" -lt 40 ]; do
+              if grep -q "SOCKS5 Listening" "$LOGDIR/ssh-core-tls.log" 2>/dev/null; then
+                break
+              fi
+              if ! kill -0 "$TLS_APP_PID" 2>/dev/null; then
+                break
+              fi
+              TLS_START_COUNT=$((TLS_START_COUNT + 1))
+              sleep 1
+            done
+
+            if grep -q "SOCKS5 Listening" "$LOGDIR/ssh-core-tls.log" 2>/dev/null; then
+              pass "TLS transport established SSH and opened SOCKS port 1082"
+              if /root/socks-halfclose /root/half-close-upload-8MiB.bin 1082; then
+                pass "TLS transport preserved both half-close directions and 8 MiB upload after remote EOF"
+              else
+                fail "TLS transport half-close or 8 MiB post-EOF upload failed"
+                cat "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true
+              fi
+              if kill -0 "$TLS_APP_PID" 2>/dev/null && \
+                curl -4 -fsS --socks5-hostname 127.0.0.1:1082 \
+                  --connect-timeout 10 --max-time 30 \
+                  http://127.0.0.1:18080/payload -o /tmp/tls-post-halfclose.bin; then
+                TLS_POST_SHA="$(sha256sum /tmp/tls-post-halfclose.bin | awk '{print $1}')"
+                TLS_EXPECTED_SHA="$(cat /root/expected-payload.sha256)"
+                if [ "$TLS_POST_SHA" = "$TLS_EXPECTED_SHA" ]; then
+                  pass "TLS SSH daemon remained usable after remote-EOF upload"
+                else
+                  fail "TLS post-half-close transfer returned a bad SHA-256"
+                fi
+              else
+                fail "TLS SSH daemon stopped or failed to accept a connection after half-close"
+              fi
+            else
+              fail "TLS transport daemon did not reach SOCKS5 Listening"
+              cat "$LOGDIR/ssh-core-tls-stdout.log" 2>/dev/null || true
+              cat "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true
+            fi
+            if [ -n "$TLS_APP_PID" ]; then
+              kill "$TLS_APP_PID" 2>/dev/null || true
+              wait "$TLS_APP_PID" 2>/dev/null || true
+            fi
+          fi
+
           echo "========== SSH CORE LOG =========="
           cat "$LOGDIR/ssh-core.log" 2>/dev/null || true
           echo "========== SSH CORE STDOUT =========="
@@ -1071,6 +1197,10 @@ jobs:
           cat "$LOGDIR/ssh-core-idle.log" 2>/dev/null || true
           echo "========== IDLE TEST SSH CORE STDOUT =========="
           cat "$LOGDIR/ssh-core-idle-stdout.log" 2>/dev/null || true
+          echo "========== TLS TEST SSH CORE LOG =========="
+          cat "$LOGDIR/ssh-core-tls.log" 2>/dev/null || true
+          echo "========== TLS TEST SSH CORE STDOUT =========="
+          cat "$LOGDIR/ssh-core-tls-stdout.log" 2>/dev/null || true
           if [ -n "$APP_PID" ]; then
             kill "$APP_PID" 2>/dev/null || true
             wait "$APP_PID" 2>/dev/null || true
