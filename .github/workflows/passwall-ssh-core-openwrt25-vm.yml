@@ -268,6 +268,8 @@ jobs:
           sha256sum /tmp/ssh-core-http/slow-download-32MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/slow-download-32MiB.sha256
           dd if=/dev/urandom of=/tmp/ssh-core-http/half-close-upload-8MiB.bin bs=1M count=8 status=none
           sha256sum /tmp/ssh-core-http/half-close-upload-8MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/half-close-upload-8MiB.sha256
+          dd if=/dev/zero of=/tmp/ssh-core-http/idle-active-6MiB.bin bs=1M count=6 status=none
+          sha256sum /tmp/ssh-core-http/idle-active-6MiB.bin | awk '{print $1}' > /tmp/ssh-core-http/idle-active-6MiB.sha256
 
           cat > /tmp/ssh-core-http-server.py <<'PY_SERVER'
           from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -290,6 +292,36 @@ jobs:
                   elif self.path == "/payload":
                       with open(os.path.join(ROOT, "payload-1MiB.bin"), "rb") as f:
                           body = f.read()
+                  elif self.path == "/idle":
+                      body = b"I" * 64
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(len(body)))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      print("[IDLE-TEST] holding one direct-tcpip channel without response data", flush=True)
+                      time.sleep(40.0)
+                      try:
+                          self.wfile.write(body)
+                          self.wfile.flush()
+                      except (BrokenPipeError, ConnectionResetError, OSError):
+                          print("[IDLE-TEST] idle client channel was closed before response", flush=True)
+                      self.close_connection = True
+                      return
+                  elif self.path == "/idle-active":
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(6 * 1024 * 1024))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      with open(os.path.join(ROOT, "idle-active-6MiB.bin"), "rb") as f:
+                          while True:
+                              block = f.read(65536)
+                              if not block:
+                                  break
+                              self.wfile.write(block)
+                              self.wfile.flush()
+                              time.sleep(0.25)
+                      self.close_connection = True
+                      return
                   elif self.path == "/slow-download":
                       with open(os.path.join(ROOT, "slow-download-32MiB.bin"), "rb") as f:
                           body = f.read()
@@ -512,6 +544,8 @@ jobs:
           sudo install -m 0644 "$APK" "$ROOT/root/passwall-ssh-core.apk"
           sudo install -m 0755 "$GITHUB_WORKSPACE/test-results/socks-halfclose" "$ROOT/root/socks-halfclose"
           sudo install -m 0644 /tmp/ssh-core-http/half-close-upload-8MiB.bin "$ROOT/root/half-close-upload-8MiB.bin"
+          IDLE_ACTIVE_SHA="$(cat /tmp/ssh-core-http/idle-active-6MiB.sha256)"
+          printf '%s\n' "$IDLE_ACTIVE_SHA" | sudo tee "$ROOT/root/expected-idle-active.sha256" >/dev/null
           EXPECTED_SHA="$(cat /tmp/ssh-core-http/payload-1MiB.sha256)"
           printf '%s\n' "$EXPECTED_SHA" | sudo tee "$ROOT/root/expected-payload.sha256" >/dev/null
           EXPECTED_S2C_SHA="$(cat /tmp/ssh-core-http/slow-download-32MiB.sha256)"
@@ -955,10 +989,88 @@ jobs:
             fi
           fi
 
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== IDLE CHANNEL TIMEOUT MUST NOT RESTART OTHER ACTIVE CHANNELS =========="
+            sed -e 's|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:1081|' \
+                -e 's|^IDLE_TIMEOUT=.*$|IDLE_TIMEOUT=3|' \
+                /root/ssh-core-test.env > /root/ssh-core-idle-test.env
+            "$BIN" -env /root/ssh-core-idle-test.env -log "$LOGDIR/ssh-core-idle.log" \
+              >"$LOGDIR/ssh-core-idle-stdout.log" 2>&1 &
+            IDLE_APP_PID=$!
+            IDLE_START_COUNT=0
+            while [ "$IDLE_START_COUNT" -lt 30 ]; do
+              if grep -q "SOCKS5 Listening" "$LOGDIR/ssh-core-idle.log" 2>/dev/null; then
+                break
+              fi
+              if ! kill -0 "$IDLE_APP_PID" 2>/dev/null; then
+                break
+              fi
+              IDLE_START_COUNT=$((IDLE_START_COUNT + 1))
+              sleep 1
+            done
+
+            if grep -q "SOCKS5 Listening" "$LOGDIR/ssh-core-idle.log" 2>/dev/null; then
+              pass "second SSH core started with IDLE_TIMEOUT=3 on SOCKS port 1081"
+              curl -4 -sS --socks5-hostname 127.0.0.1:1081 \
+                --connect-timeout 10 --max-time 35 \
+                http://127.0.0.1:18080/idle -o /tmp/idle-channel.bin \
+                >"$LOGDIR/idle-curl.log" 2>&1 &
+              IDLE_CURL_PID=$!
+              sleep 1
+              curl -4 -fsS --socks5-hostname 127.0.0.1:1081 \
+                --connect-timeout 10 --max-time 35 \
+                http://127.0.0.1:18080/idle-active -o /tmp/idle-active-6MiB.bin
+              ACTIVE_RC=$?
+              IDLE_CURL_RC=0
+              wait "$IDLE_CURL_PID" || IDLE_CURL_RC=$?
+
+              ACTIVE_SIZE="$(wc -c </tmp/idle-active-6MiB.bin 2>/dev/null | tr -d ' ')"
+              ACTIVE_SHA="$(sha256sum /tmp/idle-active-6MiB.bin 2>/dev/null | awk '{print $1}')"
+              EXPECTED_ACTIVE_SHA="$(cat /root/expected-idle-active.sha256)"
+              if [ "$ACTIVE_RC" -eq 0 ] && [ "$ACTIVE_SIZE" = "6291456" ] && \
+                [ "$ACTIVE_SHA" = "$EXPECTED_ACTIVE_SHA" ]; then
+                pass "active 6 MiB stream completed with exact SHA-256 while the idle channel expired"
+              else
+                fail "active stream was interrupted by idle-channel cleanup: rc=$ACTIVE_RC size=$ACTIVE_SIZE sha=$ACTIVE_SHA"
+              fi
+              if [ "$IDLE_CURL_RC" -ne 0 ] && [ "$IDLE_CURL_RC" -ne 28 ]; then
+                pass "idle SOCKS channel was closed independently"
+              else
+                fail "idle channel did not close independently (curl rc=$IDLE_CURL_RC)"
+              fi
+              if kill -0 "$IDLE_APP_PID" 2>/dev/null && \
+                curl -4 -fsS --socks5-hostname 127.0.0.1:1081 \
+                  --connect-timeout 10 --max-time 30 \
+                  http://127.0.0.1:18080/payload -o /tmp/idle-post-cleanup.bin; then
+                POST_CLEANUP_SHA="$(sha256sum /tmp/idle-post-cleanup.bin | awk '{print $1}')"
+                EXPECTED_POST_SHA="$(cat /root/expected-payload.sha256)"
+                if [ "$POST_CLEANUP_SHA" = "$EXPECTED_POST_SHA" ]; then
+                  pass "idle-timeout cleanup left the second SSH daemon alive for a new SOCKS connection"
+                else
+                  fail "post-cleanup SOCKS transfer returned a bad SHA-256"
+                fi
+              else
+                fail "idle-timeout cleanup stopped the daemon or prevented a new SOCKS connection"
+              fi
+            else
+              fail "second SSH core did not start with IDLE_TIMEOUT=3"
+              cat "$LOGDIR/ssh-core-idle-stdout.log" 2>/dev/null || true
+              cat "$LOGDIR/ssh-core-idle.log" 2>/dev/null || true
+            fi
+            if [ -n "$IDLE_APP_PID" ]; then
+              kill "$IDLE_APP_PID" 2>/dev/null || true
+              wait "$IDLE_APP_PID" 2>/dev/null || true
+            fi
+          fi
+
           echo "========== SSH CORE LOG =========="
           cat "$LOGDIR/ssh-core.log" 2>/dev/null || true
           echo "========== SSH CORE STDOUT =========="
           cat "$LOGDIR/ssh-core-stdout.log" 2>/dev/null || true
+          echo "========== IDLE TEST SSH CORE LOG =========="
+          cat "$LOGDIR/ssh-core-idle.log" 2>/dev/null || true
+          echo "========== IDLE TEST SSH CORE STDOUT =========="
+          cat "$LOGDIR/ssh-core-idle-stdout.log" 2>/dev/null || true
           if [ -n "$APP_PID" ]; then
             kill "$APP_PID" 2>/dev/null || true
             wait "$APP_PID" 2>/dev/null || true
