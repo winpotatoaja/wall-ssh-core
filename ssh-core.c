@@ -274,7 +274,7 @@ static int relay_idle_timeout_due(const client_conn_t *c, int timeout_sec,
  * EAGAIN or an unsent EOF intent. Any truly active libssh2 call is guarded by
  * g_pending_client/g_pending_op inside start_closing_client(). */
 static int client_dead_ready_to_close(const client_conn_t *c) {
-    return c && c->client_dead && !c->hup_pending && c->c2s.used == 0;
+    return c && c->client_dead && !c->hup_pending;
 }
 
 static int client_cleanup_timeout_due(const client_conn_t *c, long long now_msec) {
@@ -2623,22 +2623,12 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 }
             }
         } else if (c->state == ST_RELAY) {
-            if (c->client_dead && c->write_pending && c->write_waiting_window) {
-                /* No channel_write call is in flight while waiting for WINDOW_ADJUST.
-                 * The local socket is gone, so unsent C2S bytes can be discarded. */
-                if (rb_clear(&c->c2s) < 0) {
-                    log_red("C2S ring clear rejected while discarding dead-client window wait");
-                    *agg_dirs_out = agg_dirs;
-                    note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-                    *did_ssh_read_out = did_ssh_read;
-                    return -1;
-                }
-                c->write_pending = 0;
-                c->write_pending_head = 0;
-                c->write_pending_generation = 0;
-                c->write_pending_len = 0;
-                c->write_waiting_window = 0;
-                c->write_wait_rx_seq = 0;
+            if (client_dead_ready_to_close(c)) {
+                c->need_send_eof = 0;
+                c->abort_on_pending = 0;
+                start_closing_client(epfd, c);
+                c = next;
+                continue;
             }
             if (drain_pending_eof_to_c2s(epfd, c)) {
                 any_progress = 1;
@@ -2767,14 +2757,6 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     c = next;
                     continue;
                 }
-            }
-
-            if (client_dead_ready_to_close(c)) {
-                c->need_send_eof = 0;
-                c->abort_on_pending = 0;
-                start_closing_client(epfd, c);
-                c = next;
-                continue;
             }
 
             if (!c->ssh_eof && (!c->client_dead || c->read_pending) &&
