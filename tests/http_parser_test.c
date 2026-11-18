@@ -255,6 +255,62 @@ static int run_deferred_client_cleanup_regression(void) {
     return 0;
 }
 
+static int run_pending_channel_close_buffer_regression(void) {
+    client_conn_t *c = calloc(1, sizeof(*c));
+    if (!c) return 1;
+    c->fd = -1;
+    c->state = ST_RELAY;
+    c->channel = (LIBSSH2_CHANNEL *)(uintptr_t)1;
+
+    int failed = rb_init(&c->c2s, 64) < 0 || rb_init(&c->s2c, 64) < 0;
+    if (!failed && rb_push(&c->c2s, (const uint8_t *)"upload", 6) < 0) failed = 1;
+    size_t free_len = 0;
+    uint8_t *s2c_write = failed ? NULL : rb_write_slice(&c->s2c, &free_len);
+    if (!s2c_write || free_len < 8) failed = 1;
+
+    if (!failed) {
+        c->write_pending = 1;
+        c->write_pending_head = c->c2s.head;
+        c->write_pending_generation = c->c2s.generation;
+        c->write_pending_len = 6;
+        c->read_pending = 1;
+        c->read_pending_tail = c->s2c.tail;
+        c->read_pending_generation = c->s2c.generation;
+        c->read_pending_len = 8;
+
+        g_clients = c;
+        g_client_count = 1;
+        g_opening_client = NULL;
+        clear_pending_operation();
+        start_closing_client(-1, c);
+
+        const uint8_t *c2s_read = rb_read_slice_pinned(
+            &c->c2s, c->write_pending_head, c->write_pending_generation, c->write_pending_len);
+        uint8_t *s2c_retry = rb_write_slice_pinned(
+            &c->s2c, c->read_pending_tail, c->read_pending_generation, c->read_pending_len);
+        if (g_clients != c || g_client_count != 1 || c->state != ST_RELAY ||
+            !c->abort_on_pending || !c->write_pending || !c->read_pending ||
+            !c2s_read || memcmp(c2s_read, "upload", 6) != 0 || s2c_retry != s2c_write) {
+            failed = 1;
+        }
+    }
+
+    if (g_clients == c) {
+        c->channel = NULL;
+        c->write_pending = 0;
+        c->read_pending = 0;
+        remove_client(-1, c);
+    } else {
+        c->channel = NULL;
+        rb_free(&c->c2s);
+        rb_free(&c->s2c);
+        free(c);
+    }
+    if (failed) { fprintf(stderr, "[FAIL] pending channel close preserves ring buffers\n"); return 1; }
+    puts("[PASS] pending channel close preserves ring buffers");
+    return 0;
+}
+
 static int run_socks_listener_address_regression(void) {
     struct sockaddr_storage ss;
     socklen_t slen = 0;
@@ -277,6 +333,7 @@ static int run_core_state_regressions(void) {
     failures += run_ring_buffer_regressions();
     failures += run_eof_drain_regression();
     failures += run_deferred_client_cleanup_regression();
+    failures += run_pending_channel_close_buffer_regression();
     failures += run_socks_listener_address_regression();
 
     size_t parsed_hex = 0;
