@@ -614,7 +614,7 @@ static int run_core_state_regressions(void) {
     } else {
         puts("[PASS] TLS EOF peek retries only on requested EPOLLOUT readiness");
     }
-    peek.ssl_want_events = EPOLLIN;
+    peek.eof_peek_want_events = EPOLLIN;
     if (upstream_peek_retry_ready(&peek, EPOLLOUT) ||
         !upstream_peek_retry_ready(&peek, EPOLLIN)) {
         fprintf(stderr, "[FAIL] TLS EOF peek switches retry interest to EPOLLIN after WANT_READ\n");
