@@ -24,6 +24,10 @@
   write-buffer retention under WANT_READ, globally pending write serialization,
   reset-client disposal, pending-OPEN and channel-close deadlines, upstream
   receive-sequence tracking, HUP drain handling, and HTTP rejection classification.
+- Extend the manual OpenWrt VM suite with an isolated `IDLE_TIMEOUT=3`
+  daemon: hold one SOCKS channel idle while a second channel streams 6 MiB
+  over 24 seconds, then verify only the idle channel closes, the active
+  transfer hash remains exact, and the daemon accepts a subsequent request.
 - Bump the OpenWrt package release to r10.
 
 - Treat HUP/RDHUP as drain hints rather than EOF: EAGAIN keeps the drain
