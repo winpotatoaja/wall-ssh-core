@@ -276,6 +276,7 @@ jobs:
           import hashlib
           import os
           import socket
+          import threading
           import time
 
           ROOT = "/tmp/ssh-core-http"
@@ -403,6 +404,66 @@ jobs:
                   self.close_connection = True
 
               def do_POST(self):
+                  if self.path == "/duplex-backpressure":
+                      expected_upload = 8 * 1024 * 1024
+                      expected_upload_sha = open(os.path.join(ROOT, "half-close-upload-8MiB.sha256")).read().strip()
+                      expected_download = 32 * 1024 * 1024
+                      self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32768)
+                      self.connection.settimeout(120.0)
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(expected_download))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      self.wfile.flush()
+
+                      response_state = {"sent": 0, "error": ""}
+                      def send_duplex_response():
+                          try:
+                              with open(os.path.join(ROOT, "slow-download-32MiB.bin"), "rb") as f:
+                                  while True:
+                                      block = f.read(16384)
+                                      if not block:
+                                          break
+                                      self.wfile.write(block)
+                                      self.wfile.flush()
+                                      response_state["sent"] += len(block)
+                          except (BrokenPipeError, ConnectionResetError, OSError) as exc:
+                              response_state["error"] = repr(exc)
+
+                      response_thread = threading.Thread(target=send_duplex_response, daemon=True)
+                      response_thread.start()
+
+                      upload_digest = hashlib.sha256()
+                      upload_received = 0
+                      try:
+                          while upload_received < expected_upload:
+                              block = self.rfile.read(min(16384, expected_upload - upload_received))
+                              if not block:
+                                  break
+                              upload_digest.update(block)
+                              upload_received += len(block)
+                          client_fin = (self.connection.recv(1) == b"") if upload_received == expected_upload else False
+                      except (TimeoutError, OSError):
+                          client_fin = False
+
+                      response_thread.join(120.0)
+                      upload_sha = upload_digest.hexdigest()
+                      response_ok = (not response_thread.is_alive() and
+                                     response_state["sent"] == expected_download and
+                                     not response_state["error"])
+                      upload_ok = (upload_received == expected_upload and
+                                   upload_sha == expected_upload_sha and client_fin)
+                      if response_ok and upload_ok:
+                          print("[DUPLEX] PASS upload=8388608 SHA-256=%s client_FIN=%s response=33554432" %
+                                (upload_sha, client_fin), flush=True)
+                      else:
+                          print("[DUPLEX] FAIL upload=%d expected=%d SHA-256=%s expected_sha=%s client_FIN=%s response=%d expected_response=%d error=%s alive=%s" %
+                                (upload_received, expected_upload, upload_sha, expected_upload_sha,
+                                 client_fin, response_state["sent"], expected_download,
+                                 response_state["error"], response_thread.is_alive()), flush=True)
+                      self.close_connection = True
+                      return
+
                   if self.path == "/half-close-client-eof":
                       expected = int(self.headers.get("Content-Length", "0"))
                       body = self.rfile.read(expected)
