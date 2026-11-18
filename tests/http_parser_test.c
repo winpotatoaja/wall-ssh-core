@@ -618,7 +618,11 @@ static int run_pending_op_serialization_regression(void) {
 
     if (!pending_op_requires_serial_retry(PENDING_SEND_EOF, &c, inbound, EPOLLIN))
         failed = 1;
+    /* A TLS read that needs the socket writable must be retried before other
+     * SSH calls; an ordinary read WANT_READ can share the SSH packet reader. */
     if (pending_op_requires_serial_retry(PENDING_READ, &c, inbound, EPOLLIN))
+        failed = 1;
+    if (!pending_op_requires_serial_retry(PENDING_READ, &c, inbound, EPOLLOUT))
         failed = 1;
     if (pending_op_requires_serial_retry(PENDING_FREE, &c, inbound, EPOLLIN))
         failed = 1;
