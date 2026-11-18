@@ -191,7 +191,8 @@ jobs:
           test -n "$EMU_DIR"
           unzip -q /tmp/router-emulator-presets.zip -d "$EMU_DIR"
           test -x "$EMU_DIR/qemu/qemu-system-mipsel"
-          "$EMU_DIR/qemu/qemu-system-mipsel" -M help | grep -q mt7621-router
+          "$EMU_DIR/qemu/qemu-system-mipsel" -M help > /tmp/mips-qemu-machines.txt
+          grep -q mt7621-router /tmp/mips-qemu-machines.txt
           test -f "$EMU_DIR/presets/zbtlink-zbt-wg3526-16m.ini"
           echo "EMU_DIR=$EMU_DIR" >> "$GITHUB_ENV"
 
