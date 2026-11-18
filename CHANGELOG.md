@@ -7,6 +7,8 @@
   than passing only because successful stdout logging left it unchanged.
 - Apply the same clean OpenSSL error-queue and errno preparation to the
   TLS close_notify read and SSL_shutdown() path, not just connection/data I/O.
+- Add a silent-peer handshake timeout regression to verify the timeout path
+  is classified as retryable and therefore eligible for an alternate endpoint.
 - Disable the synchronous TLS message callback by default. Enable it
   only with `TLS_DIAG=1` in the env file (or `-tls-diag 1`), so normal
   handshakes are not affected by per-message file logging; keep the callback's

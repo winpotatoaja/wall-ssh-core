@@ -1145,6 +1145,66 @@ static int run_tls_diag_config_regression(void) {
     return 0;
 }
 
+static int run_tls_handshake_timeout_retryable_regression(void) {
+    int sv[2] = {-1, -1};
+    SSL_CTX *ctx = NULL;
+    SSL *ssl = NULL;
+    int retryable = 0;
+    int rc = 0;
+    int failed = 0;
+    int saved_stop = g_stop;
+    const char *saved_log_path = g_log_path;
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+        set_nonblock(sv[0], 1) < 0) {
+        fprintf(stderr, "[FAIL] TLS handshake timeout regression setup: %s\n",
+                strerror(errno));
+        failed = 1;
+        goto done;
+    }
+
+    ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) {
+        fprintf(stderr, "[FAIL] TLS handshake timeout regression: SSL_CTX_new failed\n");
+        failed = 1;
+        goto done;
+    }
+    ssl = SSL_new(ctx);
+    if (!ssl || SSL_set_fd(ssl, sv[0]) != 1) {
+        fprintf(stderr, "[FAIL] TLS handshake timeout regression: SSL setup failed\n");
+        failed = 1;
+        goto done;
+    }
+
+    /* Keep the peer open but silent: ClientHello is sent and the read wait times out. */
+    upstream_ctx_t u = { .fd = sv[0], .ssl = ssl };
+    g_stop = 0;
+    g_log_path = "-";
+    long long started = now_ms();
+    rc = tls_connect_nb(&u, 60, &retryable);
+    long long elapsed = now_ms() - started;
+
+    if (rc == 0 || !retryable || elapsed < 40 || elapsed > 1000)
+        failed = 1;
+
+done:
+    g_stop = saved_stop;
+    g_log_path = saved_log_path;
+    if (ssl) SSL_free(ssl);
+    if (ctx) SSL_CTX_free(ctx);
+    if (sv[0] >= 0) close(sv[0]);
+    if (sv[1] >= 0) close(sv[1]);
+
+    if (failed) {
+        fprintf(stderr,
+                "[FAIL] silent TLS peer timeout is classified as retryable (rc=%d retryable=%d)\n",
+                rc, retryable);
+        return 1;
+    }
+    puts("[PASS] silent TLS peer timeout is classified as retryable");
+    return 0;
+}
+
 static int run_core_state_regressions(void) {
     int failures = 0;
     failures += run_ipv4_dial_regression();
@@ -1154,6 +1214,7 @@ static int run_core_state_regressions(void) {
     failures += run_tls_message_callback_errno_regression();
     failures += run_tls_diag_config_regression();
     failures += run_tls_unexpected_eof_retryable_regression();
+    failures += run_tls_handshake_timeout_retryable_regression();
     failures += run_ring_buffer_regressions();
     failures += run_eof_drain_regression();
     failures += run_graceful_hup_preserves_c2s_regression();
