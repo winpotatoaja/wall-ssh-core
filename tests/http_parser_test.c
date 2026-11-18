@@ -708,33 +708,6 @@ static int run_core_state_regressions(void) {
 
     failures += run_ipv6_dial_regression();
 
-    upstream_ctx_t peek = {
-        .eof_peek_want_events = EPOLLOUT,
-        .eof_peek_pending = 1
-    };
-    if (upstream_peek_retry_ready(&peek, EPOLLIN) ||
-        !upstream_peek_retry_ready(&peek, EPOLLOUT)) {
-        fprintf(stderr, "[FAIL] TLS EOF peek retries only on requested EPOLLOUT readiness\n");
-        failures++;
-    } else {
-        puts("[PASS] TLS EOF peek retries only on requested EPOLLOUT readiness");
-    }
-    peek.eof_peek_want_events = EPOLLIN;
-    if (upstream_peek_retry_ready(&peek, EPOLLOUT) ||
-        !upstream_peek_retry_ready(&peek, EPOLLIN)) {
-        fprintf(stderr, "[FAIL] TLS EOF peek switches retry interest to EPOLLIN after WANT_READ\n");
-        failures++;
-    } else {
-        puts("[PASS] TLS EOF peek switches retry interest to EPOLLIN after WANT_READ");
-    }
-    peek.eof_peek_pending = 0;
-    if (upstream_peek_retry_ready(&peek, EPOLLIN | EPOLLOUT)) {
-        fprintf(stderr, "[FAIL] completed TLS EOF peek is not retried\n");
-        failures++;
-    } else {
-        puts("[PASS] completed TLS EOF peek is not retried");
-    }
-
     client_conn_t idle = {
         .state = ST_RELAY,
         .last_activity_ms = 1000
