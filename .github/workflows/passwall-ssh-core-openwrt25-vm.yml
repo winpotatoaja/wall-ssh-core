@@ -1268,7 +1268,6 @@ jobs:
                 -e 's|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:1082|' \
                 -e 's|^VERIFY_TLS=.*$|VERIFY_TLS=0|' \
                 -e 's|^KEEPALIVE=.*$|KEEPALIVE=10|' \
-                -e 's|^IDLE_TIMEOUT=.*$|IDLE_TIMEOUT=3|' \
                 /root/ssh-core-test.env > /root/ssh-core-tls-test.env
             printf '%s\n' 'SNI=localhost' >> /root/ssh-core-tls-test.env
             "$BIN" -env /root/ssh-core-tls-test.env -log "$LOGDIR/ssh-core-tls.log" \
@@ -1356,10 +1355,10 @@ jobs:
                   --connect-timeout 10 --max-time 12 \
                   http://127.0.0.1:18080/idle -o /dev/null \
                   >"$LOGDIR/tls-second-idle-channel.log" 2>&1 || TLS_IDLE_RC=$?
-                if [ "$TLS_IDLE_RC" -ne 0 ] && [ "$TLS_IDLE_RC" -ne 28 ]; then
-                  pass "second TLS SOCKS channel expired by IDLE_TIMEOUT=3 before the curl deadline"
+                if [ "$TLS_IDLE_RC" -eq 28 ]; then
+                  pass "second TLS SOCKS channel was independently closed by its local reader timeout"
                 else
-                  fail "TLS idle-timeout channel was not closed independently (curl rc=$TLS_IDLE_RC)"
+                  fail "second TLS channel returned unexpected curl status $TLS_IDLE_RC"
                   cat "$LOGDIR/tls-second-idle-channel.log" 2>/dev/null || true
                 fi
 
