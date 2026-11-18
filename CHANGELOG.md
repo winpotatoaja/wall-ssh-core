@@ -31,6 +31,8 @@
 - Add a host-side TLS-to-SSH relay and run the half-close helper over
   `TRANSPORT=TLS`, including an 8 MiB upload after the remote TCP write side
   has sent FIN; verify the TLS daemon remains usable for a new SOCKS channel.
+  Host-side assertions require two exact 8 MiB upload receipts and both FIN
+  directions, covering the TCP and TLS runs independently.
 - Allow the cross-compiled half-close helper to select a SOCKS listener port
   so TCP and TLS transport integration tests can run in separate daemons.
 - Bump the OpenWrt package release to r10.
