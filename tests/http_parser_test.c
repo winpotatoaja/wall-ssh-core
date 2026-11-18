@@ -341,6 +341,37 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     return 0;
 }
 
+static int run_pending_open_cleanup_deadline_regression(void) {
+    client_conn_t *c = calloc(1, sizeof(*c));
+    if (!c) return 1;
+    c->fd = -1;
+    c->state = ST_SSH_OPENING;
+    c->open_started_ms = now_ms();
+    g_clients = c;
+    g_client_count = 1;
+    g_opening_client = c;
+    set_pending_operation(c, PENDING_OPEN);
+
+    start_closing_client(-1, c);
+    int failed = !c->abort_on_open || c->abort_on_pending ||
+                 c->cleanup_deadline_ms != 0 || c->fd != -1 ||
+                 g_pending_client != c || g_pending_op != PENDING_OPEN ||
+                 client_cleanup_timeout_due(c, now_ms());
+
+    clear_pending_operation();
+    g_opening_client = NULL;
+    remove_client(-1, c);
+    g_clients = NULL;
+    g_client_count = 0;
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] pending OPEN uses hard-open deadline, not channel cleanup deadline\n");
+        return 1;
+    }
+    puts("[PASS] pending OPEN uses hard-open deadline, not channel cleanup deadline");
+    return 0;
+}
+
 static int run_aborted_open_completion_cleanup_regression(void) {
     client_conn_t *c = calloc(1, sizeof(*c));
     if (!c) return 1;
@@ -556,37 +587,35 @@ static int run_inbound_only_channel_close_regression(void) {
     return 0;
 }
 
-static int run_tls_peek_state_regression(void) {
-    upstream_ctx_t u = {
-        .eof_peek_pending = 1,
-        .eof_peek_want_events = EPOLLIN
-    };
-    int failed = !upstream_peek_retry_ready(&u, EPOLLIN) ||
-                 upstream_peek_blocks_ssh(&u);
-    u.eof_peek_want_events = EPOLLOUT;
-    if (!upstream_peek_retry_ready(&u, EPOLLOUT) ||
-        !upstream_peek_blocks_ssh(&u) ||
-        upstream_peek_retry_ready(&u, EPOLLIN)) failed = 1;
-
-    /* A libssh2 callback's WANT state is independent from the passive probe. */
-    u.ssl_want_events = EPOLLIN;
-    clear_upstream_eof_peek(&u);
-    if (u.eof_peek_pending || u.eof_peek_want_events != 0 ||
-        u.ssl_want_events != EPOLLIN) failed = 1;
-
-    u.eof_peek_pending = 1;
-    u.eof_peek_want_events = EPOLLIN;
-    u.rx_seq = 12;
+static int run_upstream_rx_progress_regression(void) {
+    upstream_ctx_t u = {.rx_seq = 12, .ssl_want_events = EPOLLIN};
     int did_ssh_read = 0;
     note_upstream_rx_progress(&u, 11, &did_ssh_read);
-    if (!did_ssh_read || u.eof_peek_pending ||
-        u.eof_peek_want_events != 0 || u.ssl_want_events != EPOLLIN) failed = 1;
+    int failed = !did_ssh_read;
+
+    did_ssh_read = 0;
+    note_upstream_rx_progress(&u, 12, &did_ssh_read);
+    if (did_ssh_read) failed = 1;
 
     if (failed) {
-        fprintf(stderr, "[FAIL] TLS EOF peek is independent and WANT_READ does not block SSH pump\n");
+        fprintf(stderr, "[FAIL] relay pump detects actual upstream receive progress\n");
         return 1;
     }
-    puts("[PASS] TLS EOF peek is independent and WANT_READ does not block SSH pump");
+    puts("[PASS] relay pump detects actual upstream receive progress");
+    return 0;
+}
+
+static int run_upstream_hup_state_regression(void) {
+    int failed = 0;
+    if (!upstream_hup_needs_restart(1, 10, 10, 0)) failed = 1;
+    if (upstream_hup_needs_restart(1, 10, 11, 0)) failed = 1;
+    if (upstream_hup_needs_restart(1, 10, 10, 16)) failed = 1;
+    if (upstream_hup_needs_restart(0, 10, 10, 0)) failed = 1;
+    if (failed) {
+        fprintf(stderr, "[FAIL] upstream HUP restarts only after buffered receive progress is drained\n");
+        return 1;
+    }
+    puts("[PASS] upstream HUP waits for receive drain progress before restart");
     return 0;
 }
 
@@ -633,11 +662,13 @@ static int run_core_state_regressions(void) {
     failures += run_eof_drain_regression();
     failures += run_deferred_client_cleanup_regression();
     failures += run_cleanup_deadline_and_shutdown_pending_regression();
+    failures += run_pending_open_cleanup_deadline_regression();
     failures += run_aborted_open_completion_cleanup_regression();
     failures += run_shutdown_poll_ignores_stop_regression();
     failures += run_pending_channel_close_buffer_regression();
     failures += run_inbound_only_channel_close_regression();
-    failures += run_tls_peek_state_regression();
+    failures += run_upstream_rx_progress_regression();
+    failures += run_upstream_hup_state_regression();
     failures += run_http_rejection_classification_regression();
     failures += run_socks_listener_address_regression();
 
