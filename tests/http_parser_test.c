@@ -639,6 +639,73 @@ static int run_pending_op_serialization_regression(void) {
     return 0;
 }
 
+static int run_tls_want_event_lifetime_regression(void) {
+    upstream_ctx_t u = {
+        .ssl = (SSL *)(uintptr_t)1,
+        .ssl_want_events = EPOLLIN
+    };
+    int idle_rx_paused = 1;
+    uint32_t want = upstream_epoll_interest(
+        &u, PENDING_NONE, 0, &idle_rx_paused, 0, 0, 0);
+    int failed = 0;
+
+    /* An idle SSL_read WANT_READ is stale readiness, not a pinned operation:
+     * it must not defeat the S2C backpressure pause or block keepalive. */
+    if ((want & EPOLLIN) != 0 || (want & EPOLLRDHUP) == 0 ||
+        !idle_rx_paused || !keepalive_can_start(&u, PENDING_NONE) ||
+        tls_write_retry_pending(&u)) {
+        failed = 1;
+    }
+
+    /* The same WANT_READ is authoritative when it belongs to a serialized
+     * operation such as SSL_write; the pending retry must keep EPOLLIN armed. */
+    idle_rx_paused = 1;
+    want = upstream_epoll_interest(
+        &u, PENDING_WRITE, LIBSSH2_SESSION_BLOCK_OUTBOUND,
+        &idle_rx_paused, 0, 0, 0);
+    if ((want & EPOLLIN) == 0 ||
+        keepalive_can_start(&u, PENDING_WRITE)) {
+        failed = 1;
+    }
+
+    /* WANT_WRITE remains an active TLS retry even without a libssh2 pending
+     * marker and must block both keepalive and teardown I/O. */
+    u.ssl_want_events = EPOLLOUT;
+    idle_rx_paused = 1;
+    want = upstream_epoll_interest(
+        &u, PENDING_NONE, 0, &idle_rx_paused, 0, 0, 0);
+    if ((want & EPOLLOUT) == 0 ||
+        keepalive_can_start(&u, PENDING_NONE) ||
+        !tls_write_retry_pending(&u)) {
+        failed = 1;
+    }
+
+    /* Normal channel demand can re-arm EPOLLIN after the pause has been set. */
+    u.ssl_want_events = EPOLLIN;
+    idle_rx_paused = 1;
+    want = upstream_epoll_interest(
+        &u, PENDING_NONE, 0, &idle_rx_paused, 0, 1, 0);
+    if ((want & EPOLLIN) == 0 || idle_rx_paused) failed = 1;
+
+    /* A pending libssh2 operation with no TLS readiness flag still uses the
+     * libssh2 block directions instead of losing its wakeup source. */
+    u.ssl_want_events = 0;
+    idle_rx_paused = 1;
+    want = upstream_epoll_interest(
+        &u, PENDING_FREE,
+        LIBSSH2_SESSION_BLOCK_INBOUND | LIBSSH2_SESSION_BLOCK_OUTBOUND,
+        &idle_rx_paused, 0, 0, 0);
+    if ((want & (EPOLLIN | EPOLLOUT)) != (EPOLLIN | EPOLLOUT))
+        failed = 1;
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] TLS WANT_READ lifetime, keepalive, shutdown and epoll backpressure state\n");
+        return 1;
+    }
+    puts("[PASS] TLS WANT_READ lifetime, keepalive, shutdown and epoll backpressure state");
+    return 0;
+}
+
 static int run_upstream_rx_progress_regression(void) {
     upstream_ctx_t u = {.rx_seq = 12, .ssl_want_events = EPOLLIN};
     int did_ssh_read = 0;
@@ -720,6 +787,7 @@ static int run_core_state_regressions(void) {
     failures += run_pending_channel_close_buffer_regression();
     failures += run_inbound_only_channel_close_regression();
     failures += run_pending_op_serialization_regression();
+    failures += run_tls_want_event_lifetime_regression();
     failures += run_upstream_rx_progress_regression();
     failures += run_upstream_hup_state_regression();
     failures += run_http_rejection_classification_regression();
