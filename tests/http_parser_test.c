@@ -294,7 +294,7 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     c.write_pending = 1;
     if (!client_dead_ready_to_close(&c)) failed = 1;
     c.c2s.used = 1;
-    if (client_dead_ready_to_close(&c)) failed = 1;
+    if (!client_dead_ready_to_close(&c)) failed = 1;
     c.c2s.used = 0;
     c.hup_pending = 1;
     if (client_dead_ready_to_close(&c)) failed = 1;
@@ -334,7 +334,7 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     g_clients = NULL;
 
     if (failed) {
-        fprintf(stderr, "[FAIL] bounded cleanup deadline and shutdown pending detection\n");
+        fprintf(stderr, "[FAIL] bounded cleanup deadline, dead-client close, and shutdown pending detection\n");
         return 1;
     }
     puts("[PASS] bounded cleanup deadline and shutdown pending detection");
@@ -474,6 +474,45 @@ static int run_inbound_only_channel_close_regression(void) {
         rb_free(&c->s2c);
         free(c);
     }
+
+    /* channel_write EAGAIN caused only by inbound socket wait does not pin
+     * its arguments inside libssh2 either; there is no global pending op. */
+    client_conn_t *write_c = calloc(1, sizeof(*write_c));
+    if (!write_c) failed = 1;
+    if (write_c) {
+        write_c->fd = -1;
+        write_c->state = ST_RELAY;
+        write_c->channel = (LIBSSH2_CHANNEL *)(uintptr_t)1;
+        if (rb_init(&write_c->c2s, 64) < 0 ||
+            rb_init(&write_c->s2c, 64) < 0 ||
+            rb_push(&write_c->c2s, (const uint8_t *)"write", 5) < 0) {
+            failed = 1;
+        } else {
+            write_c->write_pending = 1;
+            write_c->write_waiting_window = 0;
+            write_c->write_pending_head = write_c->c2s.head;
+            write_c->write_pending_generation = write_c->c2s.generation;
+            write_c->write_pending_len = write_c->c2s.used;
+            g_clients = write_c;
+            g_client_count = 1;
+            clear_pending_operation();
+            start_closing_client(-1, write_c);
+            if (write_c->state != ST_CLOSING || write_c->write_pending ||
+                write_c->c2s.data || write_c->s2c.data || g_pending_op != PENDING_NONE) {
+                failed = 1;
+            }
+        }
+        if (g_clients == write_c) {
+            write_c->channel = NULL;
+            remove_client(-1, write_c);
+        } else {
+            write_c->channel = NULL;
+            rb_free(&write_c->c2s);
+            rb_free(&write_c->s2c);
+            free(write_c);
+        }
+    }
+
     clear_pending_operation();
     g_opening_client = NULL;
     g_clients = NULL;
