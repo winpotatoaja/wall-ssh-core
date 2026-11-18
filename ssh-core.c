@@ -2236,6 +2236,9 @@ static void record_eagain(LIBSSH2_SESSION *session, upstream_ctx_t *u,
 
 static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) {
     g_opening_client = NULL;
+    /* Any deadline attached to an aborted in-flight OPEN ends with that OPEN.
+     * If the resulting channel must close, start a fresh channel-free budget. */
+    c->cleanup_deadline_ms = 0;
     c->channel = ch;
     if (c->close_after_ctrl && c->fd >= 0 && c->ctrl_len > 0) {
         c->abort_on_open = 0;
