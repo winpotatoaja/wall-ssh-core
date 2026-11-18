@@ -48,6 +48,8 @@
 #define SOCKS_HS_TIMEOUT_SEC   15
 #define SSH_OPEN_SOFT_TO_MS    15000
 #define SSH_OPEN_HARD_TO_MS    30000
+#define SSH_CHANNEL_CLEANUP_TIMEOUT_MS 10000
+#define TLS_SHUTDOWN_TIMEOUT_MS 2500
 #ifndef DELAY_WAIT_POLL_MAX_MS
 #define DELAY_WAIT_POLL_MAX_MS 60000
 #endif
@@ -56,6 +58,8 @@ static volatile sig_atomic_t g_stop = 0;
 static const char *g_log_path = DEFAULT_LOG_PATH;
 /* Verbose per-channel flow-control diagnostics are opt-in. */
 static int g_log_backpressure = 0;
+/* Set when a pending operation makes further libssh2 I/O unsafe. */
+static int g_skip_libssh2_cleanup = 0;
 static const char *g_kbd_password = "";
 
 /* Sentinel tag untuk O(1) epoll dispatch */
@@ -122,6 +126,7 @@ typedef struct client_conn {
     time_t         accepted_at;
     long long      open_started_ms;
     long long      ctrl_close_deadline_ms;
+    long long      cleanup_deadline_ms;
     long long      last_activity_ms;
 
     uint8_t  req_buf[512];
@@ -263,6 +268,24 @@ static int relay_idle_timeout_due(const client_conn_t *c, int timeout_sec,
     return now_msec - c->last_activity_ms >= (long long)timeout_sec * 1000LL;
 }
 
+static int client_cleanup_timeout_due(const client_conn_t *c, long long now_msec) {
+    if (!c || c->cleanup_deadline_ms <= 0 ||
+        (!c->abort_on_pending && c->state != ST_CLOSING)) return 0;
+    return now_msec >= c->cleanup_deadline_ms;
+}
+
+/* Detect calls that must be retried with their original state/arguments. */
+static int has_pending_libssh2_work_for_shutdown(void) {
+    if (g_pending_op != PENDING_NONE || g_opening_client != NULL) return 1;
+    for (const client_conn_t *c = g_clients; c; c = c->next) {
+        if (c->read_pending ||
+            (c->write_pending && !c->write_waiting_window) ||
+            c->need_send_eof ||
+            (c->state == ST_CLOSING && c->channel != NULL)) return 1;
+    }
+    return 0;
+}
+
 /* ============================================================
  * RING BUFFER (ZERO MEMMOVE, LAZY ALLOCATION)
  * ============================================================ */
@@ -297,6 +320,14 @@ static void rb_free(rb_t *r) {
     r->data = NULL;
     r->cap = r->head = r->tail = r->used = 0;
     r->generation = rb_next_generation();
+}
+static int rb_clear(rb_t *r) {
+    if (!rb_state_valid(r)) return -1;
+    r->head = 0;
+    r->tail = 0;
+    r->used = 0;
+    r->generation = rb_next_generation();
+    return rb_state_valid(r) ? 0 : -1;
 }
 static inline size_t rb_free_space(const rb_t *r) {
     return rb_state_valid(r) ? r->cap - r->used : 0;
@@ -1086,6 +1117,24 @@ static int poll_fd_until(int fd, short events, long long deadline_ms) {
     return -1;
 }
 
+/* Called after g_stop: ignore the signal flag, but never exceed the deadline. */
+static int poll_fd_until_shutdown(int fd, short events, long long deadline_ms) {
+    for (;;) {
+        long long rem = deadline_ms - now_ms();
+        if (rem <= 0) return 0;
+        int to = (rem > 60000) ? 60000 : (int)rem;
+        struct pollfd pfd = { .fd = fd, .events = events };
+        int rc = poll(&pfd, 1, to);
+        if (rc < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (rc == 0) continue;
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) return -1;
+        return 1;
+    }
+}
+
 static int tls_connect_nb(upstream_ctx_t *u, int timeout_ms) {
     long long deadline = now_ms() + timeout_ms;
     while (!g_stop) {
@@ -1648,6 +1697,11 @@ static void detach_client_fd(int epfd, client_conn_t *c) {
     c->ctrl_close_deadline_ms = 0;
 }
 
+static void set_client_cleanup_deadline(client_conn_t *c) {
+    if (c && c->cleanup_deadline_ms == 0)
+        c->cleanup_deadline_ms = now_ms() + SSH_CHANNEL_CLEANUP_TIMEOUT_MS;
+}
+
 static void remove_client(int epfd, client_conn_t *c) {
     if (g_opening_client == c) g_opening_client = NULL;
     if (g_pending_client == c) {
@@ -1667,11 +1721,13 @@ static void start_closing_client(int epfd, client_conn_t *c) {
     if (!c) return;
     if (c == g_pending_client && g_pending_op != PENDING_NONE) {
         c->abort_on_pending = 1;
+        set_client_cleanup_deadline(c);
         detach_client_fd(epfd, c);
         return;
     }
     if (c == g_opening_client && !c->channel) {
         c->abort_on_open = 1;
+        set_client_cleanup_deadline(c);
         detach_client_fd(epfd, c);
         return;
     }
@@ -1680,6 +1736,7 @@ static void start_closing_client(int epfd, client_conn_t *c) {
     if (c->channel &&
         (c->read_pending || (c->write_pending && !c->write_waiting_window))) {
         c->abort_on_pending = 1;
+        set_client_cleanup_deadline(c);
         detach_client_fd(epfd, c);
         return;
     }
@@ -1700,6 +1757,7 @@ static void start_closing_client(int epfd, client_conn_t *c) {
     }
     rb_free(&c->c2s);
     rb_free(&c->s2c);
+    set_client_cleanup_deadline(c);
     c->state = ST_CLOSING;
 }
 
@@ -2414,7 +2472,11 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             c->read_pending_tail = 0;
         c->read_pending_generation = 0;
             c->read_pending_len = 0;
-            if (c->s2c.used == 0) { c->s2c.head = 0; c->s2c.tail = 0; }
+            if (c->s2c.used == 0 && rb_clear(&c->s2c) < 0) {
+                log_red("S2C ring clear rejected after pending channel read");
+                clear_pending_operation();
+                return -1;
+            }
             if (libssh2_channel_eof(c->channel)) {
                 c->ssh_eof = 1;
                 *did_ssh_read_out = 1;
@@ -2538,8 +2600,12 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             if (c->client_dead && c->write_pending && c->write_waiting_window) {
                 /* No channel_write call is in flight while waiting for WINDOW_ADJUST.
                  * The local socket is gone, so unsent C2S bytes can be discarded. */
-                c->c2s.head = c->c2s.tail;
-                c->c2s.used = 0;
+                if (rb_clear(&c->c2s) < 0) {
+                    log_red("C2S ring clear rejected while discarding dead-client window wait");
+                    *agg_dirs_out = agg_dirs;
+                    *did_ssh_read_out = did_ssh_read;
+                    return -1;
+                }
                 c->write_pending = 0;
                 c->write_pending_head = 0;
                 c->write_pending_generation = 0;
@@ -2731,7 +2797,12 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         c->read_pending_tail = 0;
         c->read_pending_generation = 0;
                         c->read_pending_len = 0;
-                        if (c->s2c.used == 0) { c->s2c.head = 0; c->s2c.tail = 0; }
+                        if (c->s2c.used == 0 && rb_clear(&c->s2c) < 0) {
+                            log_red("S2C ring clear rejected after channel read");
+                            *agg_dirs_out = agg_dirs;
+                            *did_ssh_read_out = did_ssh_read;
+                            return -1;
+                        }
                         if (libssh2_channel_eof(c->channel)) {
                             did_ssh_read = 1;
                             c->ssh_eof = 1;
@@ -2891,7 +2962,7 @@ static int session_disconnect_with_deadline(LIBSSH2_SESSION *session,
         if (dirs & LIBSSH2_SESSION_BLOCK_INBOUND) events |= POLLIN;
         if (dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) events |= POLLOUT;
         if (events == 0) events = POLLIN | POLLOUT;
-        if (poll_fd_until(fd, events, deadline_ms) <= 0) break;
+        if (poll_fd_until_shutdown(fd, events, deadline_ms) <= 0) break;
     }
     return LIBSSH2_ERROR_EAGAIN;
 }
@@ -2908,9 +2979,25 @@ static int session_free_with_deadline(LIBSSH2_SESSION **session,
         if (dirs & LIBSSH2_SESSION_BLOCK_INBOUND) events |= POLLIN;
         if (dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) events |= POLLOUT;
         if (events == 0) events = POLLIN | POLLOUT;
-        if (poll_fd_until(fd, events, deadline_ms) <= 0) break;
+        if (poll_fd_until_shutdown(fd, events, deadline_ms) <= 0) break;
     }
     return LIBSSH2_ERROR_EAGAIN;
+}
+
+static int ssl_shutdown_with_deadline(SSL *ssl, int fd, long long deadline_ms) {
+    if (!ssl) return 1;
+    while (now_ms() < deadline_ms) {
+        int rc = SSL_shutdown(ssl);
+        if (rc == 1) return 1;
+        int err = SSL_get_error(ssl, rc);
+        short events = 0;
+        if (err == SSL_ERROR_WANT_READ) events = POLLIN;
+        else if (err == SSL_ERROR_WANT_WRITE) events = POLLOUT;
+        else if (rc == 0 && err == SSL_ERROR_NONE) events = POLLIN;
+        else return -1;
+        if (poll_fd_until_shutdown(fd, events, deadline_ms) <= 0) break;
+    }
+    return 0;
 }
 
 static void on_sig(int sig) {
@@ -3462,6 +3549,15 @@ int main(int argc, char **argv) {
         long long now_msec = now_ms();
         for (client_conn_t *c = g_clients, *nxt = NULL; c; c = nxt) {
             nxt = c->next;
+            if (client_cleanup_timeout_due(c, now_msec)) {
+                log_red("Pending SSH channel cleanup exceeded %d ms; forcing session teardown",
+                        SSH_CHANNEL_CLEANUP_TIMEOUT_MS);
+                write_marker(NEED_RESTART_FILE, "ssh channel cleanup timeout");
+                exit_code = 1;
+                g_skip_libssh2_cleanup = 1;
+                g_stop = 1;
+                break;
+            }
             if (c->close_after_ctrl && c->fd >= 0 && c->ctrl_close_deadline_ms > 0 &&
                 now_msec >= c->ctrl_close_deadline_ms) {
                 start_closing_client(epfd, c);
@@ -3587,6 +3683,10 @@ int main(int argc, char **argv) {
         update_epoll(epfd, upstream_fd, &g_upstream_tag, &upstream_ev, want_up);
     }
 
+    if (!g_skip_libssh2_cleanup && has_pending_libssh2_work_for_shutdown()) {
+        log_yellow("A libssh2 operation is still pending at process shutdown; skipping further libssh2 I/O");
+        g_skip_libssh2_cleanup = 1;
+    }
     while (g_clients) {
         client_conn_t *c = g_clients;
         if (c->fd >= 0) detach_client_fd(epfd, c);
@@ -3596,29 +3696,43 @@ int main(int argc, char **argv) {
     g_opening_client = NULL;
     if (epfd >= 0) close(epfd);
     if (listen_fd >= 0) close(listen_fd);
-    if (session) {
+    if (session && !g_skip_libssh2_cleanup) {
         int disconnect_rc = 0;
         if (exit_code == 0) {
-            disconnect_rc = session_disconnect_with_deadline(session, upstream_fd, now_ms() + 2500);
+            disconnect_rc = session_disconnect_with_deadline(
+                session, upstream_fd, now_ms() + TLS_SHUTDOWN_TIMEOUT_MS);
             if (disconnect_rc == LIBSSH2_ERROR_EAGAIN) {
-                log_yellow("SSH disconnect remained pending after 2.5 seconds; skipping session_free before process teardown");
+                log_yellow("SSH disconnect remained pending after deadline; skipping session_free and TLS shutdown");
+                g_skip_libssh2_cleanup = 1;
             } else if (disconnect_rc < 0) {
                 log_yellow("libssh2_session_disconnect returned %d during shutdown", disconnect_rc);
             }
         }
-        if (disconnect_rc != LIBSSH2_ERROR_EAGAIN) {
-            int free_rc = session_free_with_deadline(&session, upstream_fd, now_ms() + 2500);
+        if (!g_skip_libssh2_cleanup) {
+            int free_rc = session_free_with_deadline(
+                &session, upstream_fd, now_ms() + TLS_SHUTDOWN_TIMEOUT_MS);
             if (free_rc == LIBSSH2_ERROR_EAGAIN) {
-                log_yellow("Session cleanup remained pending after 2.5 seconds; process teardown will close remaining resources");
+                log_yellow("Session cleanup remained pending after deadline; skipping TLS shutdown");
+                g_skip_libssh2_cleanup = 1;
             } else if (free_rc < 0) {
                 log_yellow("libssh2_session_free returned %d during shutdown", free_rc);
+                g_skip_libssh2_cleanup = 1;
             } else {
                 libssh2_exit();
             }
         }
+    } else if (session && g_skip_libssh2_cleanup) {
+        log_yellow("Skipping libssh2 disconnect/free; process teardown will reclaim remaining resources");
     }
     if (uctx.ssl) {
-        if (exit_code == 0) SSL_shutdown(uctx.ssl);
+        if (exit_code == 0 && !g_skip_libssh2_cleanup && session == NULL) {
+            int tls_rc = ssl_shutdown_with_deadline(
+                uctx.ssl, upstream_fd, now_ms() + TLS_SHUTDOWN_TIMEOUT_MS);
+            if (tls_rc <= 0)
+                log_yellow("TLS close_notify did not complete before shutdown deadline");
+        } else if (g_skip_libssh2_cleanup) {
+            log_yellow("Skipping TLS shutdown because an SSH/TLS operation is still pending");
+        }
         SSL_free(uctx.ssl);
     }
     if (ssl_ctx) SSL_CTX_free(ssl_ctx);
@@ -3630,11 +3744,8 @@ fail_cleanup:
     if (epfd >= 0) close(epfd);
     if (listen_fd >= 0) close(listen_fd);
     if (session) {
-        int free_rc = session_free_with_deadline(&session, upstream_fd, now_ms() + 2500);
-        if (free_rc == LIBSSH2_ERROR_EAGAIN) {
-            log_yellow("Session cleanup remained pending after 2.5 seconds; process teardown will close remaining resources");
-        } else if (free_rc < 0) log_yellow("libssh2_session_free returned %d during startup cleanup", free_rc);
-        else libssh2_exit();
+        log_yellow("Startup failed; skipping further libssh2 I/O before process teardown");
+        g_skip_libssh2_cleanup = 1;
     }
     if (uctx.ssl) SSL_free(uctx.ssl);
     if (ssl_ctx) SSL_CTX_free(ssl_ctx);
