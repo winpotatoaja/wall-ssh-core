@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- Allow channel cleanup after inbound-only `libssh2` EAGAIN; only an operation
-  held in the global pending slot pins its original channel buffers.
+- Allow channel cleanup after inbound-only channel-read EAGAIN and zero-window
+  write waits. Retain buffers for active channel writes even when a TLS callback
+  reports WANT_READ, and serialize pending send-EOF operations before retry.
 - Close reset-client channels immediately, discarding queued C2S data that
   no live local peer can consume; do not wait for inbound-only EAGAIN or remote
   EOF that may never arrive.
@@ -19,10 +20,10 @@
   so reads performed inside channel writes are visible to EOF/idle handling.
 - Classify rejected non-tunnel HTTP 200 and invalid 101 responses as proxy
   failures rather than SSH KEX failures.
-- Add regressions for inbound-only read/write EAGAIN cleanup, globally pending
-  write buffer retention, reset-client disposal, pending-OPEN and channel-close
-  deadlines, upstream receive-sequence tracking, upstream HUP drain handling,
-  and HTTP rejection classification.
+- Add regressions for inbound-only read and zero-window cleanup, active
+  write-buffer retention under WANT_READ, globally pending write serialization,
+  reset-client disposal, pending-OPEN and channel-close deadlines, upstream
+  receive-sequence tracking, HUP drain handling, and HTTP rejection classification.
 - Bump the OpenWrt package release to r10.
 
 - Treat HUP/RDHUP as drain hints rather than EOF: EAGAIN keeps the drain
