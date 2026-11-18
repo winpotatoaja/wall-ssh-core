@@ -199,4 +199,5 @@
 ## Unreleased
 - Fix graceful client EOF/HUP cleanup so queued client-to-SSH data is drained and SSH EOF is sent before releasing the channel; preserve the immediate close path for reset peers.
 - Add a native regression for graceful HUP with queued C2S data, and refine dead-client shutdown state checks.
+- Bump OpenWrt package release to r12 so devices on r11 can upgrade to the graceful EOF fix.
 - Native parser/core-state regression for the graceful EOF cleanup fix passed in GitHub Actions run #20 (commit 2697caad).
