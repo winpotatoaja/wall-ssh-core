@@ -17,6 +17,8 @@
 - Use the destination host rather than the proxy as default TLS SNI and
   hostname-verification identity. Reject ambiguous unframed non-CONNECT HTTP
   200 unless HTTP_200_TUNNEL is explicitly enabled.
+- Apply the deferred-cleanup deadline to aborted SSH channel-open operations
+  as well as pending relay I/O and ST_CLOSING channel_free retries.
 - Add a hard deadline for deferred channel cleanup; if it expires, stop the
   process without issuing another libssh2 API call while an operation is pending.
 - Preserve pinned buffers for real channel read/write EAGAIN; use a validated,
