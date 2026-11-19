@@ -699,6 +699,17 @@ jobs:
           fi
 
           if [ "$STATUS" -eq 0 ]; then
+            # OpenWrt mounts /tmp with noexec; keep large fixtures there but
+            # place the small static MIPS helper on the executable overlay.
+            if cp "$LOG/socks-halfclose" /usr/bin/socks-halfclose && \
+              chmod 0755 /usr/bin/socks-halfclose && [ -x /usr/bin/socks-halfclose ]; then
+              pass "MIPS half-close helper staged on executable overlay"
+            else
+              fail "could not stage MIPS half-close helper on executable overlay"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
             echo "========== TCP BASIC SOCKS TRANSFER =========="
             if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 --connect-timeout 20 --max-time 120 \
               http://127.0.0.1:18080/payload -o "$LOG/payload-1MiB.bin"; then
@@ -717,7 +728,7 @@ jobs:
 
           if [ "$STATUS" -eq 0 ]; then
             echo "========== TCP HALF-CLOSE AND 8 MiB POST-EOF UPLOAD =========="
-            if /tmp/mips-test/socks-halfclose /tmp/mips-test/half-close-upload-8MiB.bin; then
+            if /usr/bin/socks-halfclose /tmp/mips-test/half-close-upload-8MiB.bin; then
               pass "TCP client-FIN-first, server-FIN-first and 8 MiB post-EOF upload"
             else
               fail "TCP half-close helper failed"
@@ -726,7 +737,7 @@ jobs:
 
           if [ "$STATUS" -eq 0 ]; then
             echo "========== TCP FULL-DUPLEX 8 MiB UP / 32 MiB DOWN =========="
-            if /tmp/mips-test/socks-halfclose --duplex /tmp/mips-test/half-close-upload-8MiB.bin "$LOG/tcp-duplex-32MiB.bin"; then
+            if /usr/bin/socks-halfclose --duplex /tmp/mips-test/half-close-upload-8MiB.bin "$LOG/tcp-duplex-32MiB.bin"; then
               SIZE="$(wc -c < "$LOG/tcp-duplex-32MiB.bin" | tr -d ' ')"
               ACTUAL="$(sha256sum "$LOG/tcp-duplex-32MiB.bin" | awk '{print $1}')"
               EXPECTED="$(sha256sum /tmp/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
@@ -799,12 +810,12 @@ jobs:
               else
                 fail "TLS idle keepalive missing"
               fi
-              if [ "$STATUS" -eq 0 ] && /tmp/mips-test/socks-halfclose /tmp/mips-test/half-close-upload-8MiB.bin 1082; then
+              if [ "$STATUS" -eq 0 ] && /usr/bin/socks-halfclose /tmp/mips-test/half-close-upload-8MiB.bin 1082; then
                 pass "TLS client/server half-close and 8 MiB post-EOF upload"
               else
                 fail "TLS half-close regression failed"
               fi
-              if [ "$STATUS" -eq 0 ] && /tmp/mips-test/socks-halfclose --duplex /tmp/mips-test/half-close-upload-8MiB.bin "$LOG/tls-duplex-32MiB.bin" 1082; then
+              if [ "$STATUS" -eq 0 ] && /usr/bin/socks-halfclose --duplex /tmp/mips-test/half-close-upload-8MiB.bin "$LOG/tls-duplex-32MiB.bin" 1082; then
                 SIZE="$(wc -c < "$LOG/tls-duplex-32MiB.bin" | tr -d ' ')"
                 ACTUAL="$(sha256sum "$LOG/tls-duplex-32MiB.bin" | awk '{print $1}')"
                 EXPECTED="$(sha256sum /tmp/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
