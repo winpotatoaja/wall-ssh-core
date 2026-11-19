@@ -1729,9 +1729,20 @@ static void kbd_auth_cb(const char *name, int name_len, const char *instruction,
     }
 }
 
+/* SSL_has_pending() may report an incomplete TLS record. Retry it
+ * immediately only when no prior SSL operation is waiting for socket readiness;
+ * otherwise epoll must wait for the requested WANT_READ/WANT_WRITE direction. */
+static int tls_buffered_input_probe_allowed(const upstream_ctx_t *u) {
+    return u && u->ssl && u->ssl_want_events == 0;
+}
+
+static int tls_buffered_input_pending(const upstream_ctx_t *u) {
+    return tls_buffered_input_probe_allowed(u) && SSL_has_pending(u->ssl);
+}
+
 static int wait_ssh_nb(LIBSSH2_SESSION *session, upstream_ctx_t *u, long long deadline_ms) {
     if (now_ms() >= deadline_ms) return 0;
-    if (u->ssl && SSL_pending(u->ssl) > 0) return 1;
+    if (tls_buffered_input_pending(u)) return 1;
     short ev = 0;
     if (u->ssl && u->ssl_want_events) {
         if (u->ssl_want_events & EPOLLIN) ev |= POLLIN;
@@ -4092,9 +4103,7 @@ int main(int argc, char **argv) {
          * SSH WINDOW_ADJUST arrives on the upstream transport. A local client
          * socket may already be half-closed, so its events cannot wake this path.
          */
-        if (upstream_readable ||
-            (uctx.ssl && SSL_pending(uctx.ssl) > 0 &&
-             (uctx.ssl_want_events & EPOLLOUT) == 0)) {
+        if (upstream_readable || tls_buffered_input_pending(&uctx)) {
             retry_window_waiters();
         }
 
@@ -4209,8 +4218,7 @@ int main(int argc, char **argv) {
         }
 
         if (rounds == 16 ||
-            (uctx.ssl && SSL_pending(uctx.ssl) > 0 &&
-             (uctx.ssl_want_events & EPOLLOUT) == 0 &&
+            (tls_buffered_input_pending(&uctx) &&
              (g_opening_client != NULL || has_readable_relay_channel() ||
               has_window_waiter()))) {
             force_next_tick = 1;

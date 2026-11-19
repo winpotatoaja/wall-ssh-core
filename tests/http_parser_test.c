@@ -1381,6 +1381,28 @@ static int run_pending_keepalive_terminal_cleanup_regression(void) {
     return failed;
 }
 
+
+static int run_tls_buffered_input_probe_gate_regression(void) {
+    upstream_ctx_t u = {.ssl = (SSL *)(uintptr_t)1};
+    int failed = 0;
+
+    u.ssl_want_events = EPOLLIN;
+    if (tls_buffered_input_probe_allowed(&u)) failed = 1;
+    u.ssl_want_events = EPOLLOUT;
+    if (tls_buffered_input_probe_allowed(&u)) failed = 1;
+    u.ssl_want_events = 0;
+    if (!tls_buffered_input_probe_allowed(&u)) failed = 1;
+    u.ssl = NULL;
+    if (tls_buffered_input_probe_allowed(&u)) failed = 1;
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] SSL_has_pending probe waits for active TLS WANT direction\\n");
+        return 1;
+    }
+    puts("[PASS] SSL_has_pending probe is gated by active TLS WANT direction");
+    return 0;
+}
+
 static int run_tls_callback_terminal_result_clears_want_event_regression(void) {
     upstream_ctx_t u = {.ssl_want_events = EPOLLOUT};
     int failed = 0;
@@ -1432,6 +1454,7 @@ static int run_core_state_regressions(void) {
     failures += run_pending_op_serialization_regression();
     failures += run_pending_keepalive_terminal_cleanup_regression();
     failures += run_tls_want_event_lifetime_regression();
+    failures += run_tls_buffered_input_probe_gate_regression();
     failures += run_tls_callback_terminal_result_clears_want_event_regression();
     failures += run_upstream_rx_progress_regression();
     failures += run_upstream_hup_state_regression();
