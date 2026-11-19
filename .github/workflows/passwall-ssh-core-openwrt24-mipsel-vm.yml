@@ -228,6 +228,7 @@ jobs:
             false
           fi
           echo "Preset file: $PRESET_FILE"
+          EMU_DIR="$(readlink -f "$EMU_DIR")"
           echo "EMU_DIR=$EMU_DIR" >> "$GITHUB_ENV"
 
           IB_BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
@@ -237,6 +238,7 @@ jobs:
           tar --zstd -xf /tmp/openwrt-imagebuilder.tar.zst
           IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-24.10.7-ramips-mt7621*' -print -quit)"
           test -n "$IB_DIR"
+          IB_DIR="$(readlink -f "$IB_DIR")"
           test -f "$IB_DIR/Makefile"
           echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
 
