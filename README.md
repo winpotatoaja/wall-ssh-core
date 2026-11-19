@@ -43,8 +43,9 @@ libssh2 from the packages feed.
 
 ## Continuous integration tests
 
-Pushes to `main` that change `ssh-core.c`, the package `Makefile`, tests, or this
-workflow automatically run the full pipeline in order:
+Run the workflow manually from GitHub Actions (`workflow_dispatch`) and select
+one stage at a time (`parser`, `sdk`, or `vm`). The workflow does not run
+automatically on push.
 
 1. **Parser regression** — compile and run `tests/http_parser_test.c` on Debian.
 2. **OpenWrt SDK build** — build the package using the official OpenWrt 25.12.5
@@ -69,8 +70,8 @@ workflow automatically run the full pipeline in order:
    more SOCKS connections while checking process RSS and file-descriptor
    counts for material growth.
 
-The workflow is a single sequential job for push-triggered runs: SDK build
-must finish successfully before the VM stage downloads and installs its APK.
+The SDK stage must finish successfully before the VM stage can download and
+install its APK. Run the stages in order; the VM stage requires the SDK run ID.
 The guest test script is syntax-checked before the VM boots, the host HTTP
 fixture is Python-compiled before it starts, and the statically linked
 half-close test client is cross-compiled with the OpenWrt SDK and checksum-
@@ -80,7 +81,7 @@ timeout; individual transfers also have explicit curl timeouts.
 For diagnosis, the workflow still exposes a manual `workflow_dispatch` route
 for running one isolated stage (`parser`, `sdk`, or `vm`). The manual VM
 stage requires the run ID of a successful SDK-stage artifact from the same
-repository. A green workflow result means all stages and all guest assertions
-completed successfully; a timeout or skipped test is not considered a pass.
+repository. A green result for an individual stage means that stage's assertions completed
+successfully; a timeout or skipped test is not considered a pass.
 The current VM run validates the x86_64 OpenWrt 25.12.5 target only; it does
 not replace a runtime test on the actual physical router or another target.
