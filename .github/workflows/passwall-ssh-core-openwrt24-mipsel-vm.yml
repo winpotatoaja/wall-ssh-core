@@ -256,6 +256,8 @@ jobs:
           make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl" FILES="$FILES_DIR"
           SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*zbtlink_zbt-wg3526-16m*squashfs-sysupgrade.bin' -print -quit)"
           test -n "$SYSUP"
+          SYSUP="$(readlink -f "$SYSUP")"
+          test -s "$SYSUP"
           mkdir -p "$GITHUB_WORKSPACE/test-results/firmware"
           cp "$SYSUP" "$GITHUB_WORKSPACE/test-results/firmware/openwrt-24.10.7-zbt-wg3526-16m-ci-sysupgrade.bin"
           sha256sum "$SYSUP" | tee "$GITHUB_WORKSPACE/test-results/firmware/image.sha256"
