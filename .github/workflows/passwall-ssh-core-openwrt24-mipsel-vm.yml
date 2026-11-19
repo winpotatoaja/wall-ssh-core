@@ -190,6 +190,12 @@ jobs:
           EMU_DIR="$(find emulator -maxdepth 3 -type f -name emulator.sh -print -quit | xargs dirname)"
           test -n "$EMU_DIR"
           unzip -q /tmp/router-emulator-presets.zip -d "$EMU_DIR"
+          # v4.1 preset ZIP contains Router-Emulator/presets; emulator.sh
+          # resolves presets relative to EMU_DIR, so flatten that one level.
+          if [ -d "$EMU_DIR/Router-Emulator/presets" ]; then
+            mkdir -p "$EMU_DIR/presets"
+            cp -a "$EMU_DIR/Router-Emulator/presets/." "$EMU_DIR/presets/"
+          fi
           echo "========== ROUTER EMULATOR PACKAGE LAYOUT =========="
           echo "EMU_DIR=$EMU_DIR"
           ls -ld "$EMU_DIR" "$EMU_DIR/qemu" "$EMU_DIR/presets" 2>&1 || true
@@ -215,7 +221,7 @@ jobs:
             echo "QEMU binary does not advertise the MT7621 machine."
             false
           fi
-          PRESET_FILE="$(find "$EMU_DIR" -maxdepth 4 -type f -name 'zbtlink-zbt-wg3526-16m.ini' -print -quit)"
+          PRESET_FILE="$EMU_DIR/presets/zbtlink-zbt-wg3526-16m.ini"
           if [ -z "$PRESET_FILE" ]; then
             echo "ZBT-WG3526-16M preset not found in downloaded preset archive."
             find "$EMU_DIR" -maxdepth 4 -type f -iname '*wg3526*' -print
@@ -229,8 +235,9 @@ jobs:
           curl -fL --retry 3 --connect-timeout 20 --max-time 1200 "$IB_BASE/$IB_FILE" -o /tmp/openwrt-imagebuilder.tar.zst
           echo "19f321d10a78a8ca768b934243789c6b45c003374618a3c0aa51c06e06553fcc  /tmp/openwrt-imagebuilder.tar.zst" | sha256sum -c -
           tar --zstd -xf /tmp/openwrt-imagebuilder.tar.zst
-          IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-24.10.7-ramips-mt7621' -print -quit)"
+          IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-24.10.7-ramips-mt7621*' -print -quit)"
           test -n "$IB_DIR"
+          test -f "$IB_DIR/Makefile"
           echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
 
       - name: Build the OpenWrt 24.10.7 MT7621 firmware and NOR flash
