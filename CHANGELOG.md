@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep the 600-second idle relay cleanup behavior but suppress its per-connection log line; idle channel expiry remains unchanged.
+
+## Unreleased
+
 - Treat HUP/RDHUP as drain hints rather than EOF: EAGAIN keeps the drain
   pending, and only recv()==0 confirms the client's write-side EOF.
 - Validate ring-buffer state and commit lengths/contiguous slices. Replace
