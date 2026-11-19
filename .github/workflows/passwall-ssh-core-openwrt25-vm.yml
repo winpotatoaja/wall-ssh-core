@@ -818,7 +818,7 @@ jobs:
                 DUPLEX_DRAIN_COUNT="$(grep -c "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core.log" 2>/dev/null || true)"
                 if [ "$DUPLEX_SIZE" = "33554432" ] && [ "$DUPLEX_SHA" = "$EXPECTED_DUPLEX_SHA" ] && \
                   [ "$DUPLEX_FULL_COUNT" -gt 0 ] && [ "$DUPLEX_DRAIN_COUNT" -gt 0 ]; then
-                  pass "TCP full-duplex 8 MiB upload completed with exact 32 MiB response while S2C reached 32 KiB and drained"
+                  pass "TCP full-duplex 8 MiB upload completed with exact 32 MiB response while S2C reached 128 KiB and drained"
                 else
                   fail "TCP full-duplex backpressure mismatch (size=$DUPLEX_SIZE sha=$DUPLEX_SHA full=$DUPLEX_FULL_COUNT drained=$DUPLEX_DRAIN_COUNT)"
                 fi
@@ -1020,13 +1020,13 @@ jobs:
               [ "$S2C_NOT_DRAINED_COUNT" -eq 0 ]; then
               if grep "SSH channel s2c buffer drained after client resumed reading" "$LOGDIR/ssh-core.log" | \
                 sed -n 's/.*peak=\([0-9][0-9]*\)\/\([0-9][0-9]*\).*/\1 \2/p' | \
-                awk '$1 > $2 || $1 != 32768 { bad=1 } END { if (NR == 0 || bad) exit 1 }'; then
-                pass "S2C ring buffer reached 32 KiB, then drained to zero after the client resumed reading"
+                awk '$1 > $2 || $1 != 131072 || $2 != 131072 { bad=1 } END { if (NR == 0 || bad) exit 1 }'; then
+                pass "S2C ring buffer reached 128 KiB, then drained to zero after the client resumed reading"
               else
                 fail "S2C ring-buffer capacity or peak report was invalid"
               fi
             else
-              fail "S2C slow-reader backpressure did not fill and cleanly drain the 32 KiB ring buffer"
+              fail "S2C slow-reader backpressure did not fill and cleanly drain the 128 KiB ring buffer"
             fi
           fi
 
@@ -1335,7 +1335,7 @@ jobs:
                   if [ "$TLS_DUPLEX_SIZE" = "33554432" ] && [ "$TLS_DUPLEX_SHA" = "$TLS_DUPLEX_EXPECTED_SHA" ] && \
                     [ "$TLS_DUPLEX_FULL_AFTER" -gt "$TLS_DUPLEX_FULL_BEFORE" ] && \
                     [ "$TLS_DUPLEX_DRAIN_AFTER" -gt "$TLS_DUPLEX_DRAIN_BEFORE" ]; then
-                    pass "TLS full-duplex 8 MiB upload completed with exact 32 MiB response while S2C reached 32 KiB and drained"
+                    pass "TLS full-duplex 8 MiB upload completed with exact 32 MiB response while S2C reached 128 KiB and drained"
                   else
                     fail "TLS full-duplex backpressure mismatch (size=$TLS_DUPLEX_SIZE sha=$TLS_DUPLEX_SHA full=$TLS_DUPLEX_FULL_BEFORE->$TLS_DUPLEX_FULL_AFTER drained=$TLS_DUPLEX_DRAIN_BEFORE->$TLS_DUPLEX_DRAIN_AFTER)"
                   fi

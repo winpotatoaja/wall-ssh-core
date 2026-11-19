@@ -101,11 +101,13 @@ workflow automatically run the full pipeline in order:
 3. **QEMU VM integration tests** — install that APK in the official OpenWrt
    25.12.5 x86_64 guest, then exercise SSH authentication, SOCKS bind safety,
    strict numeric parsing, single and concurrent direct-tcpip transfers.
-4. **Backpressure and recovery** — force a 32 MiB c2s upload through a stalled,
+4. **Backpressure and recovery** — force a 32 MiB C2S upload through a stalled,
    small-window receiver; run four simultaneous 8 MiB uploads; then throttle
    the S2C reader during a 32 MiB download. Both directions verify exact
-   lengths and SHA-256. The tests assert that c2s and s2c buffers never exceed
-   their 32 KiB capacity and drain to zero after the receiver resumes.
+   lengths and SHA-256. The C2S ring remains 32 KiB; the S2C ring is 128 KiB
+   to absorb downstream send jitter. Tests assert that both stay within their
+   configured capacity and drain to zero after the receiver resumes. With the
+   default 64 relay clients, ring storage alone can reach 10 MiB at peak.
 5. **TCP half-close and sustained stress** — use a statically linked client
    cross-compiled by the OpenWrt SDK to test client-FIN-first and server-FIN-first
    sequences. The host fixture independently verifies that each FIN arrives

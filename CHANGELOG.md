@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Remove unnecessary pointer pinning for nonblocking S2C `libssh2_channel_read()` retries.
+  Recompute the writable ring slice on every attempt and allow the local client
+  to reset the ring after draining it. Preserve exact buffer pinning for
+  C2S `libssh2_channel_write()` retries, where it is required across EAGAIN.
+- Increase the per-relay S2C ring from 32 KiB to 128 KiB while keeping C2S at
+  32 KiB. The buffers remain lazily allocated per relay; at the default
+  64-client limit, combined ring storage is capped at 10 MiB.
+- Detect buffered TLS records with `SSL_has_pending()` after successful TLS I/O,
+  but only when no SSL callback is waiting for WANT_READ/WANT_WRITE. This avoids
+  losing already-buffered TLS records without busy-looping on partial records.
+  Add retry-gate regression coverage.
+- Bump the OpenWrt package release to r19.
+
 - Keep the configured idle-relay timeout and channel cleanup unchanged, but
   suppress the repetitive per-relay `Menutup relay idle ...` log message.
   This keeps routine logs quiet without disabling expiration.
