@@ -4166,7 +4166,7 @@ int main(int argc, char **argv) {
                 (now_sec - c->accepted_at) >= SOCKS_HS_TIMEOUT_SEC) {
                 start_closing_client(epfd, c);
             } else if (relay_idle_timeout_due(c, cfg.idle_timeout_sec, now_msec)) {
-                log_yellow("Menutup relay idle (%s:%u) setelah %d detik",c->target_host,(unsigned)c->target_port,cfg.idle_timeout_sec);
+                /* Idle expiry is intentionally silent; the timeout cleanup remains active. */
                 start_closing_client(epfd,c);
             } else if (c->state == ST_SSH_OPENING && c == g_opening_client && c->open_started_ms > 0) {
                 long long elapsed = now_msec - c->open_started_ms;

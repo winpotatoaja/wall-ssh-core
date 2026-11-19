@@ -35,6 +35,7 @@ libssh2 from the packages feed.
   database.
 - `MAX_CLIENTS` defaults to 64 and is capped at 256.
 - `IDLE_TIMEOUT` defaults to 600 seconds; set it to 0 to disable idle expiry.
+  Idle relay expiry is silent in normal logs; it still closes expired channels.
 - Per-channel backpressure/window-transition diagnostics are disabled by default
   to keep normal logs quiet. Set `LOG_BACKPRESSURE=1` in the environment file,
   or pass `-log-backpressure 1`, only when troubleshooting flow control. The

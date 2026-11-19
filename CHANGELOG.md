@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep the configured idle-relay timeout and channel cleanup unchanged, but
+  suppress the repetitive per-relay `Menutup relay idle ...` log message.
+  This keeps routine logs quiet without disabling expiration.
 - Clear the serialized `PENDING_KEEPALIVE` state after any terminal libssh2
   result. Only `LIBSSH2_ERROR_EAGAIN` retains it for retry; a fatal transport
   result now releases the pending slot so shutdown does not mistake a dead
