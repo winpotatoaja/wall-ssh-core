@@ -609,19 +609,19 @@ jobs:
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
             'wget -qO- http://10.0.2.2:18080/health | grep -qx ok'
           ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null root@127.0.0.1 'mkdir -p /root/mips-test'
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 'mkdir -p /tmp/mips-test'
 
           IPK="$(find "$GITHUB_WORKSPACE/test-results" -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
           scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             "$IPK" "$GITHUB_WORKSPACE/test-results/socks-halfclose" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
-            root@127.0.0.1:/root/mips-test/
+            root@127.0.0.1:/tmp/mips-test/
 
           cat > "$GITHUB_WORKSPACE/test-results/run-mips-guest-tests.sh" <<'GUEST_TEST'
           #!/bin/sh
           set -u
-          LOG=/root/mips-test
+          LOG=/tmp/mips-test
           BIN=/usr/bin/passwall-ssh-core
           STATUS=0
           APP_PID=
@@ -644,7 +644,7 @@ jobs:
           opkg update
           OPKG_RC=$?
           if [ "$OPKG_RC" -eq 0 ]; then
-            opkg install /root/mips-test/passwall-ssh-core*.ipk
+            opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
@@ -703,7 +703,7 @@ jobs:
             if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 --connect-timeout 20 --max-time 120 \
               http://127.0.0.1:18080/payload -o "$LOG/payload-1MiB.bin"; then
               ACTUAL="$(sha256sum "$LOG/payload-1MiB.bin" | awk '{print $1}')"
-              EXPECTED="$(sha256sum /root/mips-test/payload-1MiB.bin | awk '{print $1}')"
+              EXPECTED="$(sha256sum /tmp/mips-test/payload-1MiB.bin | awk '{print $1}')"
               SIZE="$(wc -c < "$LOG/payload-1MiB.bin" | tr -d ' ')"
               if [ "$SIZE" = 1048576 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
                 pass "1 MiB TCP SOCKS transfer exact length and SHA-256"
@@ -717,7 +717,7 @@ jobs:
 
           if [ "$STATUS" -eq 0 ]; then
             echo "========== TCP HALF-CLOSE AND 8 MiB POST-EOF UPLOAD =========="
-            if /root/mips-test/socks-halfclose /root/mips-test/half-close-upload-8MiB.bin; then
+            if /tmp/mips-test/socks-halfclose /tmp/mips-test/half-close-upload-8MiB.bin; then
               pass "TCP client-FIN-first, server-FIN-first and 8 MiB post-EOF upload"
             else
               fail "TCP half-close helper failed"
@@ -726,10 +726,10 @@ jobs:
 
           if [ "$STATUS" -eq 0 ]; then
             echo "========== TCP FULL-DUPLEX 8 MiB UP / 32 MiB DOWN =========="
-            if /root/mips-test/socks-halfclose --duplex /root/mips-test/half-close-upload-8MiB.bin "$LOG/tcp-duplex-32MiB.bin"; then
+            if /tmp/mips-test/socks-halfclose --duplex /tmp/mips-test/half-close-upload-8MiB.bin "$LOG/tcp-duplex-32MiB.bin"; then
               SIZE="$(wc -c < "$LOG/tcp-duplex-32MiB.bin" | tr -d ' ')"
               ACTUAL="$(sha256sum "$LOG/tcp-duplex-32MiB.bin" | awk '{print $1}')"
-              EXPECTED="$(sha256sum /root/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
+              EXPECTED="$(sha256sum /tmp/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
               if [ "$SIZE" = 33554432 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
                 pass "TCP full-duplex exact 8 MiB upload and 32 MiB response"
               else
@@ -799,15 +799,15 @@ jobs:
               else
                 fail "TLS idle keepalive missing"
               fi
-              if [ "$STATUS" -eq 0 ] && /root/mips-test/socks-halfclose /root/mips-test/half-close-upload-8MiB.bin 1082; then
+              if [ "$STATUS" -eq 0 ] && /tmp/mips-test/socks-halfclose /tmp/mips-test/half-close-upload-8MiB.bin 1082; then
                 pass "TLS client/server half-close and 8 MiB post-EOF upload"
               else
                 fail "TLS half-close regression failed"
               fi
-              if [ "$STATUS" -eq 0 ] && /root/mips-test/socks-halfclose --duplex /root/mips-test/half-close-upload-8MiB.bin "$LOG/tls-duplex-32MiB.bin" 1082; then
+              if [ "$STATUS" -eq 0 ] && /tmp/mips-test/socks-halfclose --duplex /tmp/mips-test/half-close-upload-8MiB.bin "$LOG/tls-duplex-32MiB.bin" 1082; then
                 SIZE="$(wc -c < "$LOG/tls-duplex-32MiB.bin" | tr -d ' ')"
                 ACTUAL="$(sha256sum "$LOG/tls-duplex-32MiB.bin" | awk '{print $1}')"
-                EXPECTED="$(sha256sum /root/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
+                EXPECTED="$(sha256sum /tmp/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
                 if [ "$SIZE" = 33554432 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
                   pass "TLS full-duplex exact 8 MiB upload and 32 MiB response"
                 else
@@ -844,9 +844,9 @@ jobs:
           GUEST_TEST
           chmod 0700 "$GITHUB_WORKSPACE/test-results/run-mips-guest-tests.sh"
           scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            "$GITHUB_WORKSPACE/test-results/run-mips-guest-tests.sh" root@127.0.0.1:/root/mips-test/run-tests.sh
+            "$GITHUB_WORKSPACE/test-results/run-mips-guest-tests.sh" root@127.0.0.1:/tmp/mips-test/run-tests.sh
           ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null root@127.0.0.1 'sh /root/mips-test/run-tests.sh'
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 'sh /tmp/mips-test/run-tests.sh'
 
           echo "========== VERIFY HOST OBSERVED TCP AND TLS HALF-CLOSE =========="
           cat /tmp/mips-http-server.log
@@ -870,7 +870,7 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'tar -C /root/mips-test -czf /tmp/mips-guest-logs.tgz . 2>/dev/null' 2>/dev/null
+              'tar -C /tmp/mips-test -czf /tmp/mips-guest-logs.tgz . 2>/dev/null' 2>/dev/null
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               root@127.0.0.1:/tmp/mips-guest-logs.tgz test-results/guest/ 2>/dev/null
