@@ -612,7 +612,7 @@ jobs:
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 'mkdir -p /root/mips-test'
 
           IPK="$(find "$GITHUB_WORKSPACE/test-results" -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
-          scp -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             "$IPK" "$GITHUB_WORKSPACE/test-results/socks-halfclose" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
@@ -843,7 +843,7 @@ jobs:
           exit "$STATUS"
           GUEST_TEST
           chmod 0700 "$GITHUB_WORKSPACE/test-results/run-mips-guest-tests.sh"
-          scp -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             "$GITHUB_WORKSPACE/test-results/run-mips-guest-tests.sh" root@127.0.0.1:/root/mips-test/run-tests.sh
           ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 'sh /root/mips-test/run-tests.sh'
@@ -871,7 +871,7 @@ jobs:
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
               'tar -C /root/mips-test -czf /tmp/mips-guest-logs.tgz . 2>/dev/null' 2>/dev/null
-            scp -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
+            scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               root@127.0.0.1:/tmp/mips-guest-logs.tgz test-results/guest/ 2>/dev/null
             tar -xzf test-results/guest/mips-guest-logs.tgz -C test-results/guest/ 2>/dev/null
