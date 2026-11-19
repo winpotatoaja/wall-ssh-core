@@ -37,7 +37,8 @@
 
 #define MAX_HTTP_HEADER        16384
 #define MAX_HTTP_SKIP_BODY     (16U * 1024U * 1024U)
-#define RELAY_BUF_SIZE         32768
+#define C2S_RELAY_BUF_SIZE     32768
+#define S2C_RELAY_BUF_SIZE     131072
 #define MAX_EVENTS             128
 #define DEFAULT_MAX_CLIENTS    64
 #define MAX_CLIENTS_LIMIT      256
@@ -175,10 +176,8 @@ typedef struct client_conn {
     int            s2c_saturated;
     int            s2c_final_logged;
 
+    /* Retry state only; libssh2 does not retain the caller's channel_read buffer. */
     int            read_pending;
-    size_t         read_pending_tail;
-    uint64_t       read_pending_generation;
-    size_t         read_pending_len;
 
     rb_t c2s;
     rb_t s2c;
@@ -372,14 +371,6 @@ static const uint8_t *rb_read_slice_pinned(const rb_t *r, size_t head,
     if (!rb_state_valid(r) || r->generation != generation || r->head != head || len == 0)
         return NULL;
     const uint8_t *ptr = rb_read_slice(r, &avail);
-    return ptr && len <= avail ? ptr : NULL;
-}
-static uint8_t *rb_write_slice_pinned(rb_t *r, size_t tail,
-                                      uint64_t generation, size_t len) {
-    size_t avail = 0;
-    if (!rb_state_valid(r) || r->generation != generation || r->tail != tail || len == 0)
-        return NULL;
-    uint8_t *ptr = rb_write_slice(r, &avail);
     return ptr && len <= avail ? ptr : NULL;
 }
 static int rb_commit_write(rb_t *r, size_t n) {
@@ -2176,9 +2167,6 @@ static void start_closing_client(int epfd, client_conn_t *c) {
         c->write_waiting_window = 0;
         c->write_wait_rx_seq = 0;
         c->read_pending = 0;
-        c->read_pending_tail = 0;
-        c->read_pending_generation = 0;
-        c->read_pending_len = 0;
         log_channel_buffer_final(c);
         log_s2c_buffer_final(c);
     }
@@ -2568,7 +2556,7 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
 
         if (c->fd >= 0 && (events & EPOLLOUT) && c->ctrl_len == 0 && c->s2c.used > 0) {
             size_t s2c_before=c->s2c.used;
-            if (send_from_rb(c->fd, &c->s2c, c->read_pending) < 0) {
+            if (send_from_rb(c->fd, &c->s2c, 0) < 0) {
                 c->client_dead = 1;
                 c->client_reset = 1;
                 c->client_eof = 1;
@@ -2732,7 +2720,7 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
         start_closing_client(epfd, c);
         return 1;
     }
-    if (rb_init(&c->c2s, RELAY_BUF_SIZE) < 0 || rb_init(&c->s2c, RELAY_BUF_SIZE) < 0) {
+    if (rb_init(&c->c2s, C2S_RELAY_BUF_SIZE) < 0 || rb_init(&c->s2c, S2C_RELAY_BUF_SIZE) < 0) {
         start_closing_client(epfd, c);
         return 1;
     }
@@ -2963,21 +2951,16 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
     }
 
     if (op == PENDING_READ) {
-        size_t rlen = c->read_pending ? c->read_pending_len : 0;
-        uint8_t *ptr = c->read_pending
-            ? rb_write_slice_pinned(&c->s2c, c->read_pending_tail, c->read_pending_generation, rlen)
-            : rb_write_slice(&c->s2c, &rlen);
-        if (c->read_pending && !ptr) {
-            log_red("S2C pending read buffer identity changed before retry");
-            clear_pending_operation();
-            return -1;
-        }
-        ssize_t r = (ptr && rlen > 0) ? libssh2_channel_read(c->channel, (char *)ptr, rlen) : LIBSSH2_ERROR_EAGAIN;
+        /* channel_read() copies into the supplied buffer only when data is
+         * available; after EAGAIN, recalculate the writable slice because
+         * the local client may have drained and reset the S2C ring meanwhile. */
+        size_t rlen = 0;
+        uint8_t *ptr = rb_write_slice(&c->s2c, &rlen);
+        ssize_t r = (ptr && rlen > 0)
+            ? libssh2_channel_read(c->channel, (char *)ptr, rlen)
+            : LIBSSH2_ERROR_EAGAIN;
         if (r > 0) {
             c->read_pending = 0;
-            c->read_pending_tail = 0;
-        c->read_pending_generation = 0;
-            c->read_pending_len = 0;
             if ((size_t)r > rlen || rb_commit_write(&c->s2c, (size_t)r) < 0) {
                 log_red("S2C ring commit rejected after pending read");
                 clear_pending_operation();
@@ -2998,9 +2981,6 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         }
         if (r == 0) {
             c->read_pending = 0;
-            c->read_pending_tail = 0;
-        c->read_pending_generation = 0;
-            c->read_pending_len = 0;
             if (c->s2c.used == 0 && rb_clear(&c->s2c) < 0) {
                 log_red("S2C ring clear rejected after pending channel read");
                 clear_pending_operation();
@@ -3022,6 +3002,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             int d = libssh2_session_block_directions(session);
             *agg_dirs_out |= d;
             *did_ssh_read_out = 1;
+            c->read_pending = 1;
             if ((d & LIBSSH2_SESSION_BLOCK_OUTBOUND) || (u->ssl && (u->ssl_want_events & EPOLLOUT) != 0)) {
                 return 0;
             }
@@ -3034,9 +3015,6 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             return 2;
         }
         c->read_pending = 0;
-        c->read_pending_tail = 0;
-        c->read_pending_generation = 0;
-        c->read_pending_len = 0;
         clear_pending_operation();
         c->abort_on_pending = 0;
         start_closing_client(epfd, c);
@@ -3277,22 +3255,10 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
 
             if (!c->ssh_eof && (!c->client_dead || c->read_pending) &&
                 (c->read_pending || rb_free_space(&c->s2c) > 0)) {
-                uint8_t *ptr = NULL;
+                /* EAGAIN does not pin libssh2_channel_read()'s caller buffer.
+                 * Always use the current contiguous writable area. */
                 size_t avail = 0;
-                if (c->read_pending) {
-                    avail = c->read_pending_len;
-                    ptr = rb_write_slice_pinned(&c->s2c, c->read_pending_tail,
-                                                c->read_pending_generation, avail);
-                    if (!ptr) {
-                        log_red("S2C ring slice identity mismatch in relay pump");
-                        *agg_dirs_out = agg_dirs;
-                        note_upstream_rx_progress(u, rx_before, &did_ssh_read);
-                        *did_ssh_read_out = did_ssh_read;
-                        return -1;
-                    }
-                } else {
-                    ptr = rb_write_slice(&c->s2c, &avail);
-                }
+                uint8_t *ptr = rb_write_slice(&c->s2c, &avail);
                 if (ptr && avail > 0) {
                     ssize_t r = libssh2_channel_read(c->channel, (char *)ptr, avail);
                     if (r > 0) {
@@ -3304,9 +3270,6 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                             return -1;
                         }
                         c->read_pending = 0;
-                        c->read_pending_tail = 0;
-                        c->read_pending_generation = 0;
-                        c->read_pending_len = 0;
                         did_ssh_read = 1;
                         note_s2c_buffer_peak(c);
                         c->last_activity_ms=now_ms();
@@ -3327,9 +3290,6 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         }
                     } else if (r == 0) {
                         c->read_pending = 0;
-                        c->read_pending_tail = 0;
-        c->read_pending_generation = 0;
-                        c->read_pending_len = 0;
                         if (c->s2c.used == 0 && rb_clear(&c->s2c) < 0) {
                             log_red("S2C ring clear rejected after channel read");
                             *agg_dirs_out = agg_dirs;
@@ -3354,16 +3314,10 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     } else if (r == LIBSSH2_ERROR_EAGAIN) {
                         did_ssh_read = 1;
                         c->read_pending = 1;
-                        c->read_pending_tail = c->s2c.tail;
-                        c->read_pending_generation = c->s2c.generation;
-                        c->read_pending_len = avail;
                         record_eagain(session, u, c, PENDING_READ, &agg_dirs, &stop_loop);
                         if (stop_loop) break;
                     } else {
                         c->read_pending = 0;
-                        c->read_pending_tail = 0;
-        c->read_pending_generation = 0;
-                        c->read_pending_len = 0;
                         c->abort_on_pending = 0;
                         start_closing_client(epfd, c);
                         if (is_libssh2_socket_fatal((int)r)) {

@@ -305,6 +305,69 @@ static int run_ring_buffer_regressions(void) {
     return 0;
 }
 
+
+static int run_s2c_read_retry_recomputes_slice_regression(void) {
+    int sv[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        fprintf(stderr, "[FAIL] S2C read-retry slice regression: socketpair: %s\\n",
+                strerror(errno));
+        return 1;
+    }
+    client_conn_t c = {.fd = sv[0], .state = ST_RELAY};
+    int failed = rb_init(&c.s2c, 64) < 0;
+    uint8_t payload[60];
+    memset(payload, 0xA5, sizeof(payload));
+    if (!failed && rb_push(&c.s2c, payload, sizeof(payload)) < 0) failed = 1;
+    if (!failed && rb_commit_read(&c.s2c, 30, 0) < 0) failed = 1;
+
+    size_t old_contiguous = 0;
+    if (!failed && !rb_write_slice(&c.s2c, &old_contiguous)) failed = 1;
+    if (!failed && old_contiguous != 4) failed = 1;
+
+    /* EAGAIN is only a retry state: it does not retain the output pointer. */
+    c.read_pending = 1;
+    if (!failed && send_from_rb(c.fd, &c.s2c, 0) != 1) failed = 1;
+
+    size_t retry_contiguous = 0;
+    uint8_t *retry_ptr = failed ? NULL : rb_write_slice(&c.s2c, &retry_contiguous);
+    if (!failed && (!c.read_pending || !retry_ptr ||
+                    retry_ptr != c.s2c.data ||
+                    retry_contiguous != c.s2c.cap ||
+                    retry_contiguous <= old_contiguous ||
+                    c.s2c.used != 0 || c.s2c.head != 0 || c.s2c.tail != 0)) failed = 1;
+
+    uint8_t drained[30];
+    ssize_t got = failed ? -1 : recv(sv[1], drained, sizeof(drained), 0);
+    if (!failed && (got != (ssize_t)sizeof(drained) ||
+                    memcmp(drained, payload + 30, sizeof(drained)) != 0)) failed = 1;
+
+    c.read_pending = 0;
+    rb_free(&c.s2c);
+    close(sv[0]);
+    close(sv[1]);
+    if (failed) {
+        fprintf(stderr, "[FAIL] S2C read EAGAIN retry recomputes current writable slice\\n");
+        return 1;
+    }
+    puts("[PASS] S2C read EAGAIN retry recomputes current writable slice");
+    return 0;
+}
+
+static int run_relay_buffer_capacity_regression(void) {
+    rb_t c2s = {0}, s2c = {0};
+    int failed = rb_init(&c2s, C2S_RELAY_BUF_SIZE) < 0 ||
+                 rb_init(&s2c, S2C_RELAY_BUF_SIZE) < 0;
+    if (!failed && (c2s.cap != 32768 || s2c.cap != 131072)) failed = 1;
+    rb_free(&c2s);
+    rb_free(&s2c);
+    if (failed) {
+        fprintf(stderr, "[FAIL] separate C2S/S2C ring capacities\\n");
+        return 1;
+    }
+    puts("[PASS] C2S ring=32 KiB and S2C ring=128 KiB");
+    return 0;
+}
+
 static int run_eof_drain_regression(void) {
     int sv[2] = {-1, -1};
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return 1;
@@ -588,9 +651,6 @@ static int run_pending_channel_close_buffer_regression(void) {
         c->write_pending_generation = c->c2s.generation;
         c->write_pending_len = 6;
         c->read_pending = 1;
-        c->read_pending_tail = c->s2c.tail;
-        c->read_pending_generation = c->s2c.generation;
-        c->read_pending_len = 8;
 
         g_clients = c;
         g_client_count = 1;
@@ -600,17 +660,15 @@ static int run_pending_channel_close_buffer_regression(void) {
 
         const uint8_t *c2s_read = rb_read_slice_pinned(
             &c->c2s, c->write_pending_head, c->write_pending_generation, c->write_pending_len);
-        uint8_t *s2c_retry = rb_write_slice_pinned(
-            &c->s2c, c->read_pending_tail, c->read_pending_generation, c->read_pending_len);
         if (g_clients != c || g_client_count != 1 || c->state != ST_RELAY ||
             !c->abort_on_pending || g_pending_client != c || g_pending_op != PENDING_WRITE ||
             !c->write_pending || !c->read_pending ||
-            !c2s_read || memcmp(c2s_read, "upload", 6) != 0 || s2c_retry != s2c_write) {
+            !c2s_read || memcmp(c2s_read, "upload", 6) != 0 || !s2c_write) {
             failed = 1;
         }
 
-        /* Once the pinned write has completed, a leftover inbound read EAGAIN
-         * must not keep the client object or ring buffers alive. */
+        /* C2S write arguments remain pinned across EAGAIN. An S2C read retry
+         * retains only its retry flag, never a caller-owned buffer pointer. */
         clear_pending_operation();
         c->abort_on_pending = 0;
         c->write_pending = 0;
@@ -645,9 +703,6 @@ static int run_inbound_only_channel_close_regression(void) {
     if (!failed && rb_push(&c->c2s, (const uint8_t *)"queued", 6) < 0) failed = 1;
     if (!failed) {
         c->read_pending = 1;
-        c->read_pending_tail = c->s2c.tail;
-        c->read_pending_generation = c->s2c.generation;
-        c->read_pending_len = 8;
         c->write_pending = 1;
         c->write_waiting_window = 1;
         c->write_pending_head = c->c2s.head;
@@ -1363,6 +1418,8 @@ static int run_core_state_regressions(void) {
     failures += run_tls_unexpected_eof_retryable_regression();
     failures += run_tls_handshake_timeout_retryable_regression();
     failures += run_ring_buffer_regressions();
+    failures += run_s2c_read_retry_recomputes_slice_regression();
+    failures += run_relay_buffer_capacity_regression();
     failures += run_eof_drain_regression();
     failures += run_graceful_hup_preserves_c2s_regression();
     failures += run_deferred_client_cleanup_regression();
