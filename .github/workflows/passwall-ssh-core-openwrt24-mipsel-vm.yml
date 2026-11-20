@@ -959,6 +959,14 @@ jobs:
               fi
               THREADS="$(awk '/^Threads:/ {print $2}' "/proc/$CORE_PID/status" 2>/dev/null)"
               echo "INPROCESS pid=$CORE_PID configured_workers=$COUNT proc_threads=$THREADS listeners=$LISTENERS"
+              case "$THREADS" in
+                ''|*[!0-9]*)
+                  fail "$TAG in-process thread count unavailable from /proc"
+                  kill -TERM "$CORE_PID" 2>/dev/null || true
+                  wait "$CORE_PID" 2>/dev/null || true
+                  return 1
+                  ;;
+              esac
               if [ "$THREADS" -lt "$((COUNT + 1))" ]; then
                 fail "$TAG in-process worker count not reflected in /proc Threads"
                 kill -TERM "$CORE_PID" 2>/dev/null || true
