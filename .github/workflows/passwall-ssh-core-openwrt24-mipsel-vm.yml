@@ -999,9 +999,13 @@ jobs:
               wait "$CORE_PID"
               CORE_RC=$?
               ACCEPTED="$(awk -F'accepted_total=' '/accepted_total=/ {split($2,a,/[^0-9]/); sum+=a[1]} END {print sum+0}' "$CORE_LOG")"
-              echo "INPROCESS_ACCEPTED tag=$TAG workers=$COUNT total=$ACCEPTED core_exit=$CORE_RC"
-              if [ "$RUN_RC" -eq 0 ] && [ "$CORE_RC" -eq 0 ] && [ "$ACCEPTED" -ge 16 ]; then
-                pass "one-process $COUNT-worker $TAG transfer: 16 pthread clients, exact bytes and SHA-256; accepted=$ACCEPTED"
+              ACTIVE_WORKERS="$(awk -F'accepted_total=' '/accepted_total=/ {split($2,a,/[^0-9]/); if (a[1] > 0) active++} END {print active+0}' "$CORE_LOG")"
+              REQUIRED_ACTIVE="$COUNT"
+              [ "$COUNT" -eq 4 ] && REQUIRED_ACTIVE=3
+              echo "INPROCESS_ACCEPTED tag=$TAG workers=$COUNT total=$ACCEPTED active_workers=$ACTIVE_WORKERS required_active=$REQUIRED_ACTIVE core_exit=$CORE_RC"
+              if [ "$RUN_RC" -eq 0 ] && [ "$CORE_RC" -eq 0 ] && \
+                 [ "$ACCEPTED" -ge 16 ] && [ "$ACTIVE_WORKERS" -ge "$REQUIRED_ACTIVE" ]; then
+                pass "one-process $COUNT-worker $TAG transfer: 16 pthread clients, exact bytes and SHA-256; accepted=$ACCEPTED active_workers=$ACTIVE_WORKERS"
               else
                 fail "$TAG in-process $COUNT-worker download or accepted-client accounting failed"
                 cat "$CORE_STDOUT" "$CORE_LOG" 2>/dev/null || true
