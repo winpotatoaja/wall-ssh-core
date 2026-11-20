@@ -206,6 +206,8 @@ restarting without waiting for the 15-second drain timeout.
 Queued SOCKS rejection/control replies are also allowed to flush before the
  drain is classified, including replies for clients that never reached relay
  state.
+A live relay entry with a missing libssh2 channel is treated as incomplete
+ and forced, rather than being left in the drain wait state.
 
 ## Upstream EOF and half-close drain (R21)
 
