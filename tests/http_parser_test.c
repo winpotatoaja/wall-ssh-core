@@ -1872,9 +1872,73 @@ static int run_core_state_regressions(void) {
     return failures;
 }
 
+static int run_perf_metrics_regression(void) {
+    char path[] = "/tmp/ssh-core-perf-test-XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) {
+        fprintf(stderr, "[FAIL] perf metrics: mkstemp: %s\\n", strerror(errno));
+        return 1;
+    }
+    close(fd);
+
+    const char *saved_log_path = g_log_path;
+    int saved_log_perf = g_log_perf;
+    g_log_path = path;
+    g_log_perf = 1;
+    perf_begin(1000);
+    g_perf_stats.epoll_calls = 4;
+    g_perf_stats.epoll_wait_ms = 375;
+    g_perf_stats.tls_rx_bytes = 8192;
+    g_perf_stats.tls_rx_eagain = 3;
+    g_perf_stats.s2c_read_bytes = 4096;
+    g_perf_stats.socks_tx_bytes = 4096;
+    g_perf_stats.pending_blocks = 2;
+
+    perf_log_interval(1999);
+    FILE *f = fopen(path, "r");
+    long early_size = -1;
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        early_size = ftell(f);
+        fclose(f);
+    }
+
+    perf_log_interval(2000);
+    char line[2048] = {0};
+    f = fopen(path, "r");
+    if (f) {
+        (void)fread(line, 1, sizeof(line) - 1, f);
+        fclose(f);
+    }
+
+    int failed = early_size != 0 ||
+        !strstr(line, "[PERF] span_ms=1000") ||
+        !strstr(line, "ep_calls=4") ||
+        !strstr(line, "ep_wait_ms=375") ||
+        !strstr(line, "tls_rx_bytes=8192") ||
+        !strstr(line, "tls_rx_eagain=3") ||
+        !strstr(line, "s2c_read_bytes=4096") ||
+        !strstr(line, "socks_tx_bytes=4096") ||
+        !strstr(line, "pend_blk=2") ||
+        g_perf_stats.epoll_calls != 0 ||
+        g_perf_stats.tls_rx_bytes != 0 ||
+        g_perf_stats.pending_blocks != 0;
+
+    g_log_perf = saved_log_perf;
+    g_log_path = saved_log_path;
+    unlink(path);
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] opt-in per-interval perf metrics or counter reset\\n");
+        return 1;
+    }
+    puts("[PASS] opt-in per-interval perf metrics and counter reset");
+    return 0;
+}
+
 int main(void) {
     g_log_path = "-";
-    int failures = run_core_state_regressions();
+    int failures = run_core_state_regressions();\n    failures += run_perf_metrics_regression();
 
     failures += run_case(
         "GET 200 Content-Length body is not a tunnel",
