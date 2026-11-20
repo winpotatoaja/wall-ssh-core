@@ -1062,15 +1062,19 @@ static int run_upstream_hup_client_rejection_regression(void) {
     clear_pending_operation();
 
     reject_nonrelay_clients_on_upstream_hup(-1);
-    char buf[16];
+    uint8_t buf[16] = {0};
     ssize_t greeting_n = recv(greeting_pair[1], buf, sizeof(buf), MSG_DONTWAIT);
     int failed = greeting_n != 2 || buf[0] != 0x05 || buf[1] != 0xFF;
+    int greeting_ok = !failed;
+    memset(buf, 0, sizeof(buf));
     ssize_t request_n = recv(request_pair[1], buf, sizeof(buf), MSG_DONTWAIT);
-    if (request_n != 10 || buf[0] != 0x05 || buf[1] != 0x05) failed = 1;
+    int request_ok = request_n == 10 && buf[0] == 0x05 && buf[1] == 0x05;
+    if (!request_ok) failed = 1;
+    memset(buf, 0, sizeof(buf));
     ssize_t opening_n = recv(opening_pair[1], buf, sizeof(buf), MSG_DONTWAIT);
-    if (opening_n != 10 || buf[0] != 0x05 || buf[1] != 0x05 ||
-        opening.abort_on_open != 1 || g_opening_client != NULL)
-        failed = 1;
+    int opening_reply_ok = opening_n == 10 && buf[0] == 0x05 && buf[1] == 0x05;
+    int opening_state_ok = opening.abort_on_open == 1 && g_opening_client == NULL;
+    if (!opening_reply_ok || !opening_state_ok) failed = 1;
 
     /* An in-flight PENDING_OPEN must remain serialized and be allowed to
      * resolve through ssh_recv_cb's terminal result. */
@@ -1096,7 +1100,14 @@ static int run_upstream_hup_client_rejection_regression(void) {
     close(pending_pair[1]);
 
     if (failed) {
-        fprintf(stderr, "[FAIL] upstream HUP rejects non-relay SOCKS clients without aborting PENDING_OPEN\n");
+        fprintf(stderr,
+                "[FAIL] upstream HUP SOCKS rejection: greeting(n=%zd,ok=%d) "
+                "request(n=%zd,ok=%d) opening(n=%zd,reply=%d,state=%d) "
+                "pending(n=%zd,errno=%d,abort=%d,opening=%d,op=%d)\\n",
+                greeting_n, greeting_ok, request_n, request_ok,
+                opening_n, opening_reply_ok, opening_state_ok,
+                pending_n, errno, pending.abort_on_open,
+                g_opening_client == &pending, (int)g_pending_op);
         return 1;
     }
     puts("[PASS] upstream HUP rejects waiting SOCKS clients and preserves in-flight PENDING_OPEN");
