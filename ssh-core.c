@@ -116,6 +116,8 @@ typedef struct {
 static int tls_write_retry_pending(const upstream_ctx_t *u);
 static int tls_want_requires_serial_retry(const upstream_ctx_t *u);
 static int upstream_client_write_allowed(const upstream_ctx_t *u);
+static ssize_t tls_callback_error_result(upstream_ctx_t *u, int ssl_error,
+                                         int read_operation);
 
 typedef enum {
     ST_SOCKS_GREETING = 0,
@@ -3574,7 +3576,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
 
             if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
                 uint32_t want = client_rdhup_flag(c);
-                if (upstream_client_write_allowed(&uctx) && !c->client_eof && rb_free_space(&c->c2s) > 0) want |= EPOLLIN;
+                if (upstream_client_write_allowed(u) && !c->client_eof && rb_free_space(&c->c2s) > 0) want |= EPOLLIN;
                 if (c->s2c.used > 0 || c->ctrl_len > 0) want |= EPOLLOUT;
                 update_client_epoll(epfd, c, want);
             }
