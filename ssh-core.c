@@ -5029,11 +5029,29 @@ typedef struct {
 static int resolve_worker_count(int argc, char **argv, int *out_count) {
     if (!out_count) return -1;
     int workers = 1;
+    int cli_workers_set = 0;
     const char *env_file = NULL;
+
+    /* Parse CLI first so a valid -workers value overrides even a malformed
+     * WORKERS entry in the environment file. */
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-env") == 0 && i + 1 < argc)
+        if (strcmp(argv[i], "-env") == 0 && i + 1 < argc) {
             env_file = argv[++i];
+        } else if (strcmp(argv[i], "-workers") == 0) {
+            if (i + 1 >= argc ||
+                parse_int_range(argv[++i], 1, MAX_WORKERS, &workers) < 0) {
+                fprintf(stderr, "-workers harus 1..%d\\n", MAX_WORKERS);
+                return -1;
+            }
+            cli_workers_set = 1;
+        }
     }
+
+    if (cli_workers_set) {
+        *out_count = workers;
+        return 0;
+    }
+
     if (env_file) {
         FILE *f = fopen(env_file, "r");
         if (f) {
@@ -5043,36 +5061,28 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
                 if (!line[0] || line[0] == '#') continue;
                 char *eq = strchr(line, '=');
                 if (!eq) continue;
-                *eq = '\0';
+                *eq = '\\0';
                 char *key = line;
                 char *value = eq + 1;
                 trim_ws(key);
                 trim_ws(value);
                 size_t n = strlen(value);
-                if (n >= 2 && ((value[0] == '\'' && value[n - 1] == '\'') ||
+                if (n >= 2 && ((value[0] == '\\'' && value[n - 1] == '\\'') ||
                                (value[0] == '"' && value[n - 1] == '"'))) {
-                    value[n - 1] = '\0';
+                    value[n - 1] = '\\0';
                     value++;
                 }
                 if (strcmp(key, "WORKERS") == 0 &&
                     parse_int_range(value, 1, MAX_WORKERS, &workers) < 0) {
                     fclose(f);
-                    fprintf(stderr, "WORKERS harus 1..%d\n", MAX_WORKERS);
+                    fprintf(stderr, "WORKERS harus 1..%d\\n", MAX_WORKERS);
                     return -1;
                 }
             }
             fclose(f);
         }
     }
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-workers") == 0) {
-            if (i + 1 >= argc ||
-                parse_int_range(argv[++i], 1, MAX_WORKERS, &workers) < 0) {
-                fprintf(stderr, "-workers harus 1..%d\n", MAX_WORKERS);
-                return -1;
-            }
-        }
-    }
+
     *out_count = workers;
     return 0;
 }
