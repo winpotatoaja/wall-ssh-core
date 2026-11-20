@@ -12,7 +12,7 @@ The VM runs three configurations:
 2. 2 isolated core workers / 2 SSH sessions: two core processes listen on ports 1080 and 1081. The four download threads are distributed round-robin across them.
 3. 4 isolated core workers / 4 SSH sessions: four core processes listen on ports 1080–1083, one SSH session per independent core process.
 
-Each run transfers 4 × 32 MiB (128 MiB total). The guest verifies each file's exact length and SHA-256 digest against the host fixture. The helper prints per-client duration and throughput plus aggregate MiB/s.
+Each run transfers 4 × 32 MiB (128 MiB total). The helper streams each response body through a SHA-256 digest without writing the 4 × 32 MiB payloads to OpenWrt tmpfs. Each client verifies HTTP Content-Length, exact received byte count and SHA-256 against the host fixture. It prints per-client duration and throughput plus aggregate MiB/s.
 
 ## Why the initial comparison uses isolated sessions
 
@@ -30,7 +30,7 @@ For every benchmark run the guest records:
 - Per-process /proc/<pid>/status: Threads, RSS and context switches.
 - Per-thread /proc/<pid>/task/<tid>/stat user/system CPU ticks.
 - Per-core /proc/stat, load average, /proc/net/snmp, /proc/net/netstat and /proc/net/tcp.
-- Download helper per-client and aggregate throughput, exact byte counts and SHA-256 checks.
+- Download helper per-client and aggregate throughput, streamed exact byte counts and SHA-256 checks (payloads are not written to guest storage).
 - Core stdout/log files, guest console, host HTTP/SSH/TLS fixture logs and emulator logs.
 
 ## Interpretation
