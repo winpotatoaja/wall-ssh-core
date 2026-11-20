@@ -6,13 +6,13 @@ This experiment targets the OpenWrt 24.10.7 mipsel_24kc guest booted by the MT76
 
 The MIPS helper socks-mt-download creates four real POSIX pthreads. Each thread opens its own SOCKS5 connection and downloads the same 32 MiB fixture through the local core.
 
-The VM runs three configurations:
+The VM runs three configurations over both TCP and TLS/SNI transports:
 
 1. 1 core / 1 SSH session: all four client threads share the single core process and its existing single LIBSSH2_SESSION.
 2. 2 isolated core workers / 2 SSH sessions: two core processes listen on ports 1080 and 1081. The four download threads are distributed round-robin across them.
 3. 4 isolated core workers / 4 SSH sessions: four core processes listen on ports 1080–1083, one SSH session per independent core process.
 
-Each run transfers 4 × 32 MiB (128 MiB total). The helper streams each response body through a SHA-256 digest without writing the 4 × 32 MiB payloads to OpenWrt tmpfs. Each client verifies HTTP Content-Length, exact received byte count and SHA-256 against the host fixture. It prints per-client duration and throughput plus aggregate MiB/s.
+Each run transfers 4 × 32 MiB (128 MiB total). The TCP and TLS/SNI matrices use separate baseline, 2-session and 4-session runs. The helper streams each response body through a SHA-256 digest without writing the 4 × 32 MiB payloads to OpenWrt tmpfs. Each client verifies HTTP Content-Length, exact received byte count and SHA-256 against the host fixture. It prints per-client duration and throughput plus aggregate MiB/s.
 
 ## Why the initial comparison uses isolated sessions
 
@@ -29,7 +29,7 @@ For every benchmark run the guest records:
 - [PERF] counters from every core instance: epoll wait/wakeups, TLS RX calls/bytes/EAGAIN, SSH channel reads, SOCKS TX, S2C-full events and libssh2 EAGAIN.
 - Per-process /proc/<pid>/status: Threads, RSS and context switches.
 - Per-thread /proc/<pid>/task/<tid>/stat user/system CPU ticks.
-- Per-core /proc/stat, load average, /proc/net/snmp, /proc/net/netstat and /proc/net/tcp.
+- Per-core /proc/stat, load average, /proc/net/snmp, /proc/net/netstat, /proc/net/sockstat, /proc/net/tcp, /proc/net/tcp6, /proc/softirqs, /proc/net/dev and available memory.
 - Download helper per-client and aggregate throughput, streamed exact byte counts and SHA-256 checks (payloads are not written to guest storage).
 - Core stdout/log files, guest console, host HTTP/SSH/TLS fixture logs and emulator logs.
 
