@@ -107,6 +107,7 @@ typedef struct {
     time_t   last_activity;
     int      hup_seen;
     int      rx_terminal;
+    int      rx_terminal_rc; /* stable callback result: 0 EOF, negative errno */
     int      tx_terminal;
     int      upstream_epoll_detached;
     long long drain_deadline_ms;
@@ -1661,6 +1662,15 @@ static ssize_t tls_callback_error_result(upstream_ctx_t *u, int ssl_error,
     return -EIO;
 }
 
+static ssize_t mark_upstream_rx_terminal(upstream_ctx_t *u, ssize_t result) {
+    if (!u) return result < 0 ? result : -EIO;
+    u->rx_terminal = 1;
+    u->rx_terminal_rc = (int)result;
+    u->hup_seen = 1;
+    u->upstream_epoll_detached = 1;
+    return result;
+}
+
 static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, int flags, void **abstract) {
     (void)flags;
     upstream_ctx_t *u = (upstream_ctx_t *)(*abstract);
@@ -1684,12 +1694,15 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
         return (ssize_t)take;
     }
 
-    if (u->rx_terminal) return -EAGAIN;
+    /* Drain pre-buffered bytes first; once empty, replay the exact terminal
+     * result instead of turning EOF or a hard error into a fake EAGAIN. */
+    if (u->rx_terminal) return (ssize_t)u->rx_terminal_rc;
 
     if (u->ssl) {
         int rlen = (int)(length > 32768U ? 32768U : length);
         int r;
         int err = SSL_ERROR_NONE;
+        int ssl_errno = 0;
         for (;;) {
             errno = 0;
             ssl_prepare_io();
@@ -1697,6 +1710,7 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
             if (r > 0) break;
             err = SSL_get_error(u->ssl, r);
             if (err == SSL_ERROR_SYSCALL && errno == EINTR) continue;
+            ssl_errno = errno;
             break;
         }
         if (r > 0) {
@@ -1709,13 +1723,15 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
         if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
             return tls_callback_error_result(u, err, 1);
         if (err == SSL_ERROR_SYSCALL &&
-            (errno == EAGAIN || errno == EWOULDBLOCK))
+            (ssl_errno == EAGAIN || ssl_errno == EWOULDBLOCK))
             return tls_callback_error_result(u, SSL_ERROR_WANT_READ, 1);
         (void)tls_callback_error_result(u, err, 1);
-        u->rx_terminal = 1;
-        u->hup_seen = 1;
-        u->upstream_epoll_detached = 1;
-        return -EAGAIN;
+        if (err == SSL_ERROR_ZERO_RETURN ||
+            (err == SSL_ERROR_SYSCALL && ssl_errno == 0))
+            return mark_upstream_rx_terminal(u, 0);
+        if (err == SSL_ERROR_SYSCALL && ssl_errno > 0)
+            return mark_upstream_rx_terminal(u, -ssl_errno);
+        return mark_upstream_rx_terminal(u, -EIO);
     }
 
     ssize_t r;
@@ -1727,13 +1743,12 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
         u->rx_seq++;
         return r;
     }
-    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return -EAGAIN;
-    if (r == 0 || r < 0) {
-        u->rx_terminal = 1;
-        u->hup_seen = 1;
-        u->upstream_epoll_detached = 1;
+    int recv_errno = errno;
+    if (r < 0 && (recv_errno == EAGAIN || recv_errno == EWOULDBLOCK))
         return -EAGAIN;
-    }
+    if (r == 0) return mark_upstream_rx_terminal(u, 0);
+    if (r < 0)
+        return mark_upstream_rx_terminal(u, -(recv_errno > 0 ? recv_errno : EIO));
     return r;
 }
 
@@ -2350,6 +2365,34 @@ static void send_socks_err_and_close(int epfd, client_conn_t *c, uint8_t rep_cod
     send_ctrl_err_and_close(epfd, c, err_rep, sizeof(err_rep));
 }
 
+static void reject_nonrelay_clients_on_upstream_hup(int epfd) {
+    static const uint8_t no_methods[2] = {0x05, 0xFF};
+
+    for (client_conn_t *c = g_clients; c; c = c->next) {
+        if (c->fd < 0 || c->close_after_ctrl || c->client_dead) continue;
+
+        if (c->state == ST_SOCKS_GREETING) {
+            if (c->req_len >= 2 && c->req_buf[0] == 0x05)
+                send_ctrl_err_and_close(epfd, c, no_methods, sizeof(no_methods));
+            else
+                start_closing_client(epfd, c);
+            continue;
+        }
+
+        if (c->state == ST_SOCKS_REQUEST) {
+            send_socks_err_and_close(epfd, c, 0x05);
+            continue;
+        }
+
+        if (c->state == ST_SSH_OPENING &&
+            !(c == g_pending_client && g_pending_op == PENDING_OPEN)) {
+            c->abort_on_open = 1;
+            if (g_opening_client == c) g_opening_client = NULL;
+            send_socks_err_and_close(epfd, c, 0x05);
+        }
+    }
+}
+
 static int send_from_rb(int fd, rb_t *r, int keep_pos) {
     while (r->used > 0) {
         size_t avail = 0;
@@ -2757,7 +2800,7 @@ static uint32_t upstream_epoll_interest(const upstream_ctx_t *u,
                                         int readable_channel,
                                         int window_waiter) {
     if (u && u->upstream_epoll_detached) return 0;
-    uint32_t want = EPOLLRDHUP;
+    uint32_t want = (u && u->hup_seen) ? 0U : EPOLLRDHUP;
     if (!idle_rx_paused) return want;
 
     /* A TLS readiness request is authoritative only for an active serialized
@@ -3307,13 +3350,17 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 continue;
             }
             if (u->hup_seen && g_pending_op == PENDING_NONE) {
-                if (c->c2s.used) rb_clear(&c->c2s);
-                c->write_pending = 0;
-                c->write_pending_head = 0;
-                c->write_pending_generation = 0;
-                c->write_pending_len = 0;
-                c->write_waiting_window = 0;
-                c->write_wait_rx_seq = 0;
+                /* A write buffer may be released only when no libssh2 call
+                 * pins it, or when EAGAIN is solely a zero-window wait. */
+                if (!c->write_pending || c->write_waiting_window) {
+                    if (c->c2s.used) rb_clear(&c->c2s);
+                    c->write_pending = 0;
+                    c->write_pending_head = 0;
+                    c->write_pending_generation = 0;
+                    c->write_pending_len = 0;
+                    c->write_waiting_window = 0;
+                    c->write_wait_rx_seq = 0;
+                }
                 c->need_send_eof = 0;
             }
             if (upstream_client_write_allowed(u) && drain_pending_eof_to_c2s(epfd, c)) {
@@ -3540,6 +3587,9 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     } else {
                         if (u->hup_seen && !u->rx_terminal &&
                             is_libssh2_socket_fatal((int)r)) {
+                            /* A failed WINDOW_ADJUST send does not prove that
+                             * libssh2's already-queued channel packets were
+                             * copied into s2c. Do not claim this channel drained. */
                             if (!c->upstream_read_stalled)
                                 log_yellow("S2C drain stalled: libssh2 transport ended before channel EOF");
                             c->upstream_read_stalled = 1;
@@ -3676,6 +3726,21 @@ static int upstream_drain_complete(const upstream_ctx_t *u) {
 
 static int upstream_drain_timed_out(const upstream_ctx_t *u, long long now) {
     return u && u->drain_deadline_ms > 0 && now >= u->drain_deadline_ms;
+}
+
+static int upstream_epoll_timeout_ms(const upstream_ctx_t *u,
+                                     int force_next_tick, long long now) {
+    if (force_next_tick) return 0;
+    if (!u || !u->hup_seen) return 1000;
+
+    int timeout = (g_pending_op != PENDING_NONE && u->upstream_epoll_detached)
+                      ? UPSTREAM_DRAIN_POLL_MS : 1000;
+    if (u->drain_deadline_ms > 0) {
+        long long remaining = u->drain_deadline_ms - now;
+        if (remaining <= 0) return 0;
+        if (remaining < timeout) timeout = (int)remaining;
+    }
+    return timeout;
 }
 
 static int upstream_http_response_rejected(const upstream_ctx_t *u) {
@@ -4277,8 +4342,7 @@ int main(int argc, char **argv) {
     exit_code = 0;
 
     while (!g_stop) {
-        int timeout_ms = uctx.hup_seen ? UPSTREAM_DRAIN_POLL_MS :
-                         (force_next_tick ? 0 : 1000);
+        int timeout_ms = upstream_epoll_timeout_ms(&uctx, force_next_tick, now_ms());
         int nfds = epoll_wait(epfd, events, MAX_EVENTS, timeout_ms);
         if (nfds < 0) {
             if (errno == EINTR) continue;
@@ -4348,9 +4412,14 @@ int main(int argc, char **argv) {
                     uctx.upstream_epoll_detached = 1;
                     upstream_readable = 1;
                 }
-                if (e & (EPOLLHUP | EPOLLRDHUP)) {
+                if (e & EPOLLHUP) {
                     uctx.hup_seen = 1;
                     uctx.upstream_epoll_detached = 1;
+                    upstream_readable = 1;
+                } else if (e & EPOLLRDHUP) {
+                    /* A peer FIN closes only its write direction. Keep EPOLLIN
+                     * armed until recv/SSL_read confirms the receive terminal. */
+                    uctx.hup_seen = 1;
                     upstream_readable = 1;
                 }
                 if (e & EPOLLIN) upstream_readable = 1;
@@ -4366,7 +4435,10 @@ int main(int argc, char **argv) {
             if (epoll_ctl(epfd, EPOLL_CTL_DEL, upstream_fd, NULL) == 0 || errno == ENOENT)
                 upstream_ev = 0;
         }
-        if (uctx.hup_seen) begin_upstream_drain(epfd, &listen_fd, &uctx);
+        if (uctx.hup_seen) {
+            begin_upstream_drain(epfd, &listen_fd, &uctx);
+            reject_nonrelay_clients_on_upstream_hup(epfd);
+        }
 
         /*
          * Do not issue a passive TLS EOF-read probe on the shared object.
@@ -4465,6 +4537,7 @@ int main(int argc, char **argv) {
         }
         if (uctx.hup_seen) {
             begin_upstream_drain(epfd, &listen_fd, &uctx);
+            reject_nonrelay_clients_on_upstream_hup(epfd);
             if (upstream_drain_complete(&uctx)) {
                 log_yellow("Upstream drain complete: all relay channels and S2C buffers drained");
                 write_marker(NEED_RESTART_FILE, "upstream eof after drain");
