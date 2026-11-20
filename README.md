@@ -294,9 +294,9 @@ that reporting interval; it is not a CPU-time measurement. TLS RX counts
 OpenSSL bytes returned from the upstream receive callback, while S2C reads and
 SOCKS TX are separate downstream stages.
 
-For router-side sampling, `tools/diag-download.sh` (when copied to the router)
-records per-second process/thread CPU, interface throughput, per-socket TCP
-states and queues matched by process FD inode, and system TCP/softnet deltas.
+The companion `diag-download.sh` script supplied with this change records
+per-second process/thread CPU, interface throughput, per-socket TCP states
+and queues matched by process FD inode, and system TCP/softnet deltas.
 The optional `ss -tinp` snapshot records per-upstream-socket TCP_INFO details
 such as RTT, congestion window and retransmissions. On OpenWrt 24.10, install
 the `ss` utility with `opkg update && opkg install ip-full`. Without `ss`,
