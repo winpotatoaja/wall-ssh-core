@@ -838,7 +838,8 @@ jobs:
               touch "$LOG/$LABEL.active"
               (
                 while [ -f "$LOG/$LABEL.active" ]; do
-                  echo "===== epoch=$(date +%s) load=$(cat /proc/loadavg) ====="
+                  TICK_HZ="$(getconf CLK_TCK 2>/dev/null || echo 100)"
+                  echo "===== epoch=$(date +%s) clk_tck=$TICK_HZ load=$(cat /proc/loadavg) ====="
                   awk '/^cpu([0-9]+)? / {print}' /proc/stat
                   while IFS= read -r P; do
                     [ -r "/proc/$P/status" ] || continue
@@ -875,9 +876,9 @@ jobs:
               : > "$LOG/active-worker-pids"; I=0
               while [ "$I" -lt "$COUNT" ]; do
                 PORT=$((BASE_PORT + I))
-                WORKER_ENV="$LOG/$TAG-worker-$I.env"
-                WORKER_LOG="$LOG/$TAG-worker-$I.log"
-                WORKER_STDOUT="$LOG/$TAG-worker-$I-stdout.log"
+                WORKER_ENV="$LOG/$TAG-$COUNT-sessions-worker-$I.env"
+                WORKER_LOG="$LOG/$TAG-$COUNT-sessions-worker-$I.log"
+                WORKER_STDOUT="$LOG/$TAG-$COUNT-sessions-worker-$I-stdout.log"
                 sed "s|^SOCKS_ADDR=.*|SOCKS_ADDR=127.0.0.1:$PORT|" "$ENV_FILE" > "$WORKER_ENV"
                 rm -f "$WORKER_LOG" "$WORKER_STDOUT"
                 "$BIN" -env "$WORKER_ENV" -log "$WORKER_LOG" \
@@ -964,7 +965,7 @@ jobs:
           for F in "$LOG"/tcp-single-core-download.log "$LOG"/tcp-single-core-4clients-sampler.log \
                    "$LOG"/tcp-parallel-2-sessions-download.log "$LOG"/tcp-parallel-2-sessions-sampler.log \
                    "$LOG"/tcp-parallel-4-sessions-download.log "$LOG"/tcp-parallel-4-sessions-sampler.log \
-                   "$LOG"/tcp-ssh-core.log "$LOG"/tcp-worker-*.log "$LOG"/tcp-worker-*-stdout.log; do
+                   "$LOG"/tcp-ssh-core.log "$LOG"/tcp-*-sessions-worker-*.log "$LOG"/tcp-*-sessions-worker-*-stdout.log; do
             [ -f "$F" ] || continue
             echo "----- $F -----"; cat "$F"
           done
@@ -1022,7 +1023,7 @@ jobs:
           for F in "$LOG"/tls-single-core-download.log "$LOG"/tls-single-core-4clients-sampler.log \
                    "$LOG"/tls-parallel-2-sessions-download.log "$LOG"/tls-parallel-2-sessions-sampler.log \
                    "$LOG"/tls-parallel-4-sessions-download.log "$LOG"/tls-parallel-4-sessions-sampler.log \
-                   "$LOG"/tls-single-core.log "$LOG"/tls-worker-*.log "$LOG"/tls-worker-*-stdout.log; do
+                   "$LOG"/tls-single-core.log "$LOG"/tls-*-sessions-worker-*.log "$LOG"/tls-*-sessions-worker-*-stdout.log; do
             [ -f "$F" ] || continue
             echo "----- $F -----"; cat "$F"
           done
