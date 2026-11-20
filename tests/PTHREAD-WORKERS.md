@@ -80,3 +80,12 @@ router MiB/s.
 The R24 implementation is experimental until the complete MIPS SDK build and
 VM integration workflow has passed. Keep R23 as the known single-session
 fallback while validating R24.
+
+## SDK artifact used for VM run
+
+The R24 MIPS SDK build completed successfully in GitHub Actions run
+[44837594314](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/44837594314).
+The uploaded IPK is `passwall-ssh-core_1.0.0-r24_mipsel_24kc.ipk`, with package
+architecture `mipsel_24kc`. The IPK, half-close helper, and pthread downloader
+checksums were verified before launching the VM stage. The VM stage reuses this
+SDK artifact and checks that the compiled sources match its build-source SHA.
