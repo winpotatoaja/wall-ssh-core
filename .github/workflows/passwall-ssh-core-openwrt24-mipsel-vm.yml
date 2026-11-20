@@ -865,7 +865,7 @@ jobs:
               SPID="$(cat "$LOG/$LABEL-sampler.pid" 2>/dev/null)"
               [ -n "$SPID" ] && wait "$SPID" 2>/dev/null || true
             }
-remove disk verifier            start_workers() {
+            start_workers() {
               COUNT="$1"; : > "$LOG/active-worker-pids"; I=0
               while [ "$I" -lt "$COUNT" ]; do
                 PORT=$((1080 + I))
