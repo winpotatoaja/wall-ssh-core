@@ -1055,8 +1055,9 @@ static int run_upstream_hup_client_rejection_regression(void) {
     request.prev = &greeting;
     request.next = &opening;
     opening.prev = &request;
-    opening.next = &pending;
-    pending.prev = &opening;
+    /* Keep the pending-open fixture out of the initial rejection pass. */
+    opening.next = NULL;
+    pending.prev = NULL;
     g_clients = &greeting;
     g_opening_client = &opening;
     clear_pending_operation();
@@ -1076,8 +1077,10 @@ static int run_upstream_hup_client_rejection_regression(void) {
     int opening_state_ok = opening.abort_on_open == 1 && g_opening_client == NULL;
     if (!opening_reply_ok || !opening_state_ok) failed = 1;
 
-    /* An in-flight PENDING_OPEN must remain serialized and be allowed to
-     * resolve through ssh_recv_cb's terminal result. */
+    /* Add this client only after it has a real in-flight PENDING_OPEN.
+     * The earlier rejection pass must not see it as an unstarted OPEN. */
+    opening.next = &pending;
+    pending.prev = &opening;
     g_opening_client = &pending;
     set_pending_operation(&pending, PENDING_OPEN);
     reject_nonrelay_clients_on_upstream_hup(-1);
