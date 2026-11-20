@@ -89,6 +89,25 @@ SOCKS, TCP dial, TLS retry, ring-buffer, half-close, pending-cleanup, and core
 state regression suite also passes. The next stages build this R18 source with
 the OpenWrt 25.12.5 x86_64 SDK and run the resulting APK in QEMU.
 
+## Classified upstream drain (R22)
+
+Relay channel reads temporarily translate a confirmed upstream receive terminal
+into `-EAGAIN` while inside `libssh2_channel_read()` only, allowing
+libssh2 to copy complete channel packets already present in its session queue
+into the local S2C ring. This does not bypass a failed `CHANNEL_WINDOW_ADJUST`:
+that transmit operation precedes libssh2's packet scan, so an affected channel
+is reported as stalled and causes a forced teardown once local output buffers
+are empty.
+
+An upstream shutdown is now classified as waiting, graceful, or forced. A
+graceful result requires a clean receive EOF, SSH EOF on every live relay
+channel, zero queued channel bytes from `libssh2_channel_window_read_ex()`,
+and empty local S2C/control buffers. Unexpected TLS EOF without `close_notify`
+is an error, not a clean EOF. If all live channels are drained or stalled but
+the transport or any channel is incomplete, the core logs RX/TX terminal
+status, stalled/incomplete channel counts, and queued libssh2 bytes before
+restarting without waiting for the 15-second drain timeout.
+
 ## Upstream EOF and half-close drain (R21)
 
 The upstream receive callback now reports a real EOF as zero and preserves
