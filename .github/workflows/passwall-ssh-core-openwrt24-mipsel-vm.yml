@@ -1126,11 +1126,18 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'tar -C /tmp/mips-test -czf /tmp/mips-guest-logs.tgz . 2>/dev/null' 2>/dev/null
+              'cd /tmp/mips-test && find . -type f \( -name "*.log" -o -name "*.env" -o -name "*-pids" -o -name "test-status" -o -name "run-tests.sh" \) -print > /tmp/mips-log-files.list && tar -czf /tmp/mips-guest-logs.tgz -T /tmp/mips-log-files.list' 2>/dev/null
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               root@127.0.0.1:/tmp/mips-guest-logs.tgz test-results/guest/ 2>/dev/null
-            tar -xzf test-results/guest/mips-guest-logs.tgz -C test-results/guest/ 2>/dev/null
+            if [ -s test-results/guest/mips-guest-logs.tgz ] && \
+              gzip -t test-results/guest/mips-guest-logs.tgz && \
+              tar -tzf test-results/guest/mips-guest-logs.tgz >/dev/null 2>&1; then
+              tar -xzf test-results/guest/mips-guest-logs.tgz -C test-results/guest/
+              echo "Guest log archive passed gzip/tar integrity checks."
+            else
+              echo "WARNING: guest log archive is missing or corrupt; retaining raw archive for diagnosis."
+            fi
           fi
           if [ -n "$EMU_DIR" ]; then
             if [ -f "$GITHUB_WORKSPACE/test-results/mips-emulator.pid" ]; then
