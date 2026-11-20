@@ -225,6 +225,11 @@ libssh2.
 The OpenWrt 24.10.7 mipsel_24kc workflow builds package r22 and performs
 cross-architecture ELF/package checks before its separate QEMU integration run.
 
+
+## Four-vCPU performance investigation (experimental)
+
+The experimental branch `perf/4core-ssh-relay-benchmark` runs the existing OpenWrt 25.12.5 QEMU integration and sustained concurrent-transfer workload with a four-vCPU guest (`qemu -smp 4`) on the GitHub-hosted Ubuntu runner. The workflow records the host CPU topology as an artifact. This validates behavior under a four-core guest and provides a repeatable baseline; it does not by itself make the current single-threaded SSH event loop parallel. The current core shares one libssh2 session and TLS transport, so channel operations must remain serialized. A future parallel design must move only independent work off-thread or use independent SSH sessions, then prove correctness and throughput against this baseline.
+
 ## Continuous integration tests
 
 Pushes to `main` that change `ssh-core.c`, the package `Makefile`, tests, or this
