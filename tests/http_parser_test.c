@@ -986,6 +986,125 @@ static int run_upstream_client_write_gate_regression(void) {
     return 0;
 }
 
+static int run_upstream_hup_epoll_policy_regression(void) {
+    upstream_ctx_t u = {.hup_seen = 1};
+    int idle_rx_paused = 0;
+    uint32_t want = upstream_epoll_interest(
+        &u, PENDING_NONE, 0, &idle_rx_paused, 0, 0, 0);
+    int failed = (want & EPOLLIN) == 0 || (want & EPOLLRDHUP) != 0;
+
+    u.upstream_epoll_detached = 1;
+    idle_rx_paused = 0;
+    want = upstream_epoll_interest(
+        &u, PENDING_NONE, 0, &idle_rx_paused, 0, 1, 0);
+    if (want != 0) failed = 1;
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] upstream RDHUP keeps EPOLLIN until terminal receive\n");
+        return 1;
+    }
+    puts("[PASS] upstream RDHUP keeps EPOLLIN armed and removes repeated RDHUP");
+    return 0;
+}
+
+static int run_upstream_epoll_timeout_regression(void) {
+    upstream_ctx_t u = {.hup_seen = 1, .drain_deadline_ms = 20000};
+    int failed = upstream_epoll_timeout_ms(&u, 0, 10000) != 1000;
+
+    u.upstream_epoll_detached = 1;
+    set_pending_operation(NULL, PENDING_READ);
+    if (upstream_epoll_timeout_ms(&u, 0, 10000) != UPSTREAM_DRAIN_POLL_MS)
+        failed = 1;
+    u.drain_deadline_ms = 10010;
+    if (upstream_epoll_timeout_ms(&u, 0, 10000) != 10) failed = 1;
+    if (upstream_epoll_timeout_ms(&u, 1, 10000) != 0) failed = 1;
+    clear_pending_operation();
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] upstream drain epoll timeout is deadline/pending-op bounded\n");
+        return 1;
+    }
+    puts("[PASS] upstream drain avoids idle 25ms polling and bounds pending retries");
+    return 0;
+}
+
+static int run_upstream_hup_client_rejection_regression(void) {
+    int greeting_pair[2] = {-1, -1};
+    int request_pair[2] = {-1, -1};
+    int opening_pair[2] = {-1, -1};
+    int pending_pair[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, greeting_pair) != 0 ||
+        socketpair(AF_UNIX, SOCK_STREAM, 0, request_pair) != 0 ||
+        socketpair(AF_UNIX, SOCK_STREAM, 0, opening_pair) != 0 ||
+        socketpair(AF_UNIX, SOCK_STREAM, 0, pending_pair) != 0) {
+        for (int i = 0; i < 2; i++) {
+            if (greeting_pair[i] >= 0) close(greeting_pair[i]);
+            if (request_pair[i] >= 0) close(request_pair[i]);
+            if (opening_pair[i] >= 0) close(opening_pair[i]);
+            if (pending_pair[i] >= 0) close(pending_pair[i]);
+        }
+        return 1;
+    }
+
+    client_conn_t greeting = {.fd = greeting_pair[0], .state = ST_SOCKS_GREETING,
+                              .req_buf = {0x05, 0x01}, .req_len = 2};
+    client_conn_t request = {.fd = request_pair[0], .state = ST_SOCKS_REQUEST};
+    client_conn_t opening = {.fd = opening_pair[0], .state = ST_SSH_OPENING};
+    client_conn_t pending = {.fd = pending_pair[0], .state = ST_SSH_OPENING};
+    greeting.next = &request;
+    request.prev = &greeting;
+    request.next = &opening;
+    opening.prev = &request;
+    opening.next = &pending;
+    pending.prev = &opening;
+    g_clients = &greeting;
+    g_opening_client = &opening;
+    clear_pending_operation();
+
+    reject_nonrelay_clients_on_upstream_hup(-1);
+    char buf[16];
+    ssize_t greeting_n = recv(greeting_pair[1], buf, sizeof(buf), MSG_DONTWAIT);
+    int failed = greeting_n != 2 || buf[0] != 0x05 || buf[1] != 0xFF;
+    ssize_t request_n = recv(request_pair[1], buf, sizeof(buf), MSG_DONTWAIT);
+    if (request_n != 10 || buf[0] != 0x05 || buf[1] != 0x05) failed = 1;
+    ssize_t opening_n = recv(opening_pair[1], buf, sizeof(buf), MSG_DONTWAIT);
+    if (opening_n != 10 || buf[0] != 0x05 || buf[1] != 0x05 ||
+        opening.abort_on_open != 1 || g_opening_client != NULL)
+        failed = 1;
+
+    /* An in-flight PENDING_OPEN must remain serialized and be allowed to
+     * resolve through ssh_recv_cb's terminal result. */
+    g_opening_client = &pending;
+    set_pending_operation(&pending, PENDING_OPEN);
+    reject_nonrelay_clients_on_upstream_hup(-1);
+    ssize_t pending_n = recv(pending_pair[1], buf, sizeof(buf), MSG_DONTWAIT);
+    if (pending_n >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK) ||
+        pending.abort_on_open || g_opening_client != &pending ||
+        g_pending_client != &pending || g_pending_op != PENDING_OPEN)
+        failed = 1;
+
+    clear_pending_operation();
+    g_opening_client = NULL;
+    g_clients = NULL;
+    for (int i = 0; i < 2; i++) {
+        if (greeting.fd >= 0) close(greeting.fd);
+        if (request.fd >= 0) close(request.fd);
+        if (opening.fd >= 0) close(opening.fd);
+        if (pending.fd >= 0) close(pending.fd);
+        close(greeting_pair[i]);
+        close(request_pair[i]);
+        close(opening_pair[i]);
+        close(pending_pair[i]);
+    }
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] upstream HUP rejects non-relay SOCKS clients without aborting PENDING_OPEN\n");
+        return 1;
+    }
+    puts("[PASS] upstream HUP rejects waiting SOCKS clients and preserves in-flight PENDING_OPEN");
+    return 0;
+}
+
 static int run_upstream_rx_terminal_callback_regression(void) {
     int sv[2] = {-1, -1};
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return 1;
@@ -999,15 +1118,26 @@ static int run_upstream_rx_terminal_callback_regression(void) {
     }
     ssize_t first = ssh_recv_cb(sv[0], buf, sizeof(buf), 0, &abstract);
     ssize_t second = ssh_recv_cb(sv[0], buf, sizeof(buf), 0, &abstract);
-    int failed = first != -EAGAIN || second != -EAGAIN ||
+    int failed = first != 0 || second != 0 || u.rx_terminal_rc != 0 ||
                  !u.rx_terminal || !u.hup_seen || !u.upstream_epoll_detached;
     close(sv[0]);
     close(sv[1]);
+
+    upstream_ctx_t bad = {.tunnel_established = 1};
+    void *bad_abstract = &bad;
+    ssize_t bad_first = ssh_recv_cb(-1, buf, sizeof(buf), 0, &bad_abstract);
+    int bad_errno = errno;
+    ssize_t bad_second = ssh_recv_cb(-1, buf, sizeof(buf), 0, &bad_abstract);
+    if (bad_first != -EBADF || bad_second != bad_first ||
+        bad.rx_terminal_rc != -EBADF || bad_errno != EBADF ||
+        !bad.rx_terminal || !bad.hup_seen || !bad.upstream_epoll_detached)
+        failed = 1;
+
     if (failed) {
-        fprintf(stderr, "[FAIL] upstream EOF is recorded and remains terminal\n");
+        fprintf(stderr, "[FAIL] upstream EOF/error results are stable and never become EAGAIN\n");
         return 1;
     }
-    puts("[PASS] upstream EOF is recorded and remains terminal");
+    puts("[PASS] upstream EOF returns zero and terminal socket errors remain stable");
     return 0;
 }
 
@@ -1538,6 +1668,9 @@ static int run_core_state_regressions(void) {
     failures += run_upstream_rx_progress_regression();
     failures += run_upstream_drain_state_regression();
     failures += run_upstream_client_write_gate_regression();
+    failures += run_upstream_hup_epoll_policy_regression();
+    failures += run_upstream_epoll_timeout_regression();
+    failures += run_upstream_hup_client_rejection_regression();
     failures += run_upstream_rx_terminal_callback_regression();
     failures += run_http_rejection_classification_regression();
     failures += run_socks_listener_address_regression();
