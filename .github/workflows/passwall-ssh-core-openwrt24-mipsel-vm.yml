@@ -112,9 +112,12 @@ jobs:
           chmod 0755 "$GITHUB_WORKSPACE/test-results/socks-halfclose"
           file "$GITHUB_WORKSPACE/test-results/socks-halfclose" | tee "$GITHUB_WORKSPACE/test-results/helper-file.txt"
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum socks-halfclose > halfclose.sha256)
-          "$CROSS_CC" -std=gnu11 -Os -static -Wall -Wextra -Werror -pthread \
-            "$GITHUB_WORKSPACE/tests/socks_mt_download.c" \
-            -o "$GITHUB_WORKSPACE/test-results/socks-mt-download"
+          STAGING="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -maxdepth 1 -type d -name 'target-*' -print -quit)"
+          test -n "$STAGING"
+          "$CROSS_CC" -std=gnu11 -Os -Wall -Wextra -Werror -pthread \
+            -I"$STAGING/usr/include" "$GITHUB_WORKSPACE/tests/socks_mt_download.c" \
+            -L"$STAGING/usr/lib" -Wl,-rpath-link,"$STAGING/usr/lib" \
+            -o "$GITHUB_WORKSPACE/test-results/socks-mt-download" -lcrypto
           chmod 0755 "$GITHUB_WORKSPACE/test-results/socks-mt-download"
           file "$GITHUB_WORKSPACE/test-results/socks-mt-download" | tee "$GITHUB_WORKSPACE/test-results/mt-helper-file.txt"
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum socks-mt-download > mt-download.sha256)
@@ -862,19 +865,7 @@ jobs:
               SPID="$(cat "$LOG/$LABEL-sampler.pid" 2>/dev/null)"
               [ -n "$SPID" ] && wait "$SPID" 2>/dev/null || true
             }
-            verify_files() {
-              PREFIX="$1"; I=0; OK=1
-              while [ "$I" -lt 4 ]; do
-                FILE="$PREFIX-$(printf '%02d' "$I").bin"
-                SIZE="$(wc -c < "$FILE" 2>/dev/null | tr -d ' ')"
-                SHA="$(sha256sum "$FILE" 2>/dev/null | awk '{print $1}')"
-                echo "VERIFY $FILE size=$SIZE sha=$SHA expected=$EXPECTED_SHA"
-                if [ "$SIZE" != "$EXPECTED_BYTES" ] || [ "$SHA" != "$EXPECTED_SHA" ]; then OK=0; fi
-                I=$((I + 1))
-              done
-              [ "$OK" -eq 1 ]
-            }
-            start_workers() {
+remove disk verifier            start_workers() {
               COUNT="$1"; : > "$LOG/active-worker-pids"; I=0
               while [ "$I" -lt "$COUNT" ]; do
                 PORT=$((1080 + I))
@@ -910,14 +901,14 @@ jobs:
               echo "========== $LABEL: 4 pthread clients over $COUNT SSH sessions =========="
               if ! start_workers "$COUNT"; then fail "$COUNT-session worker pool failed"; stop_workers; return; fi
               start_sampler "$LABEL" "$LOG/active-worker-pids"
-              /usr/bin/socks-mt-download 4 "$COUNT" 1080 "$EXPECTED_BYTES" "$LOG/$LABEL" >"$LOG/$LABEL-download.log" 2>&1
+              /usr/bin/socks-mt-download 4 "$COUNT" 1080 "$EXPECTED_BYTES" "$EXPECTED_SHA" >"$LOG/$LABEL-download.log" 2>&1
               RUN_RC=$?
               stop_sampler "$LABEL"
               cat "$LOG/$LABEL-download.log"
-              if [ "$RUN_RC" -eq 0 ] && verify_files "$LOG/$LABEL"; then
-                pass "4 concurrent pthread downloads verified over $COUNT independent SSH sessions"
+              if [ "$RUN_RC" -eq 0 ]; then
+                pass "4 concurrent pthread downloads streamed and SHA-256 verified over $COUNT independent SSH sessions"
               else
-                fail "$COUNT-session download or SHA-256 verification failed"
+                fail "$COUNT-session download or streamed SHA-256 verification failed"
               fi
               stop_workers
             }
@@ -925,14 +916,14 @@ jobs:
             if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
               echo "$APP_PID" > "$LOG/single-worker-pids"
               start_sampler "single-core-4clients" "$LOG/single-worker-pids"
-              /usr/bin/socks-mt-download 4 1 1080 "$EXPECTED_BYTES" "$LOG/single-core" >"$LOG/single-core-download.log" 2>&1
+              /usr/bin/socks-mt-download 4 1 1080 "$EXPECTED_BYTES" "$EXPECTED_SHA" >"$LOG/single-core-download.log" 2>&1
               SINGLE_RC=$?
               stop_sampler "single-core-4clients"
               cat "$LOG/single-core-download.log"
-              if [ "$SINGLE_RC" -eq 0 ] && verify_files "$LOG/single-core"; then
-                pass "4 pthread download clients completed through one core; exact 4 x 32 MiB"
+              if [ "$SINGLE_RC" -eq 0 ]; then
+                pass "4 pthread download clients completed through one core; streamed 4 x 32 MiB and verified SHA-256"
               else
-                fail "single-core concurrent pthread download or hash check failed"
+                fail "single-core concurrent pthread download or streamed SHA-256 check failed"
               fi
             else
               fail "single-core baseline proxy was not running"
