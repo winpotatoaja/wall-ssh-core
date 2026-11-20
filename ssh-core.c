@@ -5023,6 +5023,7 @@ typedef struct {
     int worker_id;
     int worker_count;
     int result;
+    int skip_libssh2_exit;
 } worker_launch_t;
 
 static int resolve_worker_count(int argc, char **argv, int *out_count) {
@@ -5081,6 +5082,7 @@ static void *worker_thread_main(void *opaque) {
     g_worker_id = launch->worker_id;
     g_worker_count = launch->worker_count;
     launch->result = core_worker_run(launch->argc, launch->argv);
+    launch->skip_libssh2_exit = g_skip_libssh2_cleanup;
     if (launch->result != 0) request_stop();
     return NULL;
 }
@@ -5110,10 +5112,12 @@ int main(int argc, char **argv) {
     }
 
     int result = 0;
+    int safe_to_call_libssh2_exit = 1;
     if (worker_count == 1) {
         g_worker_id = 0;
         g_worker_count = 1;
         result = core_worker_run(argc, argv);
+        if (g_skip_libssh2_cleanup) safe_to_call_libssh2_exit = 0;
     } else {
         pthread_t threads[MAX_WORKERS];
         worker_launch_t launches[MAX_WORKERS];
@@ -5139,11 +5143,17 @@ int main(int argc, char **argv) {
             if (rc != 0) {
                 fprintf(stderr, "pthread_join worker %d gagal: %s\n", i + 1, strerror(rc));
                 result = 1;
+                safe_to_call_libssh2_exit = 0;
             }
+            if (launches[i].skip_libssh2_exit) safe_to_call_libssh2_exit = 0;
             if (launches[i].result != 0) result = 1;
         }
     }
-    libssh2_exit();
+    if (safe_to_call_libssh2_exit) {
+        libssh2_exit();
+    } else {
+        fprintf(stderr, "Skipping libssh2_exit because a worker retained an unsafe pending session; process teardown will reclaim it.\n");
+    }
     return result;
 }
 
