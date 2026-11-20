@@ -203,6 +203,9 @@ is an error, not a clean EOF. If all live channels are drained or stalled but
 the transport or any channel is incomplete, the core logs RX/TX terminal
 status, stalled/incomplete channel counts, and queued libssh2 bytes before
 restarting without waiting for the 15-second drain timeout.
+Queued SOCKS rejection/control replies are also allowed to flush before the
+ drain is classified, including replies for clients that never reached relay
+ state.
 
 ## Upstream EOF and half-close drain (R21)
 
