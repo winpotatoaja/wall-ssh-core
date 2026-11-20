@@ -866,25 +866,30 @@ jobs:
               [ -n "$SPID" ] && wait "$SPID" 2>/dev/null || true
             }
             start_workers() {
-              COUNT="$1"; : > "$LOG/active-worker-pids"; I=0
+              COUNT="$1"; ENV_FILE="$2"; BASE_PORT="$3"; TAG="$4"
+              : > "$LOG/active-worker-pids"; I=0
               while [ "$I" -lt "$COUNT" ]; do
-                PORT=$((1080 + I))
-                sed "s|^SOCKS_ADDR=.*|SOCKS_ADDR=127.0.0.1:$PORT|" "$LOG/tcp.env" > "$LOG/worker-$I.env"
-                "$BIN" -env "$LOG/worker-$I.env" -log "$LOG/worker-$I.log" \
-                  -log-backpressure 1 -log-perf 1 >"$LOG/worker-$I-stdout.log" 2>&1 &
+                PORT=$((BASE_PORT + I))
+                WORKER_ENV="$LOG/$TAG-worker-$I.env"
+                WORKER_LOG="$LOG/$TAG-worker-$I.log"
+                WORKER_STDOUT="$LOG/$TAG-worker-$I-stdout.log"
+                sed "s|^SOCKS_ADDR=.*|SOCKS_ADDR=127.0.0.1:$PORT|" "$ENV_FILE" > "$WORKER_ENV"
+                rm -f "$WORKER_LOG" "$WORKER_STDOUT"
+                "$BIN" -env "$WORKER_ENV" -log "$WORKER_LOG" \
+                  -log-backpressure 1 -log-perf 1 >"$WORKER_STDOUT" 2>&1 &
                 P=$!; echo "$P" >> "$LOG/active-worker-pids"
                 READY=0; J=0
                 while [ "$J" -lt 90 ]; do
-                  if grep -q "SOCKS5 Listening" "$LOG/worker-$I.log" 2>/dev/null; then READY=1; break; fi
+                  if grep -q "SOCKS5 Listening" "$WORKER_LOG" 2>/dev/null; then READY=1; break; fi
                   if ! kill -0 "$P" 2>/dev/null; then break; fi
                   J=$((J + 1)); sleep 1
                 done
                 if [ "$READY" -ne 1 ]; then
                   echo "Worker $I failed on port $PORT"
-                  cat "$LOG/worker-$I-stdout.log" "$LOG/worker-$I.log" 2>/dev/null || true
+                  cat "$WORKER_STDOUT" "$WORKER_LOG" 2>/dev/null || true
                   return 1
                 fi
-                echo "WORKER_READY index=$I pid=$P port=$PORT"
+                echo "WORKER_READY tag=$TAG index=$I pid=$P port=$PORT"
                 I=$((I + 1))
               done
               return 0
@@ -897,29 +902,39 @@ jobs:
               rm -f "$LOG/active-worker-pids"
             }
             run_worker_benchmark() {
-              COUNT="$1"; LABEL="parallel-$COUNT-sessions"
-              echo "========== $LABEL: 4 pthread clients over $COUNT SSH sessions =========="
-              if ! start_workers "$COUNT"; then fail "$COUNT-session worker pool failed"; stop_workers; return; fi
-              start_sampler "$LABEL" "$LOG/active-worker-pids"
-              /usr/bin/socks-mt-download 4 "$COUNT" 1080 "$EXPECTED_BYTES" "$EXPECTED_SHA" >"$LOG/$LABEL-download.log" 2>&1
+              COUNT="$1"; ENV_FILE="$2"; BASE_PORT="$3"; TAG="$4"
+              LABEL="$TAG-parallel-$COUNT-sessions"
+              echo "========== $LABEL: 4 pthread clients over $COUNT independent SSH sessions =========="
+              if ! start_workers "$COUNT" "$ENV_FILE" "$BASE_PORT" "$TAG"; then
+                fail "$TAG $COUNT-session worker pool failed"; stop_workers; return
+              fi
+              cp "$LOG/active-worker-pids" "$LOG/$LABEL-pids"
+              /usr/bin/socks-mt-download 4 "$COUNT" "$BASE_PORT" "$EXPECTED_BYTES" "$EXPECTED_SHA" >"$LOG/$LABEL-download.log" 2>&1 &
+              MT_PID=$!
+              echo "$MT_PID" >> "$LOG/$LABEL-pids"
+              start_sampler "$LABEL" "$LOG/$LABEL-pids"
+              wait "$MT_PID"
               RUN_RC=$?
               stop_sampler "$LABEL"
               cat "$LOG/$LABEL-download.log"
               if [ "$RUN_RC" -eq 0 ]; then
-                pass "4 concurrent pthread downloads streamed and SHA-256 verified over $COUNT independent SSH sessions"
+                pass "4 pthread downloads streamed and SHA-256 verified over $COUNT independent $TAG SSH sessions"
               else
-                fail "$COUNT-session download or streamed SHA-256 verification failed"
+                fail "$TAG $COUNT-session download or streamed SHA-256 verification failed"
               fi
               stop_workers
             }
 
             if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
-              echo "$APP_PID" > "$LOG/single-worker-pids"
-              start_sampler "single-core-4clients" "$LOG/single-worker-pids"
-              /usr/bin/socks-mt-download 4 1 1080 "$EXPECTED_BYTES" "$EXPECTED_SHA" >"$LOG/single-core-download.log" 2>&1
+              echo "$APP_PID" > "$LOG/tcp-single-core-pids"
+              /usr/bin/socks-mt-download 4 1 1080 "$EXPECTED_BYTES" "$EXPECTED_SHA" >"$LOG/tcp-single-core-download.log" 2>&1 &
+              MT_PID=$!
+              echo "$MT_PID" >> "$LOG/tcp-single-core-pids"
+              start_sampler "tcp-single-core-4clients" "$LOG/tcp-single-core-pids"
+              wait "$MT_PID"
               SINGLE_RC=$?
-              stop_sampler "single-core-4clients"
-              cat "$LOG/single-core-download.log"
+              stop_sampler "tcp-single-core-4clients"
+              cat "$LOG/tcp-single-core-download.log"
               if [ "$SINGLE_RC" -eq 0 ]; then
                 pass "4 pthread download clients completed through one core; streamed 4 x 32 MiB and verified SHA-256"
               else
@@ -936,15 +951,15 @@ jobs:
               wait "$APP_PID" 2>/dev/null || true
               APP_PID=
             fi
-            run_worker_benchmark 2
-            if [ "$STATUS" -eq 0 ]; then run_worker_benchmark 4; fi
+            run_worker_benchmark 2 "$LOG/tcp.env" 1080 tcp
+            if [ "$STATUS" -eq 0 ]; then run_worker_benchmark 4 "$LOG/tcp.env" 1080 tcp; fi
           fi
 
-          echo "========== MULTI-WORKER LOGS =========="
-          for F in "$LOG"/single-core-download.log "$LOG"/single-core-4clients-sampler.log \
-                   "$LOG"/parallel-2-sessions-download.log "$LOG"/parallel-2-sessions-sampler.log \
-                   "$LOG"/parallel-4-sessions-download.log "$LOG"/parallel-4-sessions-sampler.log \
-                   "$LOG"/tcp-ssh-core.log "$LOG"/worker-*.log "$LOG"/worker-*-stdout.log; do
+          echo "========== TCP MULTI-WORKER LOGS =========="
+          for F in "$LOG"/tcp-single-core-download.log "$LOG"/tcp-single-core-4clients-sampler.log \
+                   "$LOG"/tcp-parallel-2-sessions-download.log "$LOG"/tcp-parallel-2-sessions-sampler.log \
+                   "$LOG"/tcp-parallel-4-sessions-download.log "$LOG"/tcp-parallel-4-sessions-sampler.log \
+                   "$LOG"/tcp-ssh-core.log "$LOG"/tcp-worker-*.log "$LOG"/tcp-worker-*-stdout.log; do
             [ -f "$F" ] || continue
             echo "----- $F -----"; cat "$F"
           done
@@ -954,6 +969,58 @@ jobs:
             wait "$APP_PID" 2>/dev/null || true
             APP_PID=
           fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== TLS/SNI PTHREAD LOAD TEST: ONE SSH SESSION =========="
+            sed -e 's|^TRANSPORT=.*$|TRANSPORT=TLS|' \
+                -e 's|^HOST_PORT=.*$|HOST_PORT=8443|' \
+                -e 's|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:1080|' \
+                -e 's|^VERIFY_TLS=.*$|VERIFY_TLS=0|' \
+                "$LOG/tcp.env" > "$LOG/bench-tls.env"
+            printf '%s\n' 'SNI=localhost' >> "$LOG/bench-tls.env"
+            rm -f "$LOG/tls-single-core.log" "$LOG/tls-single-core-stdout.log"
+            "$BIN" -env "$LOG/bench-tls.env" -log "$LOG/tls-single-core.log" \
+              -log-backpressure 1 -log-perf 1 >"$LOG/tls-single-core-stdout.log" 2>&1 &
+            TLS_BENCH_PID=$!
+            READY=0; I=0
+            while [ "$I" -lt 90 ]; do
+              if grep -q "SOCKS5 Listening" "$LOG/tls-single-core.log" 2>/dev/null; then READY=1; break; fi
+              if ! kill -0 "$TLS_BENCH_PID" 2>/dev/null; then break; fi
+              I=$((I + 1)); sleep 1
+            done
+            if [ "$READY" -eq 1 ]; then
+              echo "$TLS_BENCH_PID" > "$LOG/tls-single-core-pids"
+              /usr/bin/socks-mt-download 4 1 1080 "$EXPECTED_BYTES" "$EXPECTED_SHA" \
+                >"$LOG/tls-single-core-download.log" 2>&1 &
+              MT_PID=$!
+              echo "$MT_PID" >> "$LOG/tls-single-core-pids"
+              start_sampler "tls-single-core-4clients" "$LOG/tls-single-core-pids"
+              wait "$MT_PID"; TLS_SINGLE_RC=$?
+              stop_sampler "tls-single-core-4clients"
+              cat "$LOG/tls-single-core-download.log"
+              if [ "$TLS_SINGLE_RC" -eq 0 ]; then
+                pass "4 pthread downloads passed through one TLS/SNI SSH session with exact bytes and SHA-256"
+              else
+                fail "TLS/SNI single-session pthread download failed"
+              fi
+            else
+              fail "TLS/SNI baseline core did not become ready"
+              cat "$LOG/tls-single-core-stdout.log" "$LOG/tls-single-core.log" 2>/dev/null || true
+            fi
+            kill -TERM "$TLS_BENCH_PID" 2>/dev/null || true
+            wait "$TLS_BENCH_PID" 2>/dev/null || true
+            run_worker_benchmark 2 "$LOG/bench-tls.env" 1080 tls
+            if [ "$STATUS" -eq 0 ]; then run_worker_benchmark 4 "$LOG/bench-tls.env" 1080 tls; fi
+          fi
+
+          echo "========== TLS/SNI MULTI-WORKER LOGS =========="
+          for F in "$LOG"/tls-single-core-download.log "$LOG"/tls-single-core-4clients-sampler.log \
+                   "$LOG"/tls-parallel-2-sessions-download.log "$LOG"/tls-parallel-2-sessions-sampler.log \
+                   "$LOG"/tls-parallel-4-sessions-download.log "$LOG"/tls-parallel-4-sessions-sampler.log \
+                   "$LOG"/tls-single-core.log "$LOG"/tls-worker-*.log "$LOG"/tls-worker-*-stdout.log; do
+            [ -f "$F" ] || continue
+            echo "----- $F -----"; cat "$F"
+          done
 
           if [ "$STATUS" -eq 0 ]; then
             echo "========== TLS HALF-CLOSE AND FULL-DUPLEX =========="
