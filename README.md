@@ -89,6 +89,22 @@ SOCKS, TCP dial, TLS retry, ring-buffer, half-close, pending-cleanup, and core
 state regression suite also passes. The next stages build this R18 source with
 the OpenWrt 25.12.5 x86_64 SDK and run the resulting APK in QEMU.
 
+## Upstream EOF and half-close drain (R21)
+
+The upstream receive callback now reports a real EOF as zero and preserves
+terminal socket errors across retries, preventing a closed-but-readable socket
+from being mistaken for EAGAIN. An upstream RDHUP is treated as a half-close:
+EPOLLIN remains available until the receive side confirms EOF, and 25 ms polling
+is reserved for a pending libssh2 operation after the upstream descriptor has
+been detached. During drain, pre-relay SOCKS clients receive a protocol-appropriate
+failure, active PENDING_OPEN calls are allowed to resolve, and pinned C2S write
+buffers are not discarded. A stalled S2C channel remains incomplete until the
+bounded drain deadline rather than risking loss of packets still queued inside
+libssh2.
+
+The OpenWrt 24.10.7 mipsel_24kc workflow builds package r21 and performs
+cross-architecture ELF/package checks before its separate QEMU integration run.
+
 ## Continuous integration tests
 
 Pushes to `main` that change `ssh-core.c`, the package `Makefile`, tests, or this
