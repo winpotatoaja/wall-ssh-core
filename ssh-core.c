@@ -108,6 +108,7 @@ typedef struct {
     int      hup_seen;
     int      rx_terminal;
     int      rx_terminal_rc; /* stable callback result: 0 EOF, negative errno */
+    int      rx_flush_eagain; /* let channel reads drain libssh2 packets after RX terminal */
     int      tx_terminal;
     int      upstream_epoll_detached;
     long long drain_deadline_ms;
@@ -1668,7 +1669,21 @@ static ssize_t mark_upstream_rx_terminal(upstream_ctx_t *u, ssize_t result) {
     u->rx_terminal_rc = (int)result;
     u->hup_seen = 1;
     u->upstream_epoll_detached = 1;
-    return result;
+    return u->rx_flush_eagain ? -EAGAIN : result;
+}
+
+/* OpenSSL < 3.0 reports an unexpected TCP EOF as SYSCALL with errno == 0.
+ * That is a transport truncation, not a TLS close_notify / graceful EOF. */
+static ssize_t ssl_read_terminal_result(upstream_ctx_t *u, int ssl_error,
+                                        int ssl_errno) {
+    (void)tls_callback_error_result(u, ssl_error, 1);
+    if (ssl_error == SSL_ERROR_ZERO_RETURN)
+        return mark_upstream_rx_terminal(u, 0);
+    if (ssl_error == SSL_ERROR_SYSCALL && ssl_errno > 0)
+        return mark_upstream_rx_terminal(u, -ssl_errno);
+    if (ssl_error == SSL_ERROR_SYSCALL && ssl_errno == 0)
+        return mark_upstream_rx_terminal(u, -ECONNRESET);
+    return mark_upstream_rx_terminal(u, -EIO);
 }
 
 static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, int flags, void **abstract) {
@@ -1696,7 +1711,8 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
 
     /* Drain pre-buffered bytes first; once empty, replay the exact terminal
      * result instead of turning EOF or a hard error into a fake EAGAIN. */
-    if (u->rx_terminal) return (ssize_t)u->rx_terminal_rc;
+    if (u->rx_terminal)
+        return u->rx_flush_eagain ? -EAGAIN : (ssize_t)u->rx_terminal_rc;
 
     if (u->ssl) {
         int rlen = (int)(length > 32768U ? 32768U : length);
@@ -1725,13 +1741,7 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
         if (err == SSL_ERROR_SYSCALL &&
             (ssl_errno == EAGAIN || ssl_errno == EWOULDBLOCK))
             return tls_callback_error_result(u, SSL_ERROR_WANT_READ, 1);
-        (void)tls_callback_error_result(u, err, 1);
-        if (err == SSL_ERROR_ZERO_RETURN ||
-            (err == SSL_ERROR_SYSCALL && ssl_errno == 0))
-            return mark_upstream_rx_terminal(u, 0);
-        if (err == SSL_ERROR_SYSCALL && ssl_errno > 0)
-            return mark_upstream_rx_terminal(u, -ssl_errno);
-        return mark_upstream_rx_terminal(u, -EIO);
+        return ssl_read_terminal_result(u, err, ssl_errno);
     }
 
     ssize_t r;
@@ -2368,7 +2378,8 @@ static void send_socks_err_and_close(int epfd, client_conn_t *c, uint8_t rep_cod
 static void reject_nonrelay_clients_on_upstream_hup(int epfd) {
     static const uint8_t no_methods[2] = {0x05, 0xFF};
 
-    for (client_conn_t *c = g_clients; c; c = c->next) {
+    for (client_conn_t *c = g_clients, *next = NULL; c; c = next) {
+        next = c->next;
         if (c->fd < 0 || c->close_after_ctrl || c->client_dead) continue;
 
         if (c->state == ST_SOCKS_GREETING) {
@@ -2782,6 +2793,22 @@ static void tls_finish_libssh2_call(upstream_ctx_t *u, int returned_eagain) {
     u->ssl_want_from_write = 0;
 }
 
+/* When RX is terminal, make libssh2 see EAGAIN from its receive callback
+ * during a channel read. This lets _libssh2_channel_read() inspect already
+ * queued session packets instead of aborting before its packet-list scan.
+ * It does not bypass a failed WINDOW_ADJUST send, which happens earlier. */
+static ssize_t channel_read_with_rx_flush(upstream_ctx_t *u,
+                                          LIBSSH2_CHANNEL *channel,
+                                          char *buffer, size_t length) {
+    int previous = u->rx_flush_eagain;
+    u->rx_flush_eagain = 1;
+    tls_begin_libssh2_call(u);
+    ssize_t rc = libssh2_channel_read(channel, buffer, length);
+    tls_finish_libssh2_call(u, rc == LIBSSH2_ERROR_EAGAIN);
+    u->rx_flush_eagain = previous;
+    return rc;
+}
+
 static int keepalive_can_start(const upstream_ctx_t *u, pending_op_t pending_op) {
     /* An inbound-only WANT_READ from an idle SSL_read is not a pinned
      * OpenSSL operation. WANT_WRITE, by contrast, must be retried first. */
@@ -2922,9 +2949,34 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
 static void mark_channel_upstream_drained(client_conn_t *c) {
     if (!c) return;
     c->upstream_read_drained = 1;
+    c->upstream_read_stalled = 0;
     c->ssh_eof = 1;
     if (c->fd >= 0 && c->s2c.used == 0 && c->ctrl_len == 0)
         shutdown(c->fd, SHUT_WR);
+}
+
+/* A terminal read is only clean when libssh2 confirms channel EOF and its
+ * complete-packet queue is empty. read_avail > 0 or missing EOF means this
+ * channel can no longer be drained safely through the public API. */
+static int settle_terminal_channel_read(client_conn_t *c,
+                                        upstream_ctx_t *u) {
+    if (!c || !c->channel) return 0;
+    unsigned long read_avail = 0;
+    (void)libssh2_channel_window_read_ex(c->channel, &read_avail, NULL);
+    int channel_eof = libssh2_channel_eof(c->channel);
+    if (read_avail == 0 && channel_eof) {
+        mark_channel_upstream_drained(c);
+        return 1;
+    }
+    if (u && u->hup_seen) {
+        if (!c->upstream_read_stalled) {
+            log_yellow("S2C drain forced: channel EOF=%d libssh2 queued=%lu bytes",
+                       channel_eof, read_avail);
+        }
+        c->upstream_read_stalled = 1;
+        return -1;
+    }
+    return 0;
 }
 
 static int settle_pending_keepalive_result(int rc) {
@@ -3157,9 +3209,8 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             return -1;
         }
 
-        tls_begin_libssh2_call(u);
-        ssize_t r = libssh2_channel_read(c->channel, (char *)ptr, rlen);
-        tls_finish_libssh2_call(u, r == LIBSSH2_ERROR_EAGAIN);
+        ssize_t r = channel_read_with_rx_flush(u, c->channel,
+                                                (char *)ptr, rlen);
 
         if (r > 0) {
             if (!discard_output) {
@@ -3189,9 +3240,8 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         }
 
         if (r == 0) {
-            if (!discard_output &&
-                (libssh2_channel_eof(c->channel) || u->rx_terminal))
-                mark_channel_upstream_drained(c);
+            if (!discard_output)
+                (void)settle_terminal_channel_read(c, u);
             clear_pending_operation();
             if (c->abort_on_pending || discard_output) {
                 c->abort_on_pending = 0;
@@ -3205,7 +3255,8 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             *agg_dirs_out |= d;
             *did_ssh_read_out = 1;
             if (u->rx_terminal) {
-                if (!discard_output) mark_channel_upstream_drained(c);
+                if (!discard_output)
+                    (void)settle_terminal_channel_read(c, u);
                 clear_pending_operation();
                 if (discard_output || c->abort_on_pending) {
                     c->abort_on_pending = 0;
@@ -3225,16 +3276,15 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         }
 
         clear_pending_operation();
-        if (!discard_output && u->hup_seen && !u->rx_terminal &&
+        if (!discard_output && u->hup_seen &&
             is_libssh2_socket_fatal((int)r)) {
-            if (!c->upstream_read_stalled)
-                log_yellow("S2C drain stalled: libssh2 transport ended before channel EOF");
-            c->upstream_read_stalled = 1;
+            (void)settle_terminal_channel_read(c, u);
             c->abort_on_pending = 0;
             return 1;
         }
         if (u->hup_seen || u->rx_terminal || is_libssh2_socket_fatal((int)r)) {
-            if (!discard_output) mark_channel_upstream_drained(c);
+            if (!discard_output)
+                (void)settle_terminal_channel_read(c, u);
             c->abort_on_pending = 0;
             if (discard_output) start_closing_client(epfd, c);
             return 1;
@@ -3527,9 +3577,8 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 size_t avail = 0;
                 uint8_t *ptr = rb_write_slice(&c->s2c, &avail);
                 if (ptr && avail > 0) {
-                    tls_begin_libssh2_call(u);
-                    ssize_t r = libssh2_channel_read(c->channel, (char *)ptr, avail);
-                    tls_finish_libssh2_call(u, r == LIBSSH2_ERROR_EAGAIN);
+                    ssize_t r = channel_read_with_rx_flush(
+                        u, c->channel, (char *)ptr, avail);
                     if (r > 0) {
                         if ((size_t)r > avail || rb_commit_write(&c->s2c, (size_t)r) < 0) {
                             log_red("S2C ring commit rejected in relay pump");
@@ -3564,8 +3613,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                             *did_ssh_read_out = did_ssh_read;
                             return -1;
                         }
-                        if (libssh2_channel_eof(c->channel) || u->rx_terminal) {
-                            mark_channel_upstream_drained(c);
+                        if (settle_terminal_channel_read(c, u) != 0) {
                             did_ssh_read = 1;
                             any_progress = 1;
                         }
@@ -3578,7 +3626,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     } else if (r == LIBSSH2_ERROR_EAGAIN) {
                         did_ssh_read = 1;
                         if (u->rx_terminal) {
-                            mark_channel_upstream_drained(c);
+                            (void)settle_terminal_channel_read(c, u);
                             any_progress = 1;
                         } else {
                             record_eagain(session, u, c, PENDING_READ, &agg_dirs, &stop_loop);
@@ -3597,8 +3645,9 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                             c = next;
                             continue;
                         }
-                        if (u->hup_seen || u->rx_terminal || is_libssh2_socket_fatal((int)r)) {
-                            mark_channel_upstream_drained(c);
+                        if (u->hup_seen || u->rx_terminal ||
+                            is_libssh2_socket_fatal((int)r)) {
+                            (void)settle_terminal_channel_read(c, u);
                             any_progress = 1;
                             c = next;
                             continue;
@@ -3711,17 +3760,103 @@ static void begin_upstream_drain(int epfd, int *listen_fd,
     }
 }
 
-static int upstream_drain_complete(const upstream_ctx_t *u) {
-    if (!u || !u->hup_seen) return 0;
-    if (g_pending_op != PENDING_NONE || g_opening_client != NULL) return 0;
+typedef enum {
+    UPSTREAM_DRAIN_WAIT = 0,
+    UPSTREAM_DRAIN_GRACEFUL,
+    UPSTREAM_DRAIN_FORCED
+} upstream_drain_result_t;
 
-    for (const client_conn_t *c = g_clients; c; c = c->next) {
+typedef struct {
+    int output_pending;
+    int read_drained;
+    int read_stalled;
+    int channel_present;
+    int channel_eof;
+    unsigned long read_avail;
+} upstream_drain_channel_state_t;
+
+/* Pure policy helper: every channel must have stopped producing data and all
+ * user-space output must be sent before the drain can be classified. A channel
+ * marked drained/stalled is not trusted unless libssh2 also reports channel
+ * EOF and zero complete DATA packets still queued for it. */
+static upstream_drain_result_t classify_upstream_drain(
+    const upstream_ctx_t *u,
+    const upstream_drain_channel_state_t *channels,
+    size_t channel_count,
+    int pending_operation,
+    int opening_client,
+    unsigned long *queued_bytes_out,
+    unsigned int *stalled_channels_out,
+    unsigned int *incomplete_channels_out) {
+    unsigned long queued_bytes = 0;
+    unsigned int stalled_channels = 0;
+    unsigned int incomplete_channels = 0;
+
+    if (queued_bytes_out) *queued_bytes_out = 0;
+    if (stalled_channels_out) *stalled_channels_out = 0;
+    if (incomplete_channels_out) *incomplete_channels_out = 0;
+
+    if (!u || !u->hup_seen) return UPSTREAM_DRAIN_WAIT;
+    if (pending_operation || opening_client) return UPSTREAM_DRAIN_WAIT;
+
+    int forced = (!u->rx_terminal || u->rx_terminal_rc != 0);
+    for (size_t i = 0; i < channel_count; i++) {
+        const upstream_drain_channel_state_t *ch = &channels[i];
+        if (ch->output_pending) return UPSTREAM_DRAIN_WAIT;
+        if (!ch->read_drained && !ch->read_stalled)
+            return UPSTREAM_DRAIN_WAIT;
+
+        if (ch->read_stalled) stalled_channels++;
+        if (ULONG_MAX - queued_bytes < ch->read_avail)
+            queued_bytes = ULONG_MAX;
+        else
+            queued_bytes += ch->read_avail;
+
+        if (!ch->channel_present || !ch->channel_eof || ch->read_avail > 0) {
+            forced = 1;
+            incomplete_channels++;
+        }
+    }
+
+    if (queued_bytes_out) *queued_bytes_out = queued_bytes;
+    if (stalled_channels_out) *stalled_channels_out = stalled_channels;
+    if (incomplete_channels_out) *incomplete_channels_out = incomplete_channels;
+    return forced ? UPSTREAM_DRAIN_FORCED : UPSTREAM_DRAIN_GRACEFUL;
+}
+
+static upstream_drain_result_t upstream_drain_status(
+    const upstream_ctx_t *u,
+    unsigned long *queued_bytes_out,
+    unsigned int *stalled_channels_out,
+    unsigned int *incomplete_channels_out) {
+    upstream_drain_channel_state_t channels[MAX_CLIENTS_LIMIT];
+    size_t count = 0;
+
+    if (!u || !u->hup_seen) return UPSTREAM_DRAIN_WAIT;
+    if (g_pending_op != PENDING_NONE || g_opening_client != NULL)
+        return UPSTREAM_DRAIN_WAIT;
+
+    for (client_conn_t *c = g_clients; c; c = c->next) {
         if (c->state != ST_RELAY || c->client_dead || c->client_reset || c->fd < 0)
             continue;
-        if (!c->upstream_read_drained || c->upstream_read_stalled) return 0;
-        if (c->s2c.used > 0 || c->ctrl_len > 0) return 0;
+        if (count >= MAX_CLIENTS_LIMIT)
+            return UPSTREAM_DRAIN_FORCED;
+
+        upstream_drain_channel_state_t *ch = &channels[count++];
+        memset(ch, 0, sizeof(*ch));
+        ch->output_pending = (c->s2c.used > 0 || c->ctrl_len > 0);
+        ch->read_drained = c->upstream_read_drained;
+        ch->read_stalled = c->upstream_read_stalled;
+        ch->channel_present = (c->channel != NULL);
+        if (c->channel) {
+            (void)libssh2_channel_window_read_ex(c->channel, &ch->read_avail, NULL);
+            ch->channel_eof = libssh2_channel_eof(c->channel);
+        }
     }
-    return 1;
+
+    return classify_upstream_drain(u, channels, count, 0, 0,
+                                   queued_bytes_out, stalled_channels_out,
+                                   incomplete_channels_out);
 }
 
 static int upstream_drain_timed_out(const upstream_ctx_t *u, long long now) {
@@ -4538,9 +4673,25 @@ int main(int argc, char **argv) {
         if (uctx.hup_seen) {
             begin_upstream_drain(epfd, &listen_fd, &uctx);
             reject_nonrelay_clients_on_upstream_hup(epfd);
-            if (upstream_drain_complete(&uctx)) {
-                log_yellow("Upstream drain complete: all relay channels and S2C buffers drained");
+            unsigned long queued_libssh2_bytes = 0;
+            unsigned int stalled_channels = 0;
+            unsigned int incomplete_channels = 0;
+            upstream_drain_result_t drain_result = upstream_drain_status(
+                &uctx, &queued_libssh2_bytes, &stalled_channels,
+                &incomplete_channels);
+            if (drain_result == UPSTREAM_DRAIN_GRACEFUL) {
+                log_yellow("Upstream graceful drain complete: all relay channels reached SSH EOF and libssh2 queues are empty");
                 write_marker(NEED_RESTART_FILE, "upstream eof after drain");
+                exit_code = 1;
+                g_skip_libssh2_cleanup = 1;
+                g_stop = 1;
+                break;
+            }
+            if (drain_result == UPSTREAM_DRAIN_FORCED) {
+                log_red("Upstream forced teardown: rx_terminal=%d rx_rc=%d tx_terminal=%d stalled_channels=%u incomplete_channels=%u libssh2_queued=%lu bytes",
+                        uctx.rx_terminal, uctx.rx_terminal_rc, uctx.tx_terminal,
+                        stalled_channels, incomplete_channels, queued_libssh2_bytes);
+                write_marker(NEED_RESTART_FILE, "upstream forced teardown");
                 exit_code = 1;
                 g_skip_libssh2_cleanup = 1;
                 g_stop = 1;
