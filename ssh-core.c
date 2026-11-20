@@ -3840,6 +3840,10 @@ static upstream_drain_result_t upstream_drain_status(
         return UPSTREAM_DRAIN_WAIT;
 
     for (client_conn_t *c = g_clients; c; c = c->next) {
+        /* Preserve queued SOCKS error replies for clients rejected on HUP,
+         * even when they never reached ST_RELAY. */
+        if (c->ctrl_len > 0 && c->fd >= 0 && !c->client_dead)
+            return UPSTREAM_DRAIN_WAIT;
         if (c->state != ST_RELAY || c->client_dead || c->client_reset || c->fd < 0)
             continue;
         if (count >= MAX_CLIENTS_LIMIT)
