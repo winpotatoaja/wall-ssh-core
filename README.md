@@ -102,7 +102,7 @@ buffers are not discarded. A stalled S2C channel remains incomplete until the
 bounded drain deadline rather than risking loss of packets still queued inside
 libssh2.
 
-The OpenWrt 24.10.7 mipsel_24kc workflow builds package r21 and performs
+The OpenWrt 24.10.7 mipsel_24kc workflow builds package r22 and performs
 cross-architecture ELF/package checks before its separate QEMU integration run.
 
 ## Continuous integration tests
