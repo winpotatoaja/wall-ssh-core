@@ -18,7 +18,7 @@ endef
 
 define Package/passwall-ssh-core/description
  A pthread-based multi-worker SSH client core with independent libssh2 sessions
- and a shared SO_REUSEPORT SOCKS5 listener.
+ and a SO_REUSEPORT SOCKS5 listener group.
 endef
 
 define Build/Prepare
