@@ -1,6 +1,7 @@
 # Passwall SSH Core
 
-A non-blocking libssh2 client that opens one SSH session and multiplexes local
+A non-blocking libssh2 client that opens one or more independent SSH sessions
+(one per worker thread) and multiplexes local
 SOCKS5 clients over SSH `direct-tcpip` channels.
 
 ## Package and executable names
@@ -91,7 +92,8 @@ the OpenWrt 25.12.5 x86_64 SDK and run the resulting APK in QEMU.
 
 # Passwall SSH Core
 
-A non-blocking libssh2 client that opens one SSH session and multiplexes local
+A non-blocking libssh2 client that opens one or more independent SSH sessions
+(one per worker thread) and multiplexes local
 SOCKS5 clients over SSH `direct-tcpip` channels.
 
 ## Package and executable names
@@ -308,3 +310,34 @@ The R23 `mipsel_24kc` package has passed the native regression stage and
 the OpenWrt 24.10.7 cross-build. The separate MT7621 QEMU integration job
 installs that exact SDK artifact and exercises SOCKS forwarding, SSH channel
 I/O, half-close and reconnect behavior.
+
+
+## In-process pthread workers (R24 experimental)
+
+R24 keeps the original single-worker behavior by default. Set `WORKERS=2` or
+`WORKERS=4` in the core environment file, or pass `-workers 2` /
+`-workers 4` to the executable. The accepted range is 1–4; a CLI value
+overrides the environment-file setting. `WORKERS=1` remains the default.
+
+With more than one worker, the process creates one pthread per worker. Each
+thread owns its own upstream TCP/TLS connection, TLS context, `LIBSSH2_SESSION`,
+epoll instance, pending-operation state, client list, and relay ring buffers.
+No `LIBSSH2_SESSION` or per-session TLS state is shared across threads.
+Each worker binds the configured SOCKS address and port in a Linux
+`SO_REUSEPORT` listener group; the kernel distributes incoming TCP connections
+among those listeners.
+
+The process-wide `MAX_CLIENTS` limit is enforced with an atomic admission
+counter, so it is not multiplied by the number of workers. Per-worker relay
+state is thread-local. The payload rotation file and shared failure-marker
+writes are protected by mutexes. `libssh2_init()` is called once by the process
+before workers start, and `libssh2_exit()` is called only after all workers
+have joined. A worker startup/runtime failure requests a coordinated stop of
+the remaining workers.
+
+When multiple workers are enabled, each log line is prefixed with
+`[worker N/TOTAL]`. The shutdown summary includes each worker's accepted
+client count. Enable `LOG_PERF=1` to collect independent per-worker relay
+counters. These features are experimental until the OpenWrt 24.10.7 MIPS VM
+matrix and physical-router tests have been completed; the QEMU result is not
+a substitute for a real MT7621 hardware benchmark.
