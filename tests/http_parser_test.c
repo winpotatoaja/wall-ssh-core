@@ -971,9 +971,16 @@ static int run_upstream_drain_state_regression(void) {
     }
     channels[0].output_pending = 0;
 
-    /* A drained/stalled flag is not sufficient when libssh2 still has queued
-     * channel data, or when the channel never reported SSH EOF. */
+    /* A stalled channel is never a graceful completion, even if its queue
+     * appears empty and the SSH EOF flag is set. */
     channels[0].read_stalled = 1;
+    if (classify_upstream_drain(&u, channels, 2, 0, 0,
+                                NULL, NULL, NULL) != UPSTREAM_DRAIN_FORCED) {
+        failed = 1;
+    }
+
+    /* A drained/stalled flag is also insufficient when libssh2 still has
+     * queued channel data, or when the channel never reported SSH EOF. */
     channels[0].read_avail = 4096;
     channels[0].channel_eof = 0;
     if (classify_upstream_drain(&u, channels, 2, 0, 0,
