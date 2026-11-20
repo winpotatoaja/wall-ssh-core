@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add opt-in in-process pthread workers (R24, 1–4 workers). Each worker owns an independent upstream transport, TLS state, `LIBSSH2_SESSION`, epoll loop, pending-operation state, client list, and relay buffers; a single process runs all workers.
+- Bind worker SOCKS listeners in one `SO_REUSEPORT` group. Preserve the process-wide `MAX_CLIENTS` cap with atomic admission accounting, serialize shared payload-rotation and marker-file writes, and coordinate shutdown with a shared atomic stop flag.
+- Initialize libssh2 once before worker creation and call `libssh2_exit()` only after worker joins. Add worker identity/accepted-client diagnostics and OpenWrt 24 MIPS VM tests for one-PID thread counts plus TCP and TLS/SNI downloads.
+- Bump the OpenWrt package release to r24.
+
+
 - Scope a terminal-RX-as-EAGAIN shim to relay channel reads only, so libssh2
   can consume complete channel packets already queued in the session before
   reporting the saved transport terminal result to other API calls.
