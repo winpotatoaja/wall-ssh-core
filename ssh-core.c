@@ -3803,6 +3803,11 @@ static upstream_drain_result_t classify_upstream_drain(
     for (size_t i = 0; i < channel_count; i++) {
         const upstream_drain_channel_state_t *ch = &channels[i];
         if (ch->output_pending) return UPSTREAM_DRAIN_WAIT;
+        if (!ch->channel_present) {
+            forced = 1;
+            incomplete_channels++;
+            continue;
+        }
         if (!ch->read_drained && !ch->read_stalled)
             return UPSTREAM_DRAIN_WAIT;
 
