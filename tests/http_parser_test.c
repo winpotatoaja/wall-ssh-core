@@ -325,12 +325,11 @@ static int run_s2c_read_retry_recomputes_slice_regression(void) {
     if (!failed && old_contiguous != 4) failed = 1;
 
     /* EAGAIN is only a retry state: it does not retain the output pointer. */
-    c.read_pending = 1;
     if (!failed && send_from_rb(c.fd, &c.s2c, 0) != 1) failed = 1;
 
     size_t retry_contiguous = 0;
     uint8_t *retry_ptr = failed ? NULL : rb_write_slice(&c.s2c, &retry_contiguous);
-    if (!failed && (!c.read_pending || !retry_ptr ||
+    if (!failed && (!retry_ptr ||
                     retry_ptr != c.s2c.data ||
                     retry_contiguous != c.s2c.cap ||
                     retry_contiguous <= old_contiguous ||
@@ -341,7 +340,6 @@ static int run_s2c_read_retry_recomputes_slice_regression(void) {
     if (!failed && (got != (ssize_t)sizeof(drained) ||
                     memcmp(drained, payload + 30, sizeof(drained)) != 0)) failed = 1;
 
-    c.read_pending = 0;
     rb_free(&c.s2c);
     close(sv[0]);
     close(sv[1]);
@@ -471,7 +469,6 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     c.hup_pending = 0;
     c.c2s.used = 0;
     c.need_send_eof = 1;
-    c.read_pending = 1;
     c.write_pending = 1;
     if (!client_dead_ready_to_close(&c)) failed = 1;
     c.c2s.used = 1;
@@ -498,7 +495,6 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     c.client_dead = 0;
     c.client_eof = 0;
     c.need_send_eof = 0;
-    c.read_pending = 0;
     c.write_pending = 0;
 
     g_clients = &c;
@@ -511,9 +507,7 @@ static int run_cleanup_deadline_and_shutdown_pending_regression(void) {
     c.write_waiting_window = 0;
     if (!has_pending_libssh2_work_for_shutdown()) failed = 1;
     c.write_pending = 0;
-    c.read_pending = 1;
     if (has_pending_libssh2_work_for_shutdown()) failed = 1;
-    c.read_pending = 0;
     c.need_send_eof = 1;
     if (has_pending_libssh2_work_for_shutdown()) failed = 1;
     c.need_send_eof = 0;
@@ -650,7 +644,6 @@ static int run_pending_channel_close_buffer_regression(void) {
         c->write_pending_head = c->c2s.head;
         c->write_pending_generation = c->c2s.generation;
         c->write_pending_len = 6;
-        c->read_pending = 1;
 
         g_clients = c;
         g_client_count = 1;
@@ -662,7 +655,7 @@ static int run_pending_channel_close_buffer_regression(void) {
             &c->c2s, c->write_pending_head, c->write_pending_generation, c->write_pending_len);
         if (g_clients != c || g_client_count != 1 || c->state != ST_RELAY ||
             !c->abort_on_pending || g_pending_client != c || g_pending_op != PENDING_WRITE ||
-            !c->write_pending || !c->read_pending ||
+            !c->write_pending ||
             !c2s_read || memcmp(c2s_read, "upload", 6) != 0 || !s2c_write) {
             failed = 1;
         }
@@ -674,7 +667,7 @@ static int run_pending_channel_close_buffer_regression(void) {
         c->write_pending = 0;
         start_closing_client(-1, c);
         if (c->state != ST_CLOSING || c->c2s.data || c->s2c.data ||
-            c->read_pending || c->write_pending) failed = 1;
+            c->write_pending) failed = 1;
     }
 
     if (g_clients == c) {
@@ -702,7 +695,6 @@ static int run_inbound_only_channel_close_regression(void) {
     int failed = rb_init(&c->c2s, 64) < 0 || rb_init(&c->s2c, 64) < 0;
     if (!failed && rb_push(&c->c2s, (const uint8_t *)"queued", 6) < 0) failed = 1;
     if (!failed) {
-        c->read_pending = 1;
         c->write_pending = 1;
         c->write_waiting_window = 1;
         c->write_pending_head = c->c2s.head;
@@ -714,7 +706,7 @@ static int run_inbound_only_channel_close_regression(void) {
         g_opening_client = NULL;
         clear_pending_operation();
         start_closing_client(-1, c);
-        if (c->state != ST_CLOSING || c->read_pending || c->write_pending ||
+        if (c->state != ST_CLOSING || c->write_pending ||
             c->c2s.data || c->s2c.data || c->cleanup_deadline_ms <= 0 ||
             c->abort_on_pending) failed = 1;
     }
@@ -797,27 +789,27 @@ static int run_pending_op_serialization_regression(void) {
 
     /* An active write must keep its exact caller buffer even if TLS reports
      * WANT_READ; only a zero-window wait is safe to release. */
-    if (!pending_op_requires_serial_retry(PENDING_WRITE, &c, inbound, EPOLLIN))
+    if (!pending_op_requires_serial_retry(PENDING_WRITE, &c, inbound, 1))
         failed = 1;
     c.write_waiting_window = 1;
-    if (pending_op_requires_serial_retry(PENDING_WRITE, &c, inbound, EPOLLIN))
+    if (pending_op_requires_serial_retry(PENDING_WRITE, &c, inbound, 0))
         failed = 1;
     if (!pending_op_requires_serial_retry(PENDING_WRITE, &c, outbound, 0))
         failed = 1;
 
-    if (!pending_op_requires_serial_retry(PENDING_SEND_EOF, &c, inbound, EPOLLIN))
+    if (!pending_op_requires_serial_retry(PENDING_SEND_EOF, &c, inbound, 0))
         failed = 1;
     /* A TLS read that needs the socket writable must be retried before other
      * SSH calls; an ordinary read WANT_READ can share the SSH packet reader. */
-    if (pending_op_requires_serial_retry(PENDING_READ, &c, inbound, EPOLLIN))
+    if (pending_op_requires_serial_retry(PENDING_READ, &c, inbound, 0))
         failed = 1;
-    if (!pending_op_requires_serial_retry(PENDING_READ, &c, inbound, EPOLLOUT))
+    if (!pending_op_requires_serial_retry(PENDING_READ, &c, inbound, 1))
         failed = 1;
-    if (pending_op_requires_serial_retry(PENDING_FREE, &c, inbound, EPOLLIN))
+    if (pending_op_requires_serial_retry(PENDING_FREE, &c, inbound, 0))
         failed = 1;
     if (!pending_op_requires_serial_retry(PENDING_FREE, &c, outbound, 0))
         failed = 1;
-    if (!pending_op_requires_serial_retry(PENDING_KEEPALIVE, NULL, inbound, EPOLLIN))
+    if (!pending_op_requires_serial_retry(PENDING_KEEPALIVE, NULL, inbound, 0))
         failed = 1;
 
     if (failed) {
@@ -854,7 +846,8 @@ static int run_tls_want_event_lifetime_regression(void) {
         &u, PENDING_WRITE, LIBSSH2_SESSION_BLOCK_OUTBOUND,
         &idle_rx_paused, 0, 0, 0);
     set_pending_operation(NULL, PENDING_WRITE);
-    if ((want & EPOLLIN) == 0 ||
+    u.ssl_want_from_write = 1;
+    if ((want & EPOLLIN) == 0 || (want & EPOLLOUT) != 0 ||
         keepalive_can_start(&u, PENDING_WRITE) ||
         !shutdown_io_pending(&u)) {
         failed = 1;
@@ -864,6 +857,7 @@ static int run_tls_want_event_lifetime_regression(void) {
     /* WANT_WRITE remains an active TLS retry even without a libssh2 pending
      * marker and must block both keepalive and teardown I/O. */
     u.ssl_want_events = EPOLLOUT;
+    u.ssl_want_from_write = 1;
     idle_rx_paused = 1;
     want = upstream_epoll_interest(
         &u, PENDING_NONE, 0, &idle_rx_paused, 0, 0, 0);
@@ -876,6 +870,7 @@ static int run_tls_want_event_lifetime_regression(void) {
 
     /* Normal channel demand can re-arm EPOLLIN after the pause has been set. */
     u.ssl_want_events = EPOLLIN;
+    u.ssl_want_from_write = 0;
     idle_rx_paused = 1;
     want = upstream_epoll_interest(
         &u, PENDING_NONE, 0, &idle_rx_paused, 0, 1, 0);
@@ -891,6 +886,23 @@ static int run_tls_want_event_lifetime_regression(void) {
         &idle_rx_paused, 0, 0, 0);
     if ((want & (EPOLLIN | EPOLLOUT)) != (EPOLLIN | EPOLLOUT))
         failed = 1;
+
+    u.ssl_want_events = EPOLLIN;
+    u.ssl_want_from_write = 1;
+    tls_begin_libssh2_call(&u);
+    if (u.ssl_want_events != 0 || u.ssl_want_from_write != 0) failed = 1;
+    u.ssl_want_events = EPOLLIN;
+    u.ssl_want_from_write = 1;
+    tls_finish_libssh2_call(&u, 1);
+    if (!tls_write_retry_pending(&u)) failed = 1;
+    tls_finish_libssh2_call(&u, 0);
+    if (u.ssl_want_events != 0 || u.ssl_want_from_write != 0) failed = 1;
+    u.ssl_want_events = EPOLLIN;
+    u.ssl_want_from_write = 0;
+    if (tls_want_requires_serial_retry(&u)) failed = 1;
+    u.ssl_want_events = EPOLLOUT;
+    if (!tls_want_requires_serial_retry(&u) || keepalive_can_start(&u, PENDING_NONE) ||
+        !shutdown_io_pending(&u)) failed = 1;
 
     if (failed) {
         fprintf(stderr, "[FAIL] TLS WANT_READ lifetime, keepalive, shutdown and epoll backpressure state\n");
@@ -918,17 +930,84 @@ static int run_upstream_rx_progress_regression(void) {
     return 0;
 }
 
-static int run_upstream_hup_state_regression(void) {
-    int failed = 0;
-    if (!upstream_hup_needs_restart(1, 10, 10, 0)) failed = 1;
-    if (upstream_hup_needs_restart(1, 10, 11, 0)) failed = 1;
-    if (upstream_hup_needs_restart(1, 10, 10, 16)) failed = 1;
-    if (upstream_hup_needs_restart(0, 10, 10, 0)) failed = 1;
+static int run_upstream_drain_state_regression(void) {
+    client_conn_t a = {.fd = 1234, .state = ST_RELAY, .upstream_read_drained = 1};
+    client_conn_t b = {.fd = 1235, .state = ST_RELAY, .upstream_read_drained = 0};
+    upstream_ctx_t u = {.hup_seen = 1};
+    int failed = rb_init(&a.s2c, 32) < 0 || rb_init(&b.s2c, 32) < 0;
+    if (!failed && rb_push(&a.s2c, (const uint8_t *)"queued", 6) < 0) failed = 1;
+    a.next = &b;
+    b.prev = &a;
+    g_clients = &a;
+    clear_pending_operation();
+    g_opening_client = NULL;
+    if (!failed && upstream_drain_complete(&u)) failed = 1;
+    if (!failed && rb_clear(&a.s2c) < 0) failed = 1;
+    if (!failed && upstream_drain_complete(&u)) failed = 1;
+    b.upstream_read_drained = 1;
+    b.upstream_read_stalled = 1;
+    if (!failed && upstream_drain_complete(&u)) failed = 1;
+    b.upstream_read_stalled = 0;
+    if (!failed && !upstream_drain_complete(&u)) failed = 1;
+    set_pending_operation(NULL, PENDING_KEEPALIVE);
+    if (upstream_drain_complete(&u)) failed = 1;
+    clear_pending_operation();
+    g_opening_client = &b;
+    if (upstream_drain_complete(&u)) failed = 1;
+    g_opening_client = NULL;
+    g_clients = NULL;
+    rb_free(&a.s2c);
+    rb_free(&b.s2c);
     if (failed) {
-        fprintf(stderr, "[FAIL] upstream HUP restarts only after buffered receive progress is drained\n");
+        fprintf(stderr, "[FAIL] upstream drain waits for every channel and queued S2C data\n");
         return 1;
     }
-    puts("[PASS] upstream HUP waits for receive drain progress before restart");
+    puts("[PASS] upstream drain waits for every channel and queued S2C data");
+    return 0;
+}
+
+static int run_upstream_client_write_gate_regression(void) {
+    upstream_ctx_t u = {0};
+    int failed = 0;
+    if (!upstream_client_write_allowed(&u)) failed = 1;
+
+    u.hup_seen = 1;
+    if (upstream_client_write_allowed(&u)) failed = 1;
+
+    u.hup_seen = 0;
+    u.tx_terminal = 1;
+    if (upstream_client_write_allowed(&u)) failed = 1;
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] upstream HUP/terminal state blocks new client-to-SSH writes\n");
+        return 1;
+    }
+    puts("[PASS] upstream HUP/terminal state blocks new client-to-SSH writes");
+    return 0;
+}
+
+static int run_upstream_rx_terminal_callback_regression(void) {
+    int sv[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return 1;
+    upstream_ctx_t u = {.fd = sv[0], .tunnel_established = 1};
+    void *abstract = &u;
+    char buf[32];
+    if (shutdown(sv[1], SHUT_WR) < 0) {
+        close(sv[0]);
+        close(sv[1]);
+        return 1;
+    }
+    ssize_t first = ssh_recv_cb(sv[0], buf, sizeof(buf), 0, &abstract);
+    ssize_t second = ssh_recv_cb(sv[0], buf, sizeof(buf), 0, &abstract);
+    int failed = first != -EAGAIN || second != -EAGAIN ||
+                 !u.rx_terminal || !u.hup_seen || !u.upstream_epoll_detached;
+    close(sv[0]);
+    close(sv[1]);
+    if (failed) {
+        fprintf(stderr, "[FAIL] upstream EOF is recorded and remains terminal\n");
+        return 1;
+    }
+    puts("[PASS] upstream EOF is recorded and remains terminal");
     return 0;
 }
 
@@ -1457,7 +1536,9 @@ static int run_core_state_regressions(void) {
     failures += run_tls_buffered_input_probe_gate_regression();
     failures += run_tls_callback_terminal_result_clears_want_event_regression();
     failures += run_upstream_rx_progress_regression();
-    failures += run_upstream_hup_state_regression();
+    failures += run_upstream_drain_state_regression();
+    failures += run_upstream_client_write_gate_regression();
+    failures += run_upstream_rx_terminal_callback_regression();
     failures += run_http_rejection_classification_regression();
     failures += run_socks_listener_address_regression();
 

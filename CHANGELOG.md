@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Remove the redundant per-client S2C `read_pending` flag; retain only the
+  serialized libssh2 `PENDING_READ` operation and never synthesize EAGAIN when
+  the writable S2C ring slice is unavailable.
+- Track OpenSSL WANT direction and origin per libssh2 API invocation, including
+  `SSL_write` WANT_READ and `SSL_read` WANT_WRITE, and prevent keepalive or
+  shutdown I/O from interleaving with a pinned TLS operation.
+- Replace immediate upstream-HUP restart with a bounded drain phase: detach
+  the upstream fd from epoll, continue pumping channels fairly, and restart only
+  after all live relay channels and S2C queues drain or the 15-second deadline
+  expires.
+- If upstream TX terminates before a channel can send `CHANNEL_WINDOW_ADJUST`,
+  mark that channel's receive drain as stalled and wait for the bounded deadline
+  rather than falsely claiming its libssh2 receive queue is empty.
+- Add regressions for per-call TLS WANT lifetime, upstream EOF, and two-channel
+  S2C drain completion.
+- Bump the OpenWrt package release to r20.
+
+
 - Remove unnecessary pointer pinning for nonblocking S2C `libssh2_channel_read()` retries.
   Recompute the writable ring slice on every attempt and allow the local client
   to reset the ring after draining it. Preserve exact buffer pinning for

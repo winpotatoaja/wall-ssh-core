@@ -22,7 +22,19 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential clang flex bison gawk gettext git libncurses-dev libssl-dev python3 rsync unzip wget zstd curl ca-certificates binutils file
+          sudo apt-get install -y --no-install-recommends build-essential clang flex bison gawk gettext git libncurses-dev libssl-dev libssh2-1-dev python3 rsync unzip wget zstd curl ca-certificates binutils file
+      - name: Run native relay-core regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          gcc -std=gnu11 -O1 -g -Wall -Wextra \
+            -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
+            -ffunction-sections -fdata-sections \
+            tests/http_parser_test.c \
+            -Wl,--gc-sections -o /tmp/http-parser-test \
+            -lssh2 -lssl -lcrypto
+          /tmp/http-parser-test | tee test-results/http-parser-test.log
       - name: Download OpenWrt 24.10.7 SDK
         shell: bash
         run: |
@@ -70,7 +82,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r19 IPK and static MIPS half-close helper
+      - name: Build r20 IPK and static MIPS half-close helper
         shell: bash
         run: |
           set -euo pipefail
@@ -170,7 +182,7 @@ jobs:
           file test-results/passwall-ssh-core*.ipk test-results/socks-halfclose
           cat test-results/elf-header.txt test-results/helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r19' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r20' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
@@ -649,8 +661,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install MIPS package or runtime dependencies"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r19'; then
-            pass "opkg installed passwall-ssh-core r19 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r20'; then
+            pass "opkg installed passwall-ssh-core r20 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
