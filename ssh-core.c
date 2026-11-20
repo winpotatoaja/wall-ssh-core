@@ -73,6 +73,8 @@ static inline void request_stop(void) {
 #define MAX_WORKERS 4
 static __thread int g_worker_id = 0;
 static __thread int g_worker_count = 1;
+/* Payload rotation state is shared across workers and must be serialized. */
+static pthread_mutex_t g_rotate_mutex = PTHREAD_MUTEX_INITIALIZER;
 static __thread const char *g_log_path = DEFAULT_LOG_PATH;
 /* Verbose per-channel flow-control diagnostics are opt-in. */
 static __thread int g_log_backpressure = 0;
@@ -962,6 +964,7 @@ static char *translate_payload(const char *raw, const app_cfg_t *cfg, int is_tls
             if (nitems > 0) {
                 if (mode == 0) {
                     if (!rotate_loaded) {
+                        pthread_mutex_lock(&g_rotate_mutex);
                         FILE *rf = fopen(ROTATE_STATE_FILE, "r");
                         if (rf) {
                             if (fscanf(rf, "%d", &base_rotate_idx) != 1 || base_rotate_idx < 0)
@@ -972,6 +975,7 @@ static char *translate_payload(const char *raw, const app_cfg_t *cfg, int is_tls
                         int next_idx = (base_rotate_idx >= 1000000) ? 0 : (base_rotate_idx + 1);
                         FILE *wf = fopen(ROTATE_STATE_FILE, "w");
                         if (wf) { fprintf(wf, "%d", next_idx); fclose(wf); }
+                        pthread_mutex_unlock(&g_rotate_mutex);
                     }
                     int sel = (base_rotate_idx + rotate_tag_no) % nitems;
                     if (sel < 0) sel = 0;
