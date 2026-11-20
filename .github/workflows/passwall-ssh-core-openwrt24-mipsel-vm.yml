@@ -992,10 +992,11 @@ jobs:
               stop_sampler "$LABEL"
               cat "$LOG/$LABEL-download.log"
               kill -TERM "$CORE_PID" 2>/dev/null || true
-              wait "$CORE_PID" 2>/dev/null || true
+              wait "$CORE_PID"
+              CORE_RC=$?
               ACCEPTED="$(awk -F'accepted_total=' '/accepted_total=/ {split($2,a,/[^0-9]/); sum+=a[1]} END {print sum+0}' "$CORE_LOG")"
-              echo "INPROCESS_ACCEPTED tag=$TAG workers=$COUNT total=$ACCEPTED"
-              if [ "$RUN_RC" -eq 0 ] && [ "$ACCEPTED" -ge 4 ]; then
+              echo "INPROCESS_ACCEPTED tag=$TAG workers=$COUNT total=$ACCEPTED core_exit=$CORE_RC"
+              if [ "$RUN_RC" -eq 0 ] && [ "$CORE_RC" -eq 0 ] && [ "$ACCEPTED" -ge 4 ]; then
                 pass "one-process $COUNT-worker $TAG transfer: four pthread clients, exact bytes and SHA-256; accepted=$ACCEPTED"
               else
                 fail "$TAG in-process $COUNT-worker download or accepted-client accounting failed"
