@@ -73,6 +73,7 @@ static inline void request_stop(void) {
 #define MAX_WORKERS 4
 static __thread int g_worker_id = 0;
 static __thread int g_worker_count = 1;
+static __thread uint64_t g_accepted_total = 0;
 /* Payload rotation state is shared across workers and must be serialized. */
 static pthread_mutex_t g_rotate_mutex = PTHREAD_MUTEX_INITIALIZER;
 static __thread const char *g_log_path = DEFAULT_LOG_PATH;
@@ -4697,6 +4698,7 @@ static int core_worker_run(int argc, char **argv) {
                     if (g_clients) g_clients->prev = nc;
                     g_clients = nc;
                     g_client_count++;
+                    g_accepted_total++;
                 }
             } else if (ptr == &g_upstream_tag) {
                 if (e & EPOLLERR) {
@@ -4912,6 +4914,9 @@ static int core_worker_run(int argc, char **argv) {
         perf_log_interval(now_ms());
     }
 
+    log_blue("Worker %d/%d stopping; accepted_total=%llu",
+             g_worker_id + 1, g_worker_count,
+             (unsigned long long)g_accepted_total);
     if (!g_skip_libssh2_cleanup && shutdown_io_pending(&uctx)) {
         log_yellow("A libssh2/OpenSSL operation is still pending at process shutdown; skipping further transport I/O");
         g_skip_libssh2_cleanup = 1;
