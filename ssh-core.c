@@ -76,6 +76,22 @@ static __thread int g_worker_count = 1;
 static __thread uint64_t g_accepted_total = 0;
 /* Payload rotation state is shared across workers and must be serialized. */
 static pthread_mutex_t g_rotate_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_marker_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* Shared admission limit across the independent per-thread client lists. */
+static int g_total_client_count = 0;
+static int reserve_client_slot(int limit) {
+    int current = __atomic_load_n(&g_total_client_count, __ATOMIC_RELAXED);
+    while (current < limit) {
+        if (__atomic_compare_exchange_n(&g_total_client_count, &current, current + 1,
+                                        0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+            return 1;
+    }
+    return 0;
+}
+static void release_client_slot(void) {
+    int previous = __atomic_fetch_sub(&g_total_client_count, 1, __ATOMIC_ACQ_REL);
+    if (previous <= 0) __atomic_store_n(&g_total_client_count, 0, __ATOMIC_RELAXED);
+}
 static __thread const char *g_log_path = DEFAULT_LOG_PATH;
 /* Verbose per-channel flow-control diagnostics are opt-in. */
 static __thread int g_log_backpressure = 0;
@@ -593,11 +609,13 @@ static void log_channel_buffer_final(client_conn_t *c) {
 }
 
 static void write_marker(const char *path, const char *msg) {
+    pthread_mutex_lock(&g_marker_mutex);
     FILE *f = fopen(path, "w");
     if (f) {
         fprintf(f, "%s\n", msg ? msg : "");
         fclose(f);
     }
+    pthread_mutex_unlock(&g_marker_mutex);
 }
 
 /* ============================================================
@@ -2345,6 +2363,7 @@ static void remove_client(int epfd, client_conn_t *c) {
     else g_clients = c->next;
     if (c->next) c->next->prev = c->prev;
     if (g_client_count > 0) g_client_count--;
+    release_client_slot();
     free(c);
 }
 
@@ -4171,12 +4190,7 @@ static int core_worker_run(int argc, char **argv) {
 
     g_log_backpressure = cfg.log_backpressure;
     g_log_perf = cfg.log_perf;
-    if (g_worker_count > 1) {
-        int total_max_clients = cfg.max_clients;
-        cfg.max_clients = total_max_clients / g_worker_count +
-                          (g_worker_id < (total_max_clients % g_worker_count) ? 1 : 0);
-    }
-    log_blue("Worker %d/%d starting (per-worker MAX_CLIENTS=%d)",
+    log_blue("Worker %d/%d starting (process-wide MAX_CLIENTS=%d)",
              g_worker_id + 1, g_worker_count, cfg.max_clients);
     if (g_log_perf)
         log_blue("Diagnostik performa per interval aktif (LOG_PERF=1)");
@@ -4671,16 +4685,24 @@ static int core_worker_run(int argc, char **argv) {
                         }
                         break;
                     }
-                    if (g_client_count >= cfg.max_clients) {
+                    if (!reserve_client_slot(cfg.max_clients)) {
                         close(cfd);
                         continue;
                     }
-                    if (set_nonblock(cfd, 1) < 0) { close(cfd); continue; }
+                    if (set_nonblock(cfd, 1) < 0) {
+                        release_client_slot();
+                        close(cfd);
+                        continue;
+                    }
                     int nodelay = 1;
                     setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
                     client_conn_t *nc = calloc(1, sizeof(client_conn_t));
-                    if (!nc) { close(cfd); continue; }
+                    if (!nc) {
+                        release_client_slot();
+                        close(cfd);
+                        continue;
+                    }
                     nc->fd = cfd;
                     nc->state = ST_SOCKS_GREETING;
                     nc->epoll_events = EPOLLIN | EPOLLRDHUP;
@@ -4689,6 +4711,7 @@ static int core_worker_run(int argc, char **argv) {
 
                     struct epoll_event cev = { .events = nc->epoll_events, .data.ptr = nc };
                     if (epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &cev) < 0) {
+                        release_client_slot();
                         close(cfd);
                         free(nc);
                         continue;
@@ -5065,6 +5088,7 @@ int main(int argc, char **argv) {
     if (resolve_worker_count(argc, argv, &worker_count) < 0) return 2;
 
     __atomic_store_n(&g_stop, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_total_client_count, 0, __ATOMIC_RELAXED);
     signal(SIGPIPE, SIG_IGN);
     signal(SIGINT, on_sig);
     signal(SIGTERM, on_sig);
