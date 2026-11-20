@@ -982,7 +982,7 @@ jobs:
               fi
               pass "one PID runs $COUNT pthread workers (proc Threads=$THREADS), with $COUNT SO_REUSEPORT listeners"
 
-              /usr/bin/socks-mt-download 4 1 "$BASE_PORT" "$EXPECTED_BYTES" "$EXPECTED_SHA" \
+              /usr/bin/socks-mt-download 16 1 "$BASE_PORT" "$EXPECTED_BYTES" "$EXPECTED_SHA" \
                 >"$LOG/$LABEL-download.log" 2>&1 &
               MT_PID=$!
               echo "$MT_PID" >> "$PID_FILE"
@@ -996,8 +996,8 @@ jobs:
               CORE_RC=$?
               ACCEPTED="$(awk -F'accepted_total=' '/accepted_total=/ {split($2,a,/[^0-9]/); sum+=a[1]} END {print sum+0}' "$CORE_LOG")"
               echo "INPROCESS_ACCEPTED tag=$TAG workers=$COUNT total=$ACCEPTED core_exit=$CORE_RC"
-              if [ "$RUN_RC" -eq 0 ] && [ "$CORE_RC" -eq 0 ] && [ "$ACCEPTED" -ge 4 ]; then
-                pass "one-process $COUNT-worker $TAG transfer: four pthread clients, exact bytes and SHA-256; accepted=$ACCEPTED"
+              if [ "$RUN_RC" -eq 0 ] && [ "$CORE_RC" -eq 0 ] && [ "$ACCEPTED" -ge 16 ]; then
+                pass "one-process $COUNT-worker $TAG transfer: 16 pthread clients, exact bytes and SHA-256; accepted=$ACCEPTED"
               else
                 fail "$TAG in-process $COUNT-worker download or accepted-client accounting failed"
                 cat "$CORE_STDOUT" "$CORE_LOG" 2>/dev/null || true
