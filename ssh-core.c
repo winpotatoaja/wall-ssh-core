@@ -14,6 +14,7 @@
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -48,8 +49,8 @@
 #define TCP_CONNECT_MAX_ADDRS 32
 #define TLS_CONNECT_MAX_ADDR_ATTEMPTS 4
 
-static int (*g_tcp_getaddrinfo)(const char *, const char *, const struct addrinfo *, struct addrinfo **) = getaddrinfo;
-static int g_tcp_dial_debug = 1;
+static __thread int (*g_tcp_getaddrinfo)(const char *, const char *, const struct addrinfo *, struct addrinfo **) = getaddrinfo;
+static __thread int g_tcp_dial_debug = 1;
 #define SOCKS_HS_TIMEOUT_SEC   15
 #define SSH_OPEN_SOFT_TO_MS    15000
 #define SSH_OPEN_HARD_TO_MS    30000
@@ -62,16 +63,26 @@ static int g_tcp_dial_debug = 1;
 #endif
 
 static volatile sig_atomic_t g_stop = 0;
-static const char *g_log_path = DEFAULT_LOG_PATH;
+/* Shared stop state: atomic accesses are safe across workers and signal delivery. */
+static inline int stop_requested(void) {
+    return __atomic_load_n(&g_stop, __ATOMIC_RELAXED) != 0;
+}
+static inline void request_stop(void) {
+    __atomic_store_n(&g_stop, 1, __ATOMIC_RELAXED);
+}
+#define MAX_WORKERS 4
+static __thread int g_worker_id = 0;
+static __thread int g_worker_count = 1;
+static __thread const char *g_log_path = DEFAULT_LOG_PATH;
 /* Verbose per-channel flow-control diagnostics are opt-in. */
-static int g_log_backpressure = 0;
+static __thread int g_log_backpressure = 0;
 /* Set when a pending operation makes further libssh2 I/O unsafe. */
-static int g_skip_libssh2_cleanup = 0;
-static const char *g_kbd_password = "";
+static __thread int g_skip_libssh2_cleanup = 0;
+static __thread const char *g_kbd_password = "";
 
 /* Sentinel tag untuk O(1) epoll dispatch */
-static int g_listen_tag = 0;
-static int g_upstream_tag = 0;
+static __thread int g_listen_tag = 0;
+static __thread int g_upstream_tag = 0;
 
 typedef struct {
     uint8_t *data;
@@ -199,11 +210,11 @@ typedef struct client_conn {
     struct client_conn *next;
 } client_conn_t;
 
-static client_conn_t *g_clients = NULL;
-static int            g_client_count = 0;
-static client_conn_t *g_opening_client = NULL;
-static client_conn_t *g_pending_client = NULL;
-static pending_op_t   g_pending_op = PENDING_NONE;
+static __thread client_conn_t *g_clients = NULL;
+static __thread int            g_client_count = 0;
+static __thread client_conn_t *g_opening_client = NULL;
+static __thread client_conn_t *g_pending_client = NULL;
+static __thread pending_op_t   g_pending_op = PENDING_NONE;
 
 typedef struct {
     uint64_t epoll_calls, epoll_wait_ms, epoll_wait_max_ms;
@@ -215,9 +226,9 @@ typedef struct {
     uint64_t s2c_full, libssh2_eagain, pending_blocks;
 } perf_stats_t;
 
-static perf_stats_t g_perf_stats;
-static int g_log_perf = 0;
-static long long g_perf_window_start_ms = 0;
+static __thread perf_stats_t g_perf_stats;
+static __thread int g_log_perf = 0;
+static __thread long long g_perf_window_start_ms = 0;
 
 static void clear_pending_operation(void) {
     g_pending_client = NULL;
@@ -335,7 +346,7 @@ static int has_pending_libssh2_work_for_shutdown(void) {
 /* ============================================================
  * RING BUFFER (ZERO MEMMOVE, LAZY ALLOCATION)
  * ============================================================ */
-static uint64_t g_rb_generation = 1;
+static __thread uint64_t g_rb_generation = 1;
 static uint64_t rb_next_generation(void) {
     g_rb_generation++;
     if (g_rb_generation == 0) g_rb_generation++;
@@ -445,14 +456,20 @@ static void log_raw(const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
 
+    char line[2200];
+    if (g_worker_count > 1)
+        snprintf(line, sizeof(line), "[worker %d/%d] %s",
+                 g_worker_id + 1, g_worker_count, buf);
+    else
+        snprintf(line, sizeof(line), "%s", buf);
     if (!g_log_path || strcmp(g_log_path, "-") == 0) {
-        printf("%s\n", buf);
+        printf("%s\n", line);
         fflush(stdout);
         return;
     }
     FILE *f = fopen(g_log_path, "a");
     if (f) {
-        fprintf(f, "%s\n", buf);
+        fprintf(f, "%s\n", line);
         fclose(f);
     }
 }
@@ -657,9 +674,9 @@ static int parse_strict_hex_size(const char *s, size_t *out, size_t max_val) {
     return 0;
 }
 
-static void load_env(const char *path, app_cfg_t *cfg) {
+static int load_env(const char *path, app_cfg_t *cfg) {
     FILE *f = fopen(path, "r");
-    if (!f) { log_red("Gagal membuka env file: %s", path); exit(1); }
+    if (!f) { log_red("Gagal membuka env file: %s", path); return -1; }
     char line[2048];
     while (fgets(line, sizeof(line), f)) {
         trim_ws(line);
@@ -712,6 +729,7 @@ static void load_env(const char *path, app_cfg_t *cfg) {
         }
     }
     fclose(f);
+    return 0;
 }
 
 static char *read_entire_file(const char *path) {
@@ -1203,7 +1221,7 @@ static void ssl_prepare_io(void) {
 }
 
 static int poll_fd_until(int fd, short events, long long deadline_ms) {
-    while (!g_stop) {
+    while (!stop_requested()) {
         long long rem = deadline_ms - now_ms();
         if (rem <= 0) return 0;
         int to = (rem > 60000) ? 60000 : (int)rem;
@@ -1261,7 +1279,7 @@ static int poll_fd_until_shutdown(int fd, short events, long long deadline_ms) {
     }
 }
 
-static unsigned int g_tls_diag_message_count = 0;
+static __thread unsigned int g_tls_diag_message_count = 0;
 
 static const char *tls_handshake_message_name(unsigned int type) {
     switch (type) {
@@ -1349,7 +1367,7 @@ static int tls_connect_nb(upstream_ctx_t *u, int timeout_ms,
     int last_error = -1;
     unsigned int attempts = 0;
 
-    while (!g_stop) {
+    while (!stop_requested()) {
         attempts++;
         ssl_prepare_io();
         int rc = SSL_connect(u->ssl);
@@ -1438,7 +1456,7 @@ static int raw_write_all_nb(upstream_ctx_t *u, const void *data, size_t len, int
     size_t left = len;
     long long deadline = now_ms() + timeout_ms;
 
-    while (left > 0 && !g_stop) {
+    while (left > 0 && !stop_requested()) {
         if (u->ssl) {
             int chunk = (int)(left > 16384U ? 16384U : left);
             ssl_prepare_io();
@@ -1545,7 +1563,7 @@ static ssize_t pre_read_more(upstream_ctx_t *u) {
 static void delay_wait_and_drain(upstream_ctx_t *u, int delay_ms) {
     if (delay_ms <= 0) return;
     long long deadline = now_ms() + delay_ms;
-    while (!g_stop) {
+    while (!stop_requested()) {
         long long rem = deadline - now_ms();
         if (rem <= 0) break;
         int to = (rem > DELAY_WAIT_POLL_MAX_MS) ? DELAY_WAIT_POLL_MAX_MS : (int)rem;
@@ -2185,7 +2203,7 @@ static int tcp_connect_host_excluding(const char *host, const char *port,
     if (connected_address_out && connected_address_out_size)
         connected_address_out[0] = '\0';
 
-    for (size_t family_index = 0; family_index < 2 && !g_stop; family_index++) {
+    for (size_t family_index = 0; family_index < 2 && !stop_requested(); family_index++) {
         int family = families[family_index];
         struct addrinfo hints = {0}, *res = NULL;
         hints.ai_family = family;
@@ -4077,11 +4095,11 @@ static int ssl_shutdown_with_deadline(SSL *ssl, int fd, long long deadline_ms) {
 
 static void on_sig(int sig) {
     (void)sig;
-    g_stop = 1;
+    request_stop();
 }
 
 #ifndef SSH_CORE_PARSER_TEST
-int main(int argc, char **argv) {
+static int core_worker_run(int argc, char **argv) {
     app_cfg_t cfg = {
         .transport = "TCP",
         .host_port = "",
@@ -4115,11 +4133,12 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (env_file) load_env(env_file, &cfg);
+    if (env_file && load_env(env_file, &cfg) < 0) return 1;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-env") == 0 && i + 1 < argc) { i++; }
         else if (strcmp(argv[i], "-log") == 0 && i + 1 < argc) { i++; }
+        else if (strcmp(argv[i], "-workers") == 0 && i + 1 < argc) { i++; }
         else if (strcmp(argv[i], "-payload-file") == 0 && i + 1 < argc) payload_file = argv[++i];
         else if (strcmp(argv[i], "-payload") == 0 && i + 1 < argc) payload_str = argv[++i];
         else if (strcmp(argv[i], "-transport") == 0 && i + 1 < argc) snprintf(cfg.transport, sizeof(cfg.transport), "%s", argv[++i]);
@@ -4147,6 +4166,13 @@ int main(int argc, char **argv) {
 
     g_log_backpressure = cfg.log_backpressure;
     g_log_perf = cfg.log_perf;
+    if (g_worker_count > 1) {
+        int total_max_clients = cfg.max_clients;
+        cfg.max_clients = total_max_clients / g_worker_count +
+                          (g_worker_id < (total_max_clients % g_worker_count) ? 1 : 0);
+    }
+    log_blue("Worker %d/%d starting (per-worker MAX_CLIENTS=%d)",
+             g_worker_id + 1, g_worker_count, cfg.max_clients);
     if (g_log_perf)
         log_blue("Diagnostik performa per interval aktif (LOG_PERF=1)");
     if (g_log_backpressure)
@@ -4184,14 +4210,6 @@ int main(int argc, char **argv) {
         if (!raw_payload) log_yellow("Peringatan: gagal membaca payload file %s", payload_file);
     }
     if (!raw_payload) raw_payload = strdup("");
-
-    signal(SIGPIPE, SIG_IGN);
-    signal(SIGINT, on_sig);
-    signal(SIGTERM, on_sig);
-
-    unlink(AUTH_FAILED_FILE);
-    unlink(KEX_FAILED_FILE);
-    unlink(NEED_RESTART_FILE);
 
     int is_tls = (strcasecmp(cfg.transport, "TLS") == 0);
     const char *dial_host = cfg.host;
@@ -4423,10 +4441,6 @@ int main(int argc, char **argv) {
     }
     free(translated);
 
-    if (libssh2_init(0) != 0) {
-        log_red("libssh2_init gagal");
-        goto fail_cleanup;
-    }
     session = libssh2_session_init_ex(NULL, NULL, NULL, &uctx);
     if (!session) {
         log_red("libssh2_session_init gagal");
@@ -4549,6 +4563,18 @@ int main(int argc, char **argv) {
     }
     int one = 1;
     setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (g_worker_count > 1) {
+#ifdef SO_REUSEPORT
+        if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) < 0) {
+            log_red("SO_REUSEPORT gagal untuk worker %d/%d: %s",
+                    g_worker_id + 1, g_worker_count, strerror(errno));
+            goto fail_cleanup;
+        }
+#else
+        log_red("Build target tidak menyediakan SO_REUSEPORT; multi-worker tidak didukung");
+        goto fail_cleanup;
+#endif
+    }
     if (listen_addr.ss_family == AF_INET6) {
         int v6_only = 1;
         if (setsockopt(listen_fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6_only, sizeof(v6_only)) < 0) {
@@ -4597,7 +4623,7 @@ int main(int argc, char **argv) {
     time_t last_emfile_log = 0;
     exit_code = 0;
 
-    while (!g_stop) {
+    while (!stop_requested()) {
         int timeout_ms = upstream_epoll_timeout_ms(&uctx, force_next_tick, now_ms());
         long long epoll_started_ms = g_log_perf ? now_ms() : 0;
         int nfds = epoll_wait(epfd, events, MAX_EVENTS, timeout_ms);
@@ -4696,7 +4722,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        if (g_stop) break;
+        if (stop_requested()) break;
 
         if (uctx.upstream_epoll_detached && upstream_ev != 0) {
             if (epoll_ctl(epfd, EPOLL_CTL_DEL, upstream_fd, NULL) == 0 || errno == ENOENT)
@@ -4730,7 +4756,7 @@ int main(int argc, char **argv) {
                 write_marker(NEED_RESTART_FILE, "ssh channel cleanup timeout");
                 exit_code = 1;
                 g_skip_libssh2_cleanup = 1;
-                g_stop = 1;
+                request_stop();
                 break;
             }
             if (c->close_after_ctrl && c->fd >= 0 && c->ctrl_close_deadline_ms > 0 &&
@@ -4751,7 +4777,7 @@ int main(int argc, char **argv) {
                             SSH_OPEN_HARD_TO_MS / 1000, c->target_host, (unsigned)c->target_port);
                     write_marker(NEED_RESTART_FILE, "channel open hard timeout");
                     exit_code = 1;
-                    g_stop = 1;
+                    request_stop();
                     break;
                 } else if (elapsed >= SSH_OPEN_SOFT_TO_MS && !c->abort_on_open && !c->close_after_ctrl && c->fd >= 0) {
                     c->abort_on_open = 1;
@@ -4760,7 +4786,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        if (g_stop) break;
+        if (stop_requested()) break;
 
         int rounds = 0;
         int agg_dirs = 0;
@@ -4768,7 +4794,7 @@ int main(int argc, char **argv) {
         force_next_tick = 0;
 
         uint64_t upstream_rx_before_pump = uctx.rx_seq;
-        while (!g_stop && rounds < 16) {
+        while (!stop_requested() && rounds < 16) {
             int round_dirs = 0;
             int round_read = 0;
             int pump_rc = pump_ssh_channels(epfd, session, &uctx, &round_dirs, &round_read);
@@ -4778,14 +4804,14 @@ int main(int argc, char **argv) {
                 log_red("Sesi SSH terputus");
                 write_marker(NEED_RESTART_FILE, "ssh session lost");
                 exit_code = 1;
-                g_stop = 1;
+                request_stop();
                 break;
             }
             if (pump_rc == 0) break;
             rounds++;
         }
 
-        if (g_stop) break;
+        if (stop_requested()) break;
 
         if (did_ssh_read || g_opening_client != NULL ||
             has_readable_relay_channel() || has_window_waiter()) {
@@ -4816,7 +4842,7 @@ int main(int argc, char **argv) {
                 write_marker(NEED_RESTART_FILE, "upstream eof after drain");
                 exit_code = 1;
                 g_skip_libssh2_cleanup = 1;
-                g_stop = 1;
+                request_stop();
                 break;
             }
             if (drain_result == UPSTREAM_DRAIN_FORCED) {
@@ -4826,7 +4852,7 @@ int main(int argc, char **argv) {
                 write_marker(NEED_RESTART_FILE, "upstream forced teardown");
                 exit_code = 1;
                 g_skip_libssh2_cleanup = 1;
-                g_stop = 1;
+                request_stop();
                 break;
             }
             if (upstream_drain_timed_out(&uctx, now_ms())) {
@@ -4835,7 +4861,7 @@ int main(int argc, char **argv) {
                 write_marker(NEED_RESTART_FILE, "upstream drain timeout");
                 exit_code = 1;
                 g_skip_libssh2_cleanup = 1;
-                g_stop = 1;
+                request_stop();
                 break;
             }
         }
@@ -4860,7 +4886,7 @@ int main(int argc, char **argv) {
                 log_red("Keepalive SSH gagal");
                 write_marker(NEED_RESTART_FILE, "keepalive failed");
                 exit_code = 1;
-                g_stop = 1;
+                request_stop();
                 break;
             }
         }
@@ -4917,8 +4943,6 @@ int main(int argc, char **argv) {
             } else if (free_rc < 0) {
                 log_yellow("libssh2_session_free returned %d during shutdown", free_rc);
                 g_skip_libssh2_cleanup = 1;
-            } else {
-                libssh2_exit();
             }
         }
     } else if (session && g_skip_libssh2_cleanup) {
@@ -4952,4 +4976,134 @@ fail_cleanup:
     close(upstream_fd);
     return 1;
 }
+
+typedef struct {
+    int argc;
+    char **argv;
+    int worker_id;
+    int worker_count;
+    int result;
+} worker_launch_t;
+
+static int resolve_worker_count(int argc, char **argv, int *out_count) {
+    if (!out_count) return -1;
+    int workers = 1;
+    const char *env_file = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-env") == 0 && i + 1 < argc)
+            env_file = argv[++i];
+    }
+    if (env_file) {
+        FILE *f = fopen(env_file, "r");
+        if (f) {
+            char line[2048];
+            while (fgets(line, sizeof(line), f)) {
+                trim_ws(line);
+                if (!line[0] || line[0] == '#') continue;
+                char *eq = strchr(line, '=');
+                if (!eq) continue;
+                *eq = '\0';
+                char *key = line;
+                char *value = eq + 1;
+                trim_ws(key);
+                trim_ws(value);
+                size_t n = strlen(value);
+                if (n >= 2 && ((value[0] == '\'' && value[n - 1] == '\'') ||
+                               (value[0] == '"' && value[n - 1] == '"'))) {
+                    value[n - 1] = '\0';
+                    value++;
+                }
+                if (strcmp(key, "WORKERS") == 0 &&
+                    parse_int_range(value, 1, MAX_WORKERS, &workers) < 0) {
+                    fclose(f);
+                    fprintf(stderr, "WORKERS harus 1..%d\n", MAX_WORKERS);
+                    return -1;
+                }
+            }
+            fclose(f);
+        }
+    }
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-workers") == 0) {
+            if (i + 1 >= argc ||
+                parse_int_range(argv[++i], 1, MAX_WORKERS, &workers) < 0) {
+                fprintf(stderr, "-workers harus 1..%d\n", MAX_WORKERS);
+                return -1;
+            }
+        }
+    }
+    *out_count = workers;
+    return 0;
+}
+
+static void *worker_thread_main(void *opaque) {
+    worker_launch_t *launch = (worker_launch_t *)opaque;
+    g_worker_id = launch->worker_id;
+    g_worker_count = launch->worker_count;
+    launch->result = core_worker_run(launch->argc, launch->argv);
+    if (launch->result != 0) request_stop();
+    return NULL;
+}
+
+int main(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            printf("Usage: %s [-workers 1..%d] [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-verify-tls 0|1] [-tls-diag 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log-backpressure 0|1] [-log-perf 0|1] [-log FILE|-]\n", argv[0], MAX_WORKERS);
+            return 0;
+        }
+    }
+    int worker_count = 1;
+    if (resolve_worker_count(argc, argv, &worker_count) < 0) return 2;
+
+    __atomic_store_n(&g_stop, 0, __ATOMIC_RELAXED);
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGINT, on_sig);
+    signal(SIGTERM, on_sig);
+    unlink(AUTH_FAILED_FILE);
+    unlink(KEX_FAILED_FILE);
+    unlink(NEED_RESTART_FILE);
+
+    if (libssh2_init(0) != 0) {
+        fprintf(stderr, "libssh2_init gagal\n");
+        return 1;
+    }
+
+    int result = 0;
+    if (worker_count == 1) {
+        g_worker_id = 0;
+        g_worker_count = 1;
+        result = core_worker_run(argc, argv);
+    } else {
+        pthread_t threads[MAX_WORKERS];
+        worker_launch_t launches[MAX_WORKERS];
+        int created = 0;
+        for (int i = 0; i < worker_count; i++) {
+            memset(&launches[i], 0, sizeof(launches[i]));
+            launches[i].argc = argc;
+            launches[i].argv = argv;
+            launches[i].worker_id = i;
+            launches[i].worker_count = worker_count;
+            int rc = pthread_create(&threads[i], NULL, worker_thread_main, &launches[i]);
+            if (rc != 0) {
+                fprintf(stderr, "pthread_create worker %d/%d gagal: %s\n",
+                        i + 1, worker_count, strerror(rc));
+                request_stop();
+                result = 1;
+                break;
+            }
+            created++;
+        }
+        for (int i = 0; i < created; i++) {
+            int rc = pthread_join(threads[i], NULL);
+            if (rc != 0) {
+                fprintf(stderr, "pthread_join worker %d gagal: %s\n", i + 1, strerror(rc));
+                result = 1;
+            }
+            if (launches[i].result != 0) result = 1;
+        }
+    }
+    libssh2_exit();
+    return result;
+}
+
 #endif /* SSH_CORE_PARSER_TEST */
