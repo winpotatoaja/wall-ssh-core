@@ -3806,7 +3806,10 @@ static upstream_drain_result_t classify_upstream_drain(
         if (!ch->read_drained && !ch->read_stalled)
             return UPSTREAM_DRAIN_WAIT;
 
-        if (ch->read_stalled) stalled_channels++;
+        if (ch->read_stalled) {
+            stalled_channels++;
+            forced = 1;
+        }
         if (ULONG_MAX - queued_bytes < ch->read_avail)
             queued_bytes = ULONG_MAX;
         else
