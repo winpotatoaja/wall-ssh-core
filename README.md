@@ -302,3 +302,9 @@ such as RTT, congestion window and retransmissions. On OpenWrt 24.10, install
 the `ss` utility with `opkg update && opkg install ip-full`. Without `ss`,
 socket states and queues are still collected from `/proc/net/tcp*`; TCP_INFO
 is reported unavailable.
+
+
+The R23 `mipsel_24kc` package has passed the native regression stage and
+the OpenWrt 24.10.7 cross-build. The separate MT7621 QEMU integration job
+installs that exact SDK artifact and exercises SOCKS forwarding, SSH channel
+I/O, half-close and reconnect behavior.
