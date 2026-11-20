@@ -77,6 +77,7 @@ static __thread uint64_t g_accepted_total = 0;
 /* Payload rotation state is shared across workers and must be serialized. */
 static pthread_mutex_t g_rotate_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_marker_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 /* Shared admission limit across the independent per-thread client lists. */
 static int g_total_client_count = 0;
 static int reserve_client_slot(int limit) {
@@ -89,8 +90,12 @@ static int reserve_client_slot(int limit) {
     return 0;
 }
 static void release_client_slot(void) {
-    int previous = __atomic_fetch_sub(&g_total_client_count, 1, __ATOMIC_ACQ_REL);
-    if (previous <= 0) __atomic_store_n(&g_total_client_count, 0, __ATOMIC_RELAXED);
+    int current = __atomic_load_n(&g_total_client_count, __ATOMIC_RELAXED);
+    while (current > 0) {
+        if (__atomic_compare_exchange_n(&g_total_client_count, &current, current - 1,
+                                        0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+            return;
+    }
 }
 static __thread const char *g_log_path = DEFAULT_LOG_PATH;
 /* Verbose per-channel flow-control diagnostics are opt-in. */
@@ -481,9 +486,11 @@ static void log_raw(const char *fmt, ...) {
                  g_worker_id + 1, g_worker_count, buf);
     else
         snprintf(line, sizeof(line), "%s", buf);
+    pthread_mutex_lock(&g_log_mutex);
     if (!g_log_path || strcmp(g_log_path, "-") == 0) {
         printf("%s\n", line);
         fflush(stdout);
+        pthread_mutex_unlock(&g_log_mutex);
         return;
     }
     FILE *f = fopen(g_log_path, "a");
@@ -491,6 +498,7 @@ static void log_raw(const char *fmt, ...) {
         fprintf(f, "%s\n", line);
         fclose(f);
     }
+    pthread_mutex_unlock(&g_log_mutex);
 }
 
 static void fmt_now(char *out, size_t sz) {
