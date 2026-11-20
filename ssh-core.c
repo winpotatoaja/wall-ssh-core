@@ -5040,7 +5040,7 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
         } else if (strcmp(argv[i], "-workers") == 0) {
             if (i + 1 >= argc ||
                 parse_int_range(argv[++i], 1, MAX_WORKERS, &workers) < 0) {
-                fprintf(stderr, "-workers harus 1..%d\\n", MAX_WORKERS);
+                fprintf(stderr, "-workers harus 1..%d\n", MAX_WORKERS);
                 return -1;
             }
             cli_workers_set = 1;
@@ -5076,7 +5076,7 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
                 if (strcmp(key, "WORKERS") == 0 &&
                     parse_int_range(value, 1, MAX_WORKERS, &workers) < 0) {
                     fclose(f);
-                    fprintf(stderr, "WORKERS harus 1..%d\\n", MAX_WORKERS);
+                    fprintf(stderr, "WORKERS harus 1..%d\n", MAX_WORKERS);
                     return -1;
                 }
             }
