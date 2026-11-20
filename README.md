@@ -222,7 +222,7 @@ buffers are not discarded. A stalled S2C channel remains incomplete until the
 bounded drain deadline rather than risking loss of packets still queued inside
 libssh2.
 
-The OpenWrt 24.10.7 mipsel_24kc workflow builds package r22 and performs
+The OpenWrt 24.10.7 mipsel_24kc workflow builds package r23 and performs
 cross-architecture ELF/package checks before its separate QEMU integration run.
 
 
@@ -275,3 +275,30 @@ repository. A green workflow result means all stages and all guest assertions
 completed successfully; a timeout or skipped test is not considered a pass.
 The current VM run validates the x86_64 OpenWrt 25.12.5 target only; it does
 not replace a runtime test on the actual physical router or another target.
+
+
+## Opt-in runtime performance counters (R23)
+
+The core accepts `-log-perf 1` or `LOG_PERF=1` in the environment file. The
+default is disabled. When enabled, it writes one `[PERF]` line per elapsed
+second to the normal core log; when disabled, no periodic performance log is
+written and the relay behavior is unchanged.
+
+The line reports active SOCKS clients and relay channels, `ep_calls`,
+`ep_wait_ms`, maximum epoll wait, wakeups/timeouts, TLS receive bytes and
+EAGAINs, SSH bytes delivered to libssh2, S2C channel-read bytes and EAGAINs,
+bytes sent from S2C rings to local SOCKS clients, SOCKS send EAGAINs, S2C
+full-buffer events, libssh2 EAGAIN returns, and serialized pending-operation
+blocks. `span_ms - ep_wait_ms` approximates time outside `epoll_wait()` for
+that reporting interval; it is not a CPU-time measurement. TLS RX counts
+OpenSSL bytes returned from the upstream receive callback, while S2C reads and
+SOCKS TX are separate downstream stages.
+
+For router-side sampling, `tools/diag-download.sh` (when copied to the router)
+records per-second process/thread CPU, interface throughput, per-socket TCP
+states and queues matched by process FD inode, and system TCP/softnet deltas.
+The optional `ss -tinp` snapshot records per-upstream-socket TCP_INFO details
+such as RTT, congestion window and retransmissions. On OpenWrt 24.10, install
+the `ss` utility with `opkg update && opkg install ip-full`. Without `ss`,
+socket states and queues are still collected from `/proc/net/tcp*`; TCP_INFO
+is reported unavailable.
