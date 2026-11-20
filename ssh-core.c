@@ -5061,15 +5061,16 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
                 if (!line[0] || line[0] == '#') continue;
                 char *eq = strchr(line, '=');
                 if (!eq) continue;
-                *eq = '\\0';
+                *eq = 0;
                 char *key = line;
                 char *value = eq + 1;
                 trim_ws(key);
                 trim_ws(value);
                 size_t n = strlen(value);
-                if (n >= 2 && ((value[0] == '\\'' && value[n - 1] == '\\'') ||
-                               (value[0] == '"' && value[n - 1] == '"'))) {
-                    value[n - 1] = '\\0';
+                if (n >= 2 &&
+                    ((value[0] == 39 && value[n - 1] == 39) ||
+                     (value[0] == 34 && value[n - 1] == 34))) {
+                    value[n - 1] = 0;
                     value++;
                 }
                 if (strcmp(key, "WORKERS") == 0 &&
