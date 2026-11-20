@@ -59,7 +59,7 @@ For in-process cases the guest additionally verifies:
 - `/proc/PID/status` reports at least `worker_count + 1` threads (the parent
   plus all worker threads).
 - The expected number of SOCKS listeners successfully bind the same port.
-- Four client connections are accepted in total by the worker group.
+- All sixteen client connections are accepted in total by the worker group.
 - All download byte-count and SHA-256 checks pass.
 
 The guest sampler captures per-thread CPU ticks, process RSS/context switches,
