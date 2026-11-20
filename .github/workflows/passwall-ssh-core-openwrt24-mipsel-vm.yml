@@ -939,8 +939,15 @@ jobs:
               PID_FILE="$LOG/$LABEL-pids"
               rm -f "$CORE_LOG" "$CORE_STDOUT" "$PID_FILE"
               echo "========== $LABEL: one PID with $COUNT pthread SSH workers =========="
-              "$BIN" -env "$ENV_FILE" -workers "$COUNT" -log "$CORE_LOG" \
-                -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
+              if [ "$COUNT" -eq 2 ]; then
+                RUN_ENV="$LOG/$LABEL.env"
+                sed "/^MAX_CLIENTS=/a WORKERS=$COUNT" "$ENV_FILE" > "$RUN_ENV"
+                "$BIN" -env "$RUN_ENV" -log "$CORE_LOG" \
+                  -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
+              else
+                "$BIN" -env "$ENV_FILE" -workers "$COUNT" -log "$CORE_LOG" \
+                  -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
+              fi
               CORE_PID=$!
               echo "$CORE_PID" > "$PID_FILE"
               READY=0; J=0
