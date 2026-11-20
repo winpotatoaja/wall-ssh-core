@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - fix/pending-cleanup-bounded-shutdown
+      - perf/4core-ssh-relay-benchmark
   workflow_dispatch:
     inputs:
       stage:
@@ -271,6 +272,20 @@ jobs:
             false
           fi
           (cd test-results && sha256sum -c apk.sha256 halfclose.sha256)
+      - name: Record four-core CI and QEMU test topology
+        if: env.TEST_STAGE == 'vm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          {
+            echo "GitHub runner CPU topology:"
+            nproc
+            lscpu
+            echo
+            echo "QEMU guest vCPU target: 4"
+          } | tee test-results/4core-host-topology.txt
+
       - name: Prepare host-side SSH and HTTP forwarding targets
         if: env.TEST_STAGE == 'vm'
         shell: bash
@@ -1533,7 +1548,7 @@ jobs:
           log_user 1
           log_file -a /tmp/passwall-ssh-core-openwrt-console.log
           set timeout 3600
-          spawn qemu-system-x86_64 -machine accel=tcg -m 1024 -smp 2 \
+          spawn qemu-system-x86_64 -machine accel=tcg -m 1024 -smp 4 \
             -kernel /tmp/openwrt-kernel.bin \
             -drive file=/tmp/openwrt-rootfs.img,format=raw,if=ide,index=0 \
             -append "root=/dev/sda rootfstype=ext4 rootwait rw console=ttyS0,115200" \
