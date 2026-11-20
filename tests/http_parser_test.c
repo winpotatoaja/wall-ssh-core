@@ -931,38 +931,84 @@ static int run_upstream_rx_progress_regression(void) {
 }
 
 static int run_upstream_drain_state_regression(void) {
-    client_conn_t a = {.fd = 1234, .state = ST_RELAY, .upstream_read_drained = 1};
-    client_conn_t b = {.fd = 1235, .state = ST_RELAY, .upstream_read_drained = 0};
-    upstream_ctx_t u = {.hup_seen = 1};
-    int failed = rb_init(&a.s2c, 32) < 0 || rb_init(&b.s2c, 32) < 0;
-    if (!failed && rb_push(&a.s2c, (const uint8_t *)"queued", 6) < 0) failed = 1;
-    a.next = &b;
-    b.prev = &a;
-    g_clients = &a;
-    clear_pending_operation();
-    g_opening_client = NULL;
-    if (!failed && upstream_drain_complete(&u)) failed = 1;
-    if (!failed && rb_clear(&a.s2c) < 0) failed = 1;
-    if (!failed && upstream_drain_complete(&u)) failed = 1;
-    b.upstream_read_drained = 1;
-    b.upstream_read_stalled = 1;
-    if (!failed && upstream_drain_complete(&u)) failed = 1;
-    b.upstream_read_stalled = 0;
-    if (!failed && !upstream_drain_complete(&u)) failed = 1;
-    set_pending_operation(NULL, PENDING_KEEPALIVE);
-    if (upstream_drain_complete(&u)) failed = 1;
-    clear_pending_operation();
-    g_opening_client = &b;
-    if (upstream_drain_complete(&u)) failed = 1;
-    g_opening_client = NULL;
-    g_clients = NULL;
-    rb_free(&a.s2c);
-    rb_free(&b.s2c);
+    upstream_ctx_t u = {
+        .hup_seen = 1,
+        .rx_terminal = 1,
+        .rx_terminal_rc = 0
+    };
+    upstream_drain_channel_state_t channels[2] = {
+        {.read_drained = 1, .channel_present = 1, .channel_eof = 1},
+        {.read_drained = 1, .channel_present = 1, .channel_eof = 1}
+    };
+    unsigned long queued = 0;
+    unsigned int stalled = 0, incomplete = 0;
+    int failed = 0;
+
+    if (classify_upstream_drain(&u, channels, 2, 0, 0,
+                                &queued, &stalled, &incomplete) !=
+            UPSTREAM_DRAIN_GRACEFUL ||
+        queued != 0 || stalled != 0 || incomplete != 0) {
+        failed = 1;
+    }
+
+    /* Pending operations, active reads, and unsent local output must wait. */
+    if (classify_upstream_drain(&u, channels, 2, 1, 0,
+                                NULL, NULL, NULL) != UPSTREAM_DRAIN_WAIT ||
+        classify_upstream_drain(&u, channels, 2, 0, 1,
+                                NULL, NULL, NULL) != UPSTREAM_DRAIN_WAIT) {
+        failed = 1;
+    }
+    channels[0].read_drained = 0;
+    if (classify_upstream_drain(&u, channels, 2, 0, 0,
+                                NULL, NULL, NULL) != UPSTREAM_DRAIN_WAIT) {
+        failed = 1;
+    }
+    channels[0].read_drained = 1;
+    channels[0].output_pending = 1;
+    if (classify_upstream_drain(&u, channels, 2, 0, 0,
+                                NULL, NULL, NULL) != UPSTREAM_DRAIN_WAIT) {
+        failed = 1;
+    }
+    channels[0].output_pending = 0;
+
+    /* A drained/stalled flag is not sufficient when libssh2 still has queued
+     * channel data, or when the channel never reported SSH EOF. */
+    channels[0].read_stalled = 1;
+    channels[0].read_avail = 4096;
+    channels[0].channel_eof = 0;
+    if (classify_upstream_drain(&u, channels, 2, 0, 0,
+                                &queued, &stalled, &incomplete) !=
+            UPSTREAM_DRAIN_FORCED ||
+        queued != 4096 || stalled != 1 || incomplete != 1) {
+        failed = 1;
+    }
+
+    channels[0].read_stalled = 0;
+    channels[0].read_avail = 0;
+    channels[0].channel_eof = 0;
+    if (classify_upstream_drain(&u, channels, 2, 0, 0,
+                                NULL, NULL, NULL) != UPSTREAM_DRAIN_FORCED) {
+        failed = 1;
+    }
+
+    channels[0].channel_eof = 1;
+    u.rx_terminal_rc = -ECONNRESET;
+    if (classify_upstream_drain(&u, channels, 2, 0, 0,
+                                NULL, NULL, NULL) != UPSTREAM_DRAIN_FORCED) {
+        failed = 1;
+    }
+    u.rx_terminal_rc = 0;
+    u.rx_terminal = 0;
+    if (classify_upstream_drain(&u, channels, 2, 0, 0,
+                                NULL, NULL, NULL) != UPSTREAM_DRAIN_FORCED) {
+        failed = 1;
+    }
+
     if (failed) {
-        fprintf(stderr, "[FAIL] upstream drain waits for every channel and queued S2C data\n");
+        fprintf(stderr, "[FAIL] upstream drain distinguishes wait, graceful, and forced teardown\n");
         return 1;
     }
-    puts("[PASS] upstream drain waits for every channel and queued S2C data");
+    puts("[PASS] upstream drain distinguishes wait, graceful, and forced teardown");
     return 0;
 }
 
@@ -1120,7 +1166,9 @@ static int run_upstream_hup_client_rejection_regression(void) {
 static int run_upstream_rx_terminal_callback_regression(void) {
     int sv[2] = {-1, -1};
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return 1;
-    upstream_ctx_t u = {.fd = sv[0], .tunnel_established = 1};
+    upstream_ctx_t u = {
+        .fd = sv[0], .tunnel_established = 1, .rx_flush_eagain = 1
+    };
     void *abstract = &u;
     char buf[32];
     if (shutdown(sv[1], SHUT_WR) < 0) {
@@ -1130,26 +1178,59 @@ static int run_upstream_rx_terminal_callback_regression(void) {
     }
     ssize_t first = ssh_recv_cb(sv[0], buf, sizeof(buf), 0, &abstract);
     ssize_t second = ssh_recv_cb(sv[0], buf, sizeof(buf), 0, &abstract);
-    int failed = first != 0 || second != 0 || u.rx_terminal_rc != 0 ||
-                 !u.rx_terminal || !u.hup_seen || !u.upstream_epoll_detached;
+    u.rx_flush_eagain = 0;
+    ssize_t final = ssh_recv_cb(sv[0], buf, sizeof(buf), 0, &abstract);
+    int failed = first != -EAGAIN || second != -EAGAIN || final != 0 ||
+                 u.rx_terminal_rc != 0 || !u.rx_terminal || !u.hup_seen ||
+                 !u.upstream_epoll_detached;
     close(sv[0]);
     close(sv[1]);
 
-    upstream_ctx_t bad = {.tunnel_established = 1};
+    upstream_ctx_t bad = {
+        .tunnel_established = 1, .rx_flush_eagain = 1
+    };
     void *bad_abstract = &bad;
     ssize_t bad_first = ssh_recv_cb(-1, buf, sizeof(buf), 0, &bad_abstract);
     int bad_errno = errno;
     ssize_t bad_second = ssh_recv_cb(-1, buf, sizeof(buf), 0, &bad_abstract);
-    if (bad_first != -EBADF || bad_second != bad_first ||
-        bad.rx_terminal_rc != -EBADF || bad_errno != EBADF ||
-        !bad.rx_terminal || !bad.hup_seen || !bad.upstream_epoll_detached)
+    bad.rx_flush_eagain = 0;
+    ssize_t bad_final = ssh_recv_cb(-1, buf, sizeof(buf), 0, &bad_abstract);
+    if (bad_first != -EAGAIN || bad_second != -EAGAIN ||
+        bad_final != -EBADF || bad.rx_terminal_rc != -EBADF ||
+        bad_errno != EBADF || !bad.rx_terminal || !bad.hup_seen ||
+        !bad.upstream_epoll_detached)
         failed = 1;
 
     if (failed) {
-        fprintf(stderr, "[FAIL] upstream EOF/error results are stable and never become EAGAIN\n");
+        fprintf(stderr, "[FAIL] scoped RX flush exposes terminal as EAGAIN only inside channel-read scope\n");
         return 1;
     }
-    puts("[PASS] upstream EOF returns zero and terminal socket errors remain stable");
+    puts("[PASS] scoped RX flush drains queued packets while preserving the terminal callback result");
+    return 0;
+}
+
+static int run_ssl_read_terminal_classification_regression(void) {
+    upstream_ctx_t unexpected_old = {.ssl_want_events = EPOLLOUT};
+    ssize_t old_rc = ssl_read_terminal_result(
+        &unexpected_old, SSL_ERROR_SYSCALL, 0);
+    upstream_ctx_t clean = {.ssl_want_events = EPOLLOUT};
+    ssize_t clean_rc = ssl_read_terminal_result(
+        &clean, SSL_ERROR_ZERO_RETURN, 0);
+    upstream_ctx_t unexpected_new = {.ssl_want_events = EPOLLIN};
+    ssize_t new_rc = ssl_read_terminal_result(
+        &unexpected_new, SSL_ERROR_SSL, 0);
+    int failed = old_rc != -ECONNRESET ||
+                 unexpected_old.rx_terminal_rc != -ECONNRESET ||
+                 clean_rc != 0 || clean.rx_terminal_rc != 0 ||
+                 new_rc != -EIO || unexpected_new.rx_terminal_rc != -EIO ||
+                 unexpected_old.ssl_want_events != 0 ||
+                 clean.ssl_want_events != 0 ||
+                 unexpected_new.ssl_want_events != 0;
+    if (failed) {
+        fprintf(stderr, "[FAIL] unexpected TLS EOF is distinct from close_notify\n");
+        return 1;
+    }
+    puts("[PASS] unexpected TLS EOF is a transport error; close_notify is clean EOF");
     return 0;
 }
 
@@ -1684,6 +1765,7 @@ static int run_core_state_regressions(void) {
     failures += run_upstream_epoll_timeout_regression();
     failures += run_upstream_hup_client_rejection_regression();
     failures += run_upstream_rx_terminal_callback_regression();
+    failures += run_ssl_read_terminal_classification_regression();
     failures += run_http_rejection_classification_regression();
     failures += run_socks_listener_address_regression();
 
