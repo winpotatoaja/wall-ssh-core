@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Report upstream receive EOF as 0 and replay a stable negative errno for terminal
+  receive errors. Do not turn a closed socket into EAGAIN, which could spin
+  libssh2 handshake/auth retries on a permanently readable EOF.
+- Treat upstream EPOLLRDHUP as a half-close: remove repeated RDHUP readiness but
+  retain EPOLLIN until recv/SSL_read confirms the receive terminal. Use short
+  25 ms retries only for a pending libssh2 operation after the upstream fd has
+  been detached; otherwise wait for client EPOLLOUT or the drain deadline.
+- Reject SOCKS greeting/request/opening clients that cannot be served after
+  upstream HUP, while allowing an already-pending PENDING_OPEN to resolve.
+- Guard C2S ring cleanup so a buffer pinned by an active libssh2 write is never
+  cleared during upstream drain.
+- Keep the stalled S2C drain fail-safe: a failed WINDOW_ADJUST send is not proof
+  that libssh2's queued channel packets were drained.
+- Bump the OpenWrt package release to r21.
+
 - Remove the redundant per-client S2C `read_pending` flag; retain only the
   serialized libssh2 `PENDING_READ` operation and never synthesize EAGAIN when
   the writable S2C ring slice is unavailable.
