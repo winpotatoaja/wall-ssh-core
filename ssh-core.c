@@ -205,6 +205,20 @@ static client_conn_t *g_opening_client = NULL;
 static client_conn_t *g_pending_client = NULL;
 static pending_op_t   g_pending_op = PENDING_NONE;
 
+typedef struct {
+    uint64_t epoll_calls, epoll_wait_ms, epoll_wait_max_ms;
+    uint64_t epoll_wakeups, epoll_timeouts;
+    uint64_t tls_rx_calls, tls_rx_bytes, tls_rx_eagain;
+    uint64_t ssh_rx_bytes, ssh_rx_eagain;
+    uint64_t s2c_read_calls, s2c_read_bytes, s2c_read_eagain;
+    uint64_t socks_tx_calls, socks_tx_bytes, socks_tx_eagain;
+    uint64_t s2c_full, libssh2_eagain, pending_blocks;
+} perf_stats_t;
+
+static perf_stats_t g_perf_stats;
+static int g_log_perf = 0;
+static long long g_perf_window_start_ms = 0;
+
 static void clear_pending_operation(void) {
     g_pending_client = NULL;
     g_pending_op = PENDING_NONE;
@@ -590,6 +604,7 @@ typedef struct {
     char hostkey_fp[128]; /* Opsional: SHA256:<base64> atau 64-hex untuk pin host key */
     int  max_clients;
     int  log_backpressure;
+    int  log_perf;
 } app_cfg_t;
 
 static void trim_ws(char *s) {
@@ -691,6 +706,9 @@ static void load_env(const char *path, app_cfg_t *cfg) {
         } else if (!strcmp(k,"LOG_BACKPRESSURE")) {
             if(parse_int_range(v,0,1,&n)==0) cfg->log_backpressure=n;
             else log_yellow("LOG_BACKPRESSURE harus 0 atau 1; diagnostik dinonaktifkan");
+        } else if (!strcmp(k,"LOG_PERF")) {
+            if(parse_int_range(v,0,1,&n)==0) cfg->log_perf=n;
+            else log_yellow("LOG_PERF harus 0 atau 1; diagnostik performa dinonaktifkan");
         }
     }
     fclose(f);
@@ -1125,6 +1143,56 @@ static long long now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
+static void perf_begin(long long now) {
+    if (!g_log_perf) return;
+    memset(&g_perf_stats, 0, sizeof(g_perf_stats));
+    g_perf_window_start_ms = now;
+}
+
+static void perf_log_interval(long long now) {
+    if (!g_log_perf) return;
+    if (g_perf_window_start_ms <= 0) {
+        perf_begin(now);
+        return;
+    }
+    long long span_ms = now - g_perf_window_start_ms;
+    if (span_ms < 1000) return;
+
+    unsigned int relay_clients = 0;
+    for (const client_conn_t *c = g_clients; c; c = c->next)
+        if (c->state == ST_RELAY) relay_clients++;
+
+    log_raw("[PERF] span_ms=%lld clients=%d relay=%u "
+            "ep_calls=%llu ep_wait_ms=%llu ep_wait_max_ms=%llu ep_wakeups=%llu ep_timeouts=%llu "
+            "tls_rx_calls=%llu tls_rx_bytes=%llu tls_rx_eagain=%llu ssh_rx_bytes=%llu ssh_rx_eagain=%llu "
+            "s2c_read_calls=%llu s2c_read_bytes=%llu s2c_read_eagain=%llu "
+            "socks_tx_calls=%llu socks_tx_bytes=%llu socks_tx_eagain=%llu "
+            "s2c_full=%llu libssh2_eagain=%llu pend_blk=%llu",
+            span_ms, g_client_count, relay_clients,
+            (unsigned long long)g_perf_stats.epoll_calls,
+            (unsigned long long)g_perf_stats.epoll_wait_ms,
+            (unsigned long long)g_perf_stats.epoll_wait_max_ms,
+            (unsigned long long)g_perf_stats.epoll_wakeups,
+            (unsigned long long)g_perf_stats.epoll_timeouts,
+            (unsigned long long)g_perf_stats.tls_rx_calls,
+            (unsigned long long)g_perf_stats.tls_rx_bytes,
+            (unsigned long long)g_perf_stats.tls_rx_eagain,
+            (unsigned long long)g_perf_stats.ssh_rx_bytes,
+            (unsigned long long)g_perf_stats.ssh_rx_eagain,
+            (unsigned long long)g_perf_stats.s2c_read_calls,
+            (unsigned long long)g_perf_stats.s2c_read_bytes,
+            (unsigned long long)g_perf_stats.s2c_read_eagain,
+            (unsigned long long)g_perf_stats.socks_tx_calls,
+            (unsigned long long)g_perf_stats.socks_tx_bytes,
+            (unsigned long long)g_perf_stats.socks_tx_eagain,
+            (unsigned long long)g_perf_stats.s2c_full,
+            (unsigned long long)g_perf_stats.libssh2_eagain,
+            (unsigned long long)g_perf_stats.pending_blocks);
+
+    memset(&g_perf_stats, 0, sizeof(g_perf_stats));
+    g_perf_window_start_ms = now;
 }
 
 /* OpenSSL requires a clean per-thread error queue before SSL I/O so that
@@ -1699,6 +1767,7 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
     if (u->pre_off < u->pre_len) {
         size_t avail = u->pre_len - u->pre_off;
         size_t take = avail < length ? avail : length;
+        if (g_log_perf) g_perf_stats.ssh_rx_bytes += take;
         memcpy(buffer, u->pre_buf + u->pre_off, take);
         u->pre_off += take;
         if (u->pre_off == u->pre_len) { u->pre_off = 0; u->pre_len = 0; }
@@ -1711,8 +1780,10 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
 
     /* Drain pre-buffered bytes first; once empty, replay the exact terminal
      * result instead of turning EOF or a hard error into a fake EAGAIN. */
-    if (u->rx_terminal)
+    if (u->rx_terminal) {
+        if (g_log_perf && u->rx_flush_eagain) g_perf_stats.ssh_rx_eagain++;
         return u->rx_flush_eagain ? -EAGAIN : (ssize_t)u->rx_terminal_rc;
+    }
 
     if (u->ssl) {
         int rlen = (int)(length > 32768U ? 32768U : length);
@@ -1729,18 +1800,33 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
             ssl_errno = errno;
             break;
         }
+        if (g_log_perf) g_perf_stats.tls_rx_calls++;
         if (r > 0) {
+            if (g_log_perf) {
+                g_perf_stats.tls_rx_bytes += (uint64_t)r;
+                g_perf_stats.ssh_rx_bytes += (uint64_t)r;
+            }
             u->ssl_want_events = 0;
             u->ssl_want_from_write = 0;
             u->last_activity = time(NULL);
             u->rx_seq++;
             return (ssize_t)r;
         }
-        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+            if (g_log_perf) {
+                g_perf_stats.tls_rx_eagain++;
+                g_perf_stats.ssh_rx_eagain++;
+            }
             return tls_callback_error_result(u, err, 1);
+        }
         if (err == SSL_ERROR_SYSCALL &&
-            (ssl_errno == EAGAIN || ssl_errno == EWOULDBLOCK))
+            (ssl_errno == EAGAIN || ssl_errno == EWOULDBLOCK)) {
+            if (g_log_perf) {
+                g_perf_stats.tls_rx_eagain++;
+                g_perf_stats.ssh_rx_eagain++;
+            }
             return tls_callback_error_result(u, SSL_ERROR_WANT_READ, 1);
+        }
         return ssl_read_terminal_result(u, err, ssl_errno);
     }
 
@@ -1749,13 +1835,16 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, i
         r = recv(sock, buffer, length, 0);
     } while (r < 0 && errno == EINTR);
     if (r > 0) {
+        if (g_log_perf) g_perf_stats.ssh_rx_bytes += (uint64_t)r;
         u->last_activity = time(NULL);
         u->rx_seq++;
         return r;
     }
     int recv_errno = errno;
-    if (r < 0 && (recv_errno == EAGAIN || recv_errno == EWOULDBLOCK))
+    if (r < 0 && (recv_errno == EAGAIN || recv_errno == EWOULDBLOCK)) {
+        if (g_log_perf) g_perf_stats.ssh_rx_eagain++;
         return -EAGAIN;
+    }
     if (r == 0) return mark_upstream_rx_terminal(u, 0);
     if (r < 0)
         return mark_upstream_rx_terminal(u, -(recv_errno > 0 ? recv_errno : EIO));
@@ -2410,12 +2499,15 @@ static int send_from_rb(int fd, rb_t *r, int keep_pos) {
         const uint8_t *ptr = rb_read_slice(r, &avail);
         if (!ptr || avail == 0) break;
         ssize_t n = send(fd, ptr, avail, MSG_NOSIGNAL);
+        if (g_log_perf) g_perf_stats.socks_tx_calls++;
         if (n > 0) {
+            if (g_log_perf) g_perf_stats.socks_tx_bytes += (uint64_t)n;
             if (rb_commit_read(r, (size_t)n, keep_pos) < 0) return -1;
             if ((size_t)n < avail) break;
         } else if (n < 0 && errno == EINTR) {
             continue;
         } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (g_log_perf) g_perf_stats.socks_tx_eagain++;
             return 0;
         } else {
             return -1;
@@ -2800,12 +2892,17 @@ static void tls_finish_libssh2_call(upstream_ctx_t *u, int returned_eagain) {
 static ssize_t channel_read_with_rx_flush(upstream_ctx_t *u,
                                           LIBSSH2_CHANNEL *channel,
                                           char *buffer, size_t length) {
+    if (g_log_perf) g_perf_stats.s2c_read_calls++;
     int previous = u->rx_flush_eagain;
     u->rx_flush_eagain = 1;
     tls_begin_libssh2_call(u);
     ssize_t rc = libssh2_channel_read(channel, buffer, length);
     tls_finish_libssh2_call(u, rc == LIBSSH2_ERROR_EAGAIN);
     u->rx_flush_eagain = previous;
+    if (g_log_perf) {
+        if (rc > 0) g_perf_stats.s2c_read_bytes += (uint64_t)rc;
+        else if (rc == LIBSSH2_ERROR_EAGAIN) g_perf_stats.s2c_read_eagain++;
+    }
     return rc;
 }
 
@@ -2872,10 +2969,12 @@ static int pending_op_requires_serial_retry(pending_op_t op, const client_conn_t
 static void record_eagain(LIBSSH2_SESSION *session, upstream_ctx_t *u,
                           client_conn_t *c, pending_op_t op,
                           int *agg_dirs_out, int *stop_loop_out) {
+    if (g_log_perf) g_perf_stats.libssh2_eagain++;
     int d = libssh2_session_block_directions(session);
     *agg_dirs_out |= d;
     if (pending_op_requires_serial_retry(op, c, d,
                                          tls_want_requires_serial_retry(u))) {
+        if (g_log_perf) g_perf_stats.pending_blocks++;
         set_pending_operation(c, op);
         *stop_loop_out = 1;
     }
@@ -3219,6 +3318,8 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     clear_pending_operation();
                     return -1;
                 }
+                if (g_log_perf && c->s2c.used == c->s2c.cap)
+                    g_perf_stats.s2c_full++;
                 note_s2c_buffer_peak(c);
                 c->last_activity_ms = now_ms();
             }
@@ -3588,6 +3689,8 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                             return -1;
                         }
                         did_ssh_read = 1;
+                        if (g_log_perf && c->s2c.used == c->s2c.cap)
+                            g_perf_stats.s2c_full++;
                         note_s2c_buffer_peak(c);
                         c->last_activity_ms=now_ms();
                         any_progress = 1;
@@ -3994,7 +4097,8 @@ int main(int argc, char **argv) {
         .idle_timeout_sec = DEFAULT_IDLE_TIMEOUT,
         .hostkey_fp = "",
         .max_clients = DEFAULT_MAX_CLIENTS,
-        .log_backpressure = 0
+        .log_backpressure = 0,
+        .log_perf = 0
     };
     const char *env_file = NULL;
     const char *payload_file = NULL;
@@ -4002,7 +4106,7 @@ int main(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            printf("Usage: %s [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-verify-tls 0|1] [-tls-diag 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log-backpressure 0|1] [-log FILE|-]\\n", argv[0]);
+            printf("Usage: %s [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-verify-tls 0|1] [-tls-diag 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log-backpressure 0|1] [-log-perf 0|1] [-log FILE|-]\\n", argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-env") == 0 && i + 1 < argc) {
             env_file = argv[++i];
@@ -4038,9 +4142,13 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "-hostkey") == 0 && i + 1 < argc) snprintf(cfg.hostkey_fp,sizeof(cfg.hostkey_fp),"%s",argv[++i]);
         else if (strcmp(argv[i], "-max-clients") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],1,MAX_CLIENTS_LIMIT,&cfg.max_clients)<0){log_red("MAX_CLIENTS harus 1..%d",MAX_CLIENTS_LIMIT);return 1;} }
         else if (strcmp(argv[i], "-log-backpressure") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,1,&cfg.log_backpressure)<0){log_red("LOG_BACKPRESSURE harus 0 atau 1");return 1;} }
+        else if (strcmp(argv[i], "-log-perf") == 0 && i + 1 < argc) { if(parse_int_range(argv[++i],0,1,&cfg.log_perf)<0){log_red("LOG_PERF harus 0 atau 1");return 1;} }
     }
 
     g_log_backpressure = cfg.log_backpressure;
+    g_log_perf = cfg.log_perf;
+    if (g_log_perf)
+        log_blue("Diagnostik performa per interval aktif (LOG_PERF=1)");
     if (g_log_backpressure)
         log_blue("Diagnostik backpressure aktif (LOG_BACKPRESSURE=1)");
 
@@ -4482,6 +4590,7 @@ int main(int argc, char **argv) {
     }
 
     struct epoll_event events[MAX_EVENTS];
+    if (g_log_perf) perf_begin(now_ms());
     int force_next_tick = 0;
     int idle_rx_paused = 0;
     time_t last_ka_try = 0;
@@ -4490,7 +4599,18 @@ int main(int argc, char **argv) {
 
     while (!g_stop) {
         int timeout_ms = upstream_epoll_timeout_ms(&uctx, force_next_tick, now_ms());
+        long long epoll_started_ms = g_log_perf ? now_ms() : 0;
         int nfds = epoll_wait(epfd, events, MAX_EVENTS, timeout_ms);
+        if (g_log_perf) {
+            long long waited = now_ms() - epoll_started_ms;
+            if (waited < 0) waited = 0;
+            g_perf_stats.epoll_calls++;
+            g_perf_stats.epoll_wait_ms += (uint64_t)waited;
+            if ((uint64_t)waited > g_perf_stats.epoll_wait_max_ms)
+                g_perf_stats.epoll_wait_max_ms = (uint64_t)waited;
+            if (nfds == 0) g_perf_stats.epoll_timeouts++;
+            else if (nfds > 0) g_perf_stats.epoll_wakeups++;
+        }
         if (nfds < 0) {
             if (errno == EINTR) continue;
             exit_code = 1;
@@ -4758,6 +4878,8 @@ int main(int argc, char **argv) {
             has_readable_relay_channel(), has_window_waiter());
         if (!uctx.upstream_epoll_detached)
             update_epoll(epfd, upstream_fd, &g_upstream_tag, &upstream_ev, want_up);
+
+        perf_log_interval(now_ms());
     }
 
     if (!g_skip_libssh2_cleanup && shutdown_io_pending(&uctx)) {
