@@ -1,7 +1,7 @@
 name: Passwall SSH core - OpenWrt 24.10.7 mipsel_24kc
 on:
   push:
-    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark]
+    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark]
 permissions:
   contents: read
   actions: read
@@ -83,7 +83,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r23 IPK and static MIPS half-close helper
+      - name: Build r23 IPK, half-close helper and pthread download benchmark
         shell: bash
         run: |
           set -euo pipefail
@@ -112,6 +112,12 @@ jobs:
           chmod 0755 "$GITHUB_WORKSPACE/test-results/socks-halfclose"
           file "$GITHUB_WORKSPACE/test-results/socks-halfclose" | tee "$GITHUB_WORKSPACE/test-results/helper-file.txt"
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum socks-halfclose > halfclose.sha256)
+          "$CROSS_CC" -std=gnu11 -Os -static -Wall -Wextra -Werror -pthread \
+            "$GITHUB_WORKSPACE/tests/socks_mt_download.c" \
+            -o "$GITHUB_WORKSPACE/test-results/socks-mt-download"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/socks-mt-download"
+          file "$GITHUB_WORKSPACE/test-results/socks-mt-download" | tee "$GITHUB_WORKSPACE/test-results/mt-helper-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum socks-mt-download > mt-download.sha256)
       - name: Upload MIPS IPK and helper
         uses: actions/upload-artifact@v4
         with:
@@ -122,6 +128,9 @@ jobs:
             test-results/ipk.sha256
             test-results/socks-halfclose
             test-results/halfclose.sha256
+            test-results/socks-mt-download
+            test-results/mt-download.sha256
+            test-results/mt-helper-file.txt
             test-results/elf-header.txt
             test-results/helper-file.txt
           if-no-files-found: error
@@ -191,17 +200,18 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/http_parser_test.c tests/socks_halfclose.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/http_parser_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
             echo "SDK artifact was built from different package or test sources."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/socks_halfclose.c
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/socks_halfclose.c tests/socks_mt_download.c
             false
           fi
-          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256)
-          file test-results/passwall-ssh-core*.ipk test-results/socks-halfclose
-          cat test-results/elf-header.txt test-results/helper-file.txt
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256)
+          file test-results/passwall-ssh-core*.ipk test-results/socks-halfclose test-results/socks-mt-download
+          cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           grep -q 'Version: 1.0.0-r23' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
+          readelf -h test-results/socks-mt-download | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
         shell: bash
@@ -644,6 +654,7 @@ jobs:
           IPK="$(find "$GITHUB_WORKSPACE/test-results" -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
           scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             "$IPK" "$GITHUB_WORKSPACE/test-results/socks-halfclose" \
+            "$GITHUB_WORKSPACE/test-results/socks-mt-download" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
@@ -670,7 +681,7 @@ jobs:
             fail "guest opkg architecture is not mipsel_24kc"
           fi
 
-          echo "========== INSTALL R21 MIPS IPK =========="
+          echo "========== INSTALL R23 MIPS IPK =========="
           opkg update
           OPKG_RC=$?
           if [ "$OPKG_RC" -eq 0 ]; then
@@ -679,8 +690,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install MIPS package or runtime dependencies"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r22'; then
-            pass "opkg installed passwall-ssh-core r22 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r23'; then
+            pass "opkg installed passwall-ssh-core r23 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
@@ -710,7 +721,8 @@ jobs:
           IDLE_TIMEOUT=600
           LOG_BACKPRESSURE=1
           TCP_ENV
-            "$BIN" -env "$LOG/tcp.env" -log "$LOG/tcp-ssh-core.log" >"$LOG/tcp-stdout.log" 2>&1 &
+            "$BIN" -env "$LOG/tcp.env" -log "$LOG/tcp-ssh-core.log" \
+              -log-backpressure 1 -log-perf 1 >"$LOG/tcp-stdout.log" 2>&1 &
             APP_PID=$!
             READY=0
             I=0
@@ -734,6 +746,12 @@ jobs:
             if cp "$LOG/socks-halfclose" /usr/bin/socks-halfclose && \
               chmod 0755 /usr/bin/socks-halfclose && [ -x /usr/bin/socks-halfclose ]; then
               pass "MIPS half-close helper staged on executable overlay"
+              if cp "$LOG/socks-mt-download" /usr/bin/socks-mt-download && \
+                chmod 0755 /usr/bin/socks-mt-download && [ -x /usr/bin/socks-mt-download ]; then
+                pass "pthread MIPS download benchmark staged on executable overlay"
+              else
+                fail "could not stage pthread download benchmark"
+              fi
             else
               fail "could not stage MIPS half-close helper on executable overlay"
             fi
@@ -806,6 +824,139 @@ jobs:
               fail "TCP SSH backpressure recovery diagnostics incomplete"
             fi
           fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== PTHREAD LOAD TEST: ONE SSH SESSION =========="
+            EXPECTED_BYTES=33554432
+            EXPECTED_SHA="$(sha256sum /tmp/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
+
+            start_sampler() {
+              LABEL="$1"; PID_FILE="$2"
+              touch "$LOG/$LABEL.active"
+              (
+                while [ -f "$LOG/$LABEL.active" ]; do
+                  echo "===== epoch=$(date +%s) load=$(cat /proc/loadavg) ====="
+                  awk '/^cpu([0-9]+)? / {print}' /proc/stat
+                  while IFS= read -r P; do
+                    [ -r "/proc/$P/status" ] || continue
+                    echo "PROC pid=$P"
+                    awk '/^(Name|State|Threads|VmRSS|voluntary_ctxt_switches|nonvoluntary_ctxt_switches):/ {print}' "/proc/$P/status"
+                    awk '{print "PROC_STAT utime="$14 " stime="$15}' "/proc/$P/stat"
+                    for T in /proc/"$P"/task/*; do
+                      [ -r "$T/stat" ] || continue
+                      TID="$(basename "$T")"
+                      awk -v tid="$TID" '{print "THREAD tid="tid " utime="$14 " stime="$15}' "$T/stat"
+                    done
+                  done < "$PID_FILE"
+                  echo "--- SNMP ---"; cat /proc/net/snmp
+                  echo "--- NETSTAT ---"; cat /proc/net/netstat
+                  echo "--- TCP ---"; cat /proc/net/tcp
+                  sleep 1
+                done
+              ) >> "$LOG/$LABEL-sampler.log" 2>&1 &
+              echo $! > "$LOG/$LABEL-sampler.pid"
+            }
+            stop_sampler() {
+              LABEL="$1"
+              rm -f "$LOG/$LABEL.active"
+              SPID="$(cat "$LOG/$LABEL-sampler.pid" 2>/dev/null)"
+              [ -n "$SPID" ] && wait "$SPID" 2>/dev/null || true
+            }
+            verify_files() {
+              PREFIX="$1"; I=0; OK=1
+              while [ "$I" -lt 4 ]; do
+                FILE="$PREFIX-$(printf '%02d' "$I").bin"
+                SIZE="$(wc -c < "$FILE" 2>/dev/null | tr -d ' ')"
+                SHA="$(sha256sum "$FILE" 2>/dev/null | awk '{print $1}')"
+                echo "VERIFY $FILE size=$SIZE sha=$SHA expected=$EXPECTED_SHA"
+                if [ "$SIZE" != "$EXPECTED_BYTES" ] || [ "$SHA" != "$EXPECTED_SHA" ]; then OK=0; fi
+                I=$((I + 1))
+              done
+              [ "$OK" -eq 1 ]
+            }
+            start_workers() {
+              COUNT="$1"; : > "$LOG/active-worker-pids"; I=0
+              while [ "$I" -lt "$COUNT" ]; do
+                PORT=$((1080 + I))
+                sed "s|^SOCKS_ADDR=.*|SOCKS_ADDR=127.0.0.1:$PORT|" "$LOG/tcp.env" > "$LOG/worker-$I.env"
+                "$BIN" -env "$LOG/worker-$I.env" -log "$LOG/worker-$I.log" \
+                  -log-backpressure 1 -log-perf 1 >"$LOG/worker-$I-stdout.log" 2>&1 &
+                P=$!; echo "$P" >> "$LOG/active-worker-pids"
+                READY=0; J=0
+                while [ "$J" -lt 90 ]; do
+                  if grep -q "SOCKS5 Listening" "$LOG/worker-$I.log" 2>/dev/null; then READY=1; break; fi
+                  if ! kill -0 "$P" 2>/dev/null; then break; fi
+                  J=$((J + 1)); sleep 1
+                done
+                if [ "$READY" -ne 1 ]; then
+                  echo "Worker $I failed on port $PORT"
+                  cat "$LOG/worker-$I-stdout.log" "$LOG/worker-$I.log" 2>/dev/null || true
+                  return 1
+                fi
+                echo "WORKER_READY index=$I pid=$P port=$PORT"
+                I=$((I + 1))
+              done
+              return 0
+            }
+            stop_workers() {
+              if [ -f "$LOG/active-worker-pids" ]; then
+                while IFS= read -r P; do [ -n "$P" ] && kill -TERM "$P" 2>/dev/null || true; done < "$LOG/active-worker-pids"
+                while IFS= read -r P; do [ -n "$P" ] && wait "$P" 2>/dev/null || true; done < "$LOG/active-worker-pids"
+              fi
+              rm -f "$LOG/active-worker-pids"
+            }
+            run_worker_benchmark() {
+              COUNT="$1"; LABEL="parallel-$COUNT-sessions"
+              echo "========== $LABEL: 4 pthread clients over $COUNT SSH sessions =========="
+              if ! start_workers "$COUNT"; then fail "$COUNT-session worker pool failed"; stop_workers; return; fi
+              start_sampler "$LABEL" "$LOG/active-worker-pids"
+              /usr/bin/socks-mt-download 4 "$COUNT" 1080 "$EXPECTED_BYTES" "$LOG/$LABEL" >"$LOG/$LABEL-download.log" 2>&1
+              RUN_RC=$?
+              stop_sampler "$LABEL"
+              cat "$LOG/$LABEL-download.log"
+              if [ "$RUN_RC" -eq 0 ] && verify_files "$LOG/$LABEL"; then
+                pass "4 concurrent pthread downloads verified over $COUNT independent SSH sessions"
+              else
+                fail "$COUNT-session download or SHA-256 verification failed"
+              fi
+              stop_workers
+            }
+
+            if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
+              echo "$APP_PID" > "$LOG/single-worker-pids"
+              start_sampler "single-core-4clients" "$LOG/single-worker-pids"
+              /usr/bin/socks-mt-download 4 1 1080 "$EXPECTED_BYTES" "$LOG/single-core" >"$LOG/single-core-download.log" 2>&1
+              SINGLE_RC=$?
+              stop_sampler "single-core-4clients"
+              cat "$LOG/single-core-download.log"
+              if [ "$SINGLE_RC" -eq 0 ] && verify_files "$LOG/single-core"; then
+                pass "4 pthread download clients completed through one core; exact 4 x 32 MiB"
+              else
+                fail "single-core concurrent pthread download or hash check failed"
+              fi
+            else
+              fail "single-core baseline proxy was not running"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            if [ -n "$APP_PID" ]; then
+              kill -TERM "$APP_PID" 2>/dev/null || true
+              wait "$APP_PID" 2>/dev/null || true
+              APP_PID=
+            fi
+            run_worker_benchmark 2
+            if [ "$STATUS" -eq 0 ]; then run_worker_benchmark 4; fi
+          fi
+
+          echo "========== MULTI-WORKER LOGS =========="
+          for F in "$LOG"/single-core-download.log "$LOG"/single-core-4clients-sampler.log \
+                   "$LOG"/parallel-2-sessions-download.log "$LOG"/parallel-2-sessions-sampler.log \
+                   "$LOG"/parallel-4-sessions-download.log "$LOG"/parallel-4-sessions-sampler.log \
+                   "$LOG"/tcp-ssh-core.log "$LOG"/worker-*.log "$LOG"/worker-*-stdout.log; do
+            [ -f "$F" ] || continue
+            echo "----- $F -----"; cat "$F"
+          done
 
           if [ -n "$APP_PID" ]; then
             kill -TERM "$APP_PID" 2>/dev/null || true
