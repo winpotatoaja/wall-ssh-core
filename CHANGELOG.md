@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Scope a terminal-RX-as-EAGAIN shim to relay channel reads only, so libssh2
+  can consume complete channel packets already queued in the session before
+  reporting the saved transport terminal result to other API calls.
+- Do not treat the shim as a workaround for a failed CHANNEL_WINDOW_ADJUST:
+  that send happens before libssh2 reads or scans queued packets, so that
+  channel remains stalled and is explicitly reported during forced teardown.
+- Classify upstream shutdown as WAIT, graceful, or forced. Graceful completion
+  now requires clean RX EOF, SSH EOF on every live relay channel, empty
+  libssh2 channel queues, and empty local S2C/control buffers. Once every live
+  channel is drained or stalled, unrecoverable transport states restart
+  immediately with terminal status and queued-byte diagnostics instead of
+  waiting out the full 15-second drain deadline.
+- Treat OpenSSL unexpected EOF without close_notify as a transport error on
+  both OpenSSL 1.1.x and 3.x; only SSL_ERROR_ZERO_RETURN is a clean TLS EOF.
+- Use next-node traversal when rejecting non-relay clients during upstream HUP.
+- Bump the OpenWrt package release to r22.
+
 - Report upstream receive EOF as 0 and replay a stable negative errno for terminal
   receive errors. Do not turn a closed socket into EAGAIN, which could spin
   libssh2 handshake/auth retries on a permanently readable EOF.
