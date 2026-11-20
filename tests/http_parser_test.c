@@ -1938,7 +1938,8 @@ static int run_perf_metrics_regression(void) {
 
 int main(void) {
     g_log_path = "-";
-    int failures = run_core_state_regressions();\n    failures += run_perf_metrics_regression();
+    int failures = run_core_state_regressions();
+    failures += run_perf_metrics_regression();
 
     failures += run_case(
         "GET 200 Content-Length body is not a tunnel",
