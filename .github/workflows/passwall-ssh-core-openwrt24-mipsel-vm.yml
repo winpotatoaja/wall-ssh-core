@@ -1,7 +1,7 @@
 name: Passwall SSH core - OpenWrt 24.10.7 mipsel_24kc
 on:
   push:
-    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark]
+    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers]
 permissions:
   contents: read
   actions: read
@@ -83,7 +83,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r23 IPK, half-close helper and pthread download benchmark
+      - name: Build r24 pthread-worker IPK, half-close helper and download benchmark
         shell: bash
         run: |
           set -euo pipefail
@@ -212,7 +212,7 @@ jobs:
           file test-results/passwall-ssh-core*.ipk test-results/socks-halfclose test-results/socks-mt-download
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r23' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r24' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
           readelf -h test-results/socks-mt-download | grep -q 'MIPS'
 
@@ -684,7 +684,7 @@ jobs:
             fail "guest opkg architecture is not mipsel_24kc"
           fi
 
-          echo "========== INSTALL R23 MIPS IPK =========="
+          echo "========== INSTALL R24 MIPS IPK =========="
           opkg update
           OPKG_RC=$?
           if [ "$OPKG_RC" -eq 0 ]; then
@@ -693,8 +693,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install MIPS package or runtime dependencies"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r23'; then
-            pass "opkg installed passwall-ssh-core r23 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r24'; then
+            pass "opkg installed passwall-ssh-core r24 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
