@@ -60,7 +60,7 @@ static int socks_connect(int fd) {
     if (send_all(fd, hello, sizeof(hello)) || recv_exact(fd, reply, 2) ||
         reply[0] != 5 || reply[1] != 0) return -1;
     const unsigned char request[10] = {
-        5,1,0,1,10,0,2,2,(unsigned char)(TARGET_PORT >> 8),
+        5,1,0,1,127,0,0,1,(unsigned char)(TARGET_PORT >> 8),
         (unsigned char)TARGET_PORT
     };
     unsigned char response[4];
@@ -122,7 +122,7 @@ static void *download_worker(void *arg) {
     }
     char request[512];
     int request_len = snprintf(request, sizeof(request),
-        "GET %s HTTP/1.1\r\nHost: 10.0.2.2:%d\r\nConnection: close\r\n\r\n",
+        "GET %s HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nConnection: close\r\n\r\n",
         EXPECTED_PATH, TARGET_PORT);
     if (request_len <= 0 || (size_t)request_len >= sizeof(request) ||
         send_all(fd, request, (size_t)request_len)) {
