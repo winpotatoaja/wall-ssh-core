@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p test-results
-          gcc -std=gnu11 -O1 -g -Wall -Wextra \
+          gcc -std=gnu11 -O1 -g -Wall -Wextra -pthread \
             -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
             -ffunction-sections -fdata-sections \
             tests/http_parser_test.c \
@@ -931,6 +931,65 @@ jobs:
               stop_workers
             }
 
+            run_thread_benchmark() {
+              COUNT="$1"; ENV_FILE="$2"; BASE_PORT="$3"; TAG="$4"
+              LABEL="$TAG-inprocess-$COUNT-workers"
+              CORE_LOG="$LOG/$LABEL-core.log"
+              CORE_STDOUT="$LOG/$LABEL-stdout.log"
+              PID_FILE="$LOG/$LABEL-pids"
+              rm -f "$CORE_LOG" "$CORE_STDOUT" "$PID_FILE"
+              echo "========== $LABEL: one PID with $COUNT pthread SSH workers =========="
+              "$BIN" -env "$ENV_FILE" -workers "$COUNT" -log "$CORE_LOG" \
+                -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
+              CORE_PID=$!
+              echo "$CORE_PID" > "$PID_FILE"
+              READY=0; J=0
+              while [ "$J" -lt 90 ]; do
+                LISTENERS="$(grep -c "SOCKS5 Listening" "$CORE_LOG" 2>/dev/null || true)"
+                if [ "$LISTENERS" -ge "$COUNT" ]; then READY=1; break; fi
+                if ! kill -0 "$CORE_PID" 2>/dev/null; then break; fi
+                J=$((J + 1)); sleep 1
+              done
+              if [ "$READY" -ne 1 ]; then
+                fail "$TAG in-process $COUNT-worker core failed to bind all SO_REUSEPORT listeners"
+                cat "$CORE_STDOUT" "$CORE_LOG" 2>/dev/null || true
+                kill -TERM "$CORE_PID" 2>/dev/null || true
+                wait "$CORE_PID" 2>/dev/null || true
+                return 1
+              fi
+              THREADS="$(awk '/^Threads:/ {print $2}' "/proc/$CORE_PID/status" 2>/dev/null)"
+              echo "INPROCESS pid=$CORE_PID configured_workers=$COUNT proc_threads=$THREADS listeners=$LISTENERS"
+              if [ "$THREADS" -lt "$((COUNT + 1))" ]; then
+                fail "$TAG in-process worker count not reflected in /proc Threads"
+                kill -TERM "$CORE_PID" 2>/dev/null || true
+                wait "$CORE_PID" 2>/dev/null || true
+                return 1
+              fi
+              pass "one PID runs $COUNT pthread workers (proc Threads=$THREADS), with $COUNT SO_REUSEPORT listeners"
+
+              /usr/bin/socks-mt-download 4 1 "$BASE_PORT" "$EXPECTED_BYTES" "$EXPECTED_SHA" \
+                >"$LOG/$LABEL-download.log" 2>&1 &
+              MT_PID=$!
+              echo "$MT_PID" >> "$PID_FILE"
+              start_sampler "$LABEL" "$PID_FILE"
+              wait "$MT_PID"
+              RUN_RC=$?
+              stop_sampler "$LABEL"
+              cat "$LOG/$LABEL-download.log"
+              kill -TERM "$CORE_PID" 2>/dev/null || true
+              wait "$CORE_PID" 2>/dev/null || true
+              ACCEPTED="$(awk -F'accepted_total=' '/accepted_total=/ {split($2,a,/[^0-9]/); sum+=a[1]} END {print sum+0}' "$CORE_LOG")"
+              echo "INPROCESS_ACCEPTED tag=$TAG workers=$COUNT total=$ACCEPTED"
+              if [ "$RUN_RC" -eq 0 ] && [ "$ACCEPTED" -ge 4 ]; then
+                pass "one-process $COUNT-worker $TAG transfer: four pthread clients, exact bytes and SHA-256; accepted=$ACCEPTED"
+              else
+                fail "$TAG in-process $COUNT-worker download or accepted-client accounting failed"
+                cat "$CORE_STDOUT" "$CORE_LOG" 2>/dev/null || true
+                return 1
+              fi
+              return 0
+            }
+
             if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
               echo "$APP_PID" > "$LOG/tcp-single-core-pids"
               /usr/bin/socks-mt-download 4 1 1080 "$EXPECTED_BYTES" "$EXPECTED_SHA" >"$LOG/tcp-single-core-download.log" 2>&1 &
@@ -959,13 +1018,16 @@ jobs:
             fi
             run_worker_benchmark 2 "$LOG/tcp.env" 1080 tcp
             if [ "$STATUS" -eq 0 ]; then run_worker_benchmark 4 "$LOG/tcp.env" 1080 tcp; fi
+            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 2 "$LOG/tcp.env" 1080 tcp || true; fi
+            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 4 "$LOG/tcp.env" 1080 tcp || true; fi
           fi
 
           echo "========== TCP MULTI-WORKER LOGS =========="
           for F in "$LOG"/tcp-single-core-download.log "$LOG"/tcp-single-core-4clients-sampler.log \
                    "$LOG"/tcp-parallel-2-sessions-download.log "$LOG"/tcp-parallel-2-sessions-sampler.log \
                    "$LOG"/tcp-parallel-4-sessions-download.log "$LOG"/tcp-parallel-4-sessions-sampler.log \
-                   "$LOG"/tcp-ssh-core.log "$LOG"/tcp-*-sessions-worker-*.log "$LOG"/tcp-*-sessions-worker-*-stdout.log; do
+                   "$LOG"/tcp-ssh-core.log "$LOG"/tcp-*-sessions-worker-*.log "$LOG"/tcp-*-sessions-worker-*-stdout.log \
+                   "$LOG"/tcp-inprocess-*-workers-*; do
             [ -f "$F" ] || continue
             echo "----- $F -----"; cat "$F"
           done
@@ -1017,13 +1079,16 @@ jobs:
             wait "$TLS_BENCH_PID" 2>/dev/null || true
             run_worker_benchmark 2 "$LOG/bench-tls.env" 1080 tls
             if [ "$STATUS" -eq 0 ]; then run_worker_benchmark 4 "$LOG/bench-tls.env" 1080 tls; fi
+            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 2 "$LOG/bench-tls.env" 1080 tls || true; fi
+            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 4 "$LOG/bench-tls.env" 1080 tls || true; fi
           fi
 
           echo "========== TLS/SNI MULTI-WORKER LOGS =========="
           for F in "$LOG"/tls-single-core-download.log "$LOG"/tls-single-core-4clients-sampler.log \
                    "$LOG"/tls-parallel-2-sessions-download.log "$LOG"/tls-parallel-2-sessions-sampler.log \
                    "$LOG"/tls-parallel-4-sessions-download.log "$LOG"/tls-parallel-4-sessions-sampler.log \
-                   "$LOG"/tls-single-core.log "$LOG"/tls-*-sessions-worker-*.log "$LOG"/tls-*-sessions-worker-*-stdout.log; do
+                   "$LOG"/tls-single-core.log "$LOG"/tls-*-sessions-worker-*.log "$LOG"/tls-*-sessions-worker-*-stdout.log \
+                   "$LOG"/tls-inprocess-*-workers-*; do
             [ -f "$F" ] || continue
             echo "----- $F -----"; cat "$F"
           done
