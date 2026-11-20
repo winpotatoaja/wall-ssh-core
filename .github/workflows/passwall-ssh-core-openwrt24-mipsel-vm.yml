@@ -945,7 +945,10 @@ jobs:
                 "$BIN" -env "$RUN_ENV" -log "$CORE_LOG" \
                   -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
               else
-                "$BIN" -env "$ENV_FILE" -workers "$COUNT" -log "$CORE_LOG" \
+                RUN_ENV="$LOG/$LABEL.env"
+                # Env requests two workers; CLI must override it to four.
+                sed "/^MAX_CLIENTS=/a WORKERS=2" "$ENV_FILE" > "$RUN_ENV"
+                "$BIN" -env "$RUN_ENV" -workers "$COUNT" -log "$CORE_LOG" \
                   -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
               fi
               CORE_PID=$!
