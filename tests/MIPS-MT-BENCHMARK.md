@@ -46,3 +46,6 @@ The workflow is .github/workflows/passwall-ssh-core-openwrt24-mipsel-vm.yml. It 
 ## Fixture forwarding target
 
 The MIPS helper issues SOCKS5 CONNECT to 127.0.0.1:18080. This is intentional: sshd runs on the fixture host and restricts forwarding with PermitOpen=127.0.0.1:18080. The HTTP Host header also uses 127.0.0.1. The guest's 10.0.2.2 address is only used by the QEMU user-network health check and is not the remote direct-tcpip destination.
+
+
+The pthread helper and the expanded TCP plus TLS/SNI workload are built and executed only in the isolated MIPS benchmark branch.
