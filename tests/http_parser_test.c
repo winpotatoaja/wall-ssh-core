@@ -1086,16 +1086,14 @@ static int run_upstream_hup_client_rejection_regression(void) {
     clear_pending_operation();
     g_opening_client = NULL;
     g_clients = NULL;
-    for (int i = 0; i < 2; i++) {
-        if (greeting.fd >= 0) close(greeting.fd);
-        if (request.fd >= 0) close(request.fd);
-        if (opening.fd >= 0) close(opening.fd);
-        if (pending.fd >= 0) close(pending.fd);
-        close(greeting_pair[i]);
-        close(request_pair[i]);
-        close(opening_pair[i]);
-        close(pending_pair[i]);
-    }
+    if (greeting.fd >= 0) close(greeting.fd);
+    if (request.fd >= 0) close(request.fd);
+    if (opening.fd >= 0) close(opening.fd);
+    if (pending.fd >= 0) close(pending.fd);
+    close(greeting_pair[1]);
+    close(request_pair[1]);
+    close(opening_pair[1]);
+    close(pending_pair[1]);
 
     if (failed) {
         fprintf(stderr, "[FAIL] upstream HUP rejects non-relay SOCKS clients without aborting PENDING_OPEN\n");
