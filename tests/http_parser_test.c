@@ -971,6 +971,20 @@ static int run_upstream_drain_state_regression(void) {
     }
     channels[0].output_pending = 0;
 
+    /* Non-relay SOCKS clients rejected on HUP may still have an error reply
+     * queued. Do not terminate before those control bytes have been sent. */
+    client_conn_t control = {
+        .fd = 1234,
+        .state = ST_SOCKS_GREETING,
+        .ctrl_len = 2
+    };
+    g_clients = &control;
+    clear_pending_operation();
+    g_opening_client = NULL;
+    if (upstream_drain_status(&u, NULL, NULL, NULL) != UPSTREAM_DRAIN_WAIT)
+        failed = 1;
+    g_clients = NULL;
+
     /* A stalled channel is never a graceful completion, even if its queue
      * appears empty and the SSH EOF flag is set. */
     channels[0].read_stalled = 1;
