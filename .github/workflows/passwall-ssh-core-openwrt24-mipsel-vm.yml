@@ -1,7 +1,7 @@
 name: Passwall SSH core - OpenWrt 24.10.7 mipsel_24kc
 on:
   push:
-    branches: [fix/pending-cleanup-bounded-shutdown]
+    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark]
 permissions:
   contents: read
   actions: read
@@ -83,7 +83,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r22 IPK and static MIPS half-close helper
+      - name: Build r23 IPK and static MIPS half-close helper
         shell: bash
         run: |
           set -euo pipefail
@@ -200,7 +200,7 @@ jobs:
           file test-results/passwall-ssh-core*.ipk test-results/socks-halfclose
           cat test-results/elf-header.txt test-results/helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r22' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r23' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
