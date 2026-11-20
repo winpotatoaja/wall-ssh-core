@@ -939,9 +939,13 @@ jobs:
               CORE_STDOUT="$LOG/$LABEL-stdout.log"
               PID_FILE="$LOG/$LABEL-pids"
               rm -f "$CORE_LOG" "$CORE_STDOUT" "$PID_FILE"
-              echo "========== $LABEL: one PID with $COUNT pthread SSH workers =========="
-              if [ "$COUNT" -eq 2 ]; then
-                RUN_ENV="$LOG/$LABEL.env"
+              echo "========== $LABEL: one PID with $COUNT SSH worker loops =========="
+              RUN_ENV="$LOG/$LABEL.env"
+              if [ "$COUNT" -eq 1 ]; then
+                sed "/^MAX_CLIENTS=/a WORKERS=1" "$ENV_FILE" > "$RUN_ENV"
+                "$BIN" -env "$RUN_ENV" -log "$CORE_LOG" \
+                  -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
+              elif [ "$COUNT" -eq 2 ]; then
                 sed "/^MAX_CLIENTS=/a WORKERS=$COUNT" "$ENV_FILE" > "$RUN_ENV"
                 "$BIN" -env "$RUN_ENV" -log "$CORE_LOG" \
                   -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
@@ -978,13 +982,19 @@ jobs:
                   return 1
                   ;;
               esac
-              if [ "$THREADS" -lt "$((COUNT + 1))" ]; then
-                fail "$TAG in-process worker count not reflected in /proc Threads"
+              EXPECTED_THREADS="$COUNT"
+              [ "$COUNT" -gt 1 ] && EXPECTED_THREADS=$((COUNT + 1))
+              if [ "$THREADS" -lt "$EXPECTED_THREADS" ]; then
+                fail "$TAG worker count not reflected in /proc Threads"
                 kill -TERM "$CORE_PID" 2>/dev/null || true
                 wait "$CORE_PID" 2>/dev/null || true
                 return 1
               fi
-              pass "one PID runs $COUNT pthread workers (proc Threads=$THREADS), with $COUNT SO_REUSEPORT listeners"
+              if [ "$COUNT" -eq 1 ]; then
+                pass "one PID runs the baseline single-thread SSH event loop (proc Threads=$THREADS)"
+              else
+                pass "one PID runs $COUNT pthread workers (proc Threads=$THREADS), with $COUNT SO_REUSEPORT listeners"
+              fi
 
               /usr/bin/socks-mt-download 16 1 "$BASE_PORT" "$EXPECTED_BYTES" "$EXPECTED_SHA" \
                 >"$LOG/$LABEL-download.log" 2>&1 &
@@ -1042,6 +1052,7 @@ jobs:
             fi
             run_worker_benchmark 2 "$LOG/tcp.env" 1080 tcp
             if [ "$STATUS" -eq 0 ]; then run_worker_benchmark 4 "$LOG/tcp.env" 1080 tcp; fi
+            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 1 "$LOG/tcp.env" 1080 tcp || true; fi
             if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 2 "$LOG/tcp.env" 1080 tcp || true; fi
             if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 4 "$LOG/tcp.env" 1080 tcp || true; fi
           fi
@@ -1103,6 +1114,7 @@ jobs:
             wait "$TLS_BENCH_PID" 2>/dev/null || true
             run_worker_benchmark 2 "$LOG/bench-tls.env" 1080 tls
             if [ "$STATUS" -eq 0 ]; then run_worker_benchmark 4 "$LOG/bench-tls.env" 1080 tls; fi
+            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 1 "$LOG/bench-tls.env" 1080 tls || true; fi
             if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 2 "$LOG/bench-tls.env" 1080 tls || true; fi
             if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 4 "$LOG/bench-tls.env" 1080 tls || true; fi
           fi
