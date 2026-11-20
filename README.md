@@ -89,6 +89,102 @@ SOCKS, TCP dial, TLS retry, ring-buffer, half-close, pending-cleanup, and core
 state regression suite also passes. The next stages build this R18 source with
 the OpenWrt 25.12.5 x86_64 SDK and run the resulting APK in QEMU.
 
+# Passwall SSH Core
+
+A non-blocking libssh2 client that opens one SSH session and multiplexes local
+SOCKS5 clients over SSH `direct-tcpip` channels.
+
+## Package and executable names
+
+The OpenWrt package is named `passwall-ssh-core`, and the runtime executable
+installed by the package is `/usr/bin/passwall-ssh-core`. The package manifest,
+service scripts, and VM integration test use this same executable path; no
+post-install rename is required.
+
+## OpenWrt 25.12.5 x86_64 build
+
+The repository includes an OpenWrt package recipe at `Makefile`.
+The recommended build path is the staged GitHub Actions workflow described
+below. It uses the official OpenWrt 25.12.5 x86_64 SDK and the matching
+OpenWrt 25.12 source package makefiles for OpenSSL and zlib, then builds
+libssh2 from the packages feed.
+
+## Security-related defaults
+
+- SOCKS5 listens on `127.0.0.1:1080` by default and supports no-authentication
+  only. Binding to a non-loopback address is rejected unless
+  `ALLOW_REMOTE_SOCKS=1` / `-allow-remote-socks 1` is explicitly selected.
+  If enabled, firewall restrictions are the operator's responsibility.
+- `HTTP_200_TUNNEL=0` by default. A non-CONNECT HTTP 200 response is not
+  treated as an SSH tunnel unless the legacy behavior is explicitly enabled.
+- `VERIFY_TLS=1` is the secure default. TLS certificate-chain and hostname
+  validation are enabled using the OpenWrt CA store. The profile option
+  `AllowInsecure` must explicitly map to `VERIFY_TLS=0`; TLS encryption remains
+  enabled, but certificate identity validation is skipped.
+- `HOSTKEY` optionally pins the SSH host-key fingerprint. Without a pin, the
+  fingerprint is informational; server rotation is not blocked by a known_hosts
+  database.
+- `MAX_CLIENTS` defaults to 64 and is capped at 256.
+- `IDLE_TIMEOUT` defaults to 600 seconds; set it to 0 to disable idle expiry.
+  Idle relay expiry is silent in normal logs; it still closes expired channels.
+- Per-channel backpressure/window-transition diagnostics are disabled by default
+  to keep normal logs quiet. Set `LOG_BACKPRESSURE=1` in the environment file,
+  or pass `-log-backpressure 1`, only when troubleshooting flow control. The
+  CI integration test enables this flag explicitly; it does not affect buffering
+  or retry behavior.
+
+## TLS upstream resilience (R15)
+
+The TLS transport retries a stalled or disconnected handshake on another
+DNS-resolved upstream address, excluding endpoints that already failed. The
+retry is bounded to four endpoints and applies only to transport-level
+failures/timeouts; certificate validation and TLS protocol/configuration
+failures remain fatal. The TCP racer also clears errno when a candidate wins,
+so a refused earlier candidate cannot leak an error into the TLS layer. DNS
+resolution and the operating-system routing table remain dynamic, so the
+core does not bind to a fixed WAN interface.
+
+OpenSSL non-blocking I/O clears the thread error queue before each
+`SSL_connect()`, `SSL_read()`, `SSL_write()`, and shutdown I/O so
+`SSL_get_error()` can classify retry readiness consistently. OpenSSL unexpected EOF during handshake
+is treated as a transport failure eligible for alternate-address retry. The
+TLS message-logging callback also restores `errno` before returning,
+preventing stdio/file logging from contaminating OpenSSL's error
+classification.
+
+## TLS diagnostics (R17)
+
+TLS handshake message tracing is disabled by default to avoid synchronous
+file logging inside OpenSSL callbacks. Enable it only for diagnosis with
+`TLS_DIAG=1` in the env file or `-tls-diag 1` on the core command line.
+The default connection path still reports handshake failures and alternate
+endpoint retries without message-by-message callback logging.
+
+## SSH/TLS terminal-state handling (R18)
+
+A serialized `PENDING_KEEPALIVE` remains active only while libssh2 returns
+`LIBSSH2_ERROR_EAGAIN`. A terminal transport/session result clears the
+pending marker before the main loop enters shutdown. TLS socket callbacks
+likewise retain `WANT_READ/WANT_WRITE` readiness only while OpenSSL explicitly
+requests a retry; a terminal result such as peer `close_notify` clears stale
+readiness, so shutdown does not mistake a completed operation for an active
+writable retry and skip bounded SSH/TLS cleanup.
+
+## R18 parser verification
+
+The parser stage passes new state-transition regressions proving that a
+pending keepalive is retained on EAGAIN and cleared on terminal error/success,
+and that terminal TLS callback results clear stale WANT_WRITE readiness while
+WANT_READ/WANT_WRITE still request the correct retry. The full existing parser,
+SOCKS, TCP dial, TLS retry, ring-buffer, half-close, pending-cleanup, and core
+state regression suite also passes. The next stages build this R18 source with
+the OpenWrt 25.12.5 x86_64 SDK and run the resulting APK in QEMU.
+ 
+The native state regression suite now covers scoped receive-terminal flushing,
+the distinction between TLS `close_notify` and unexpected EOF, and all
+three drain outcomes. The MIPS SDK stage runs that suite before compiling the
+r22 `mipsel_24kc` IPK.
+
 ## Classified upstream drain (R22)
 
 Relay channel reads temporarily translate a confirmed upstream receive terminal
