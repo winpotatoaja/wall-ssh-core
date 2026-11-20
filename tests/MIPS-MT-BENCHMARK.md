@@ -41,3 +41,8 @@ For every benchmark run the guest records:
 - A successful transfer requires every client to receive exactly 33,554,432 bytes and match the host SHA-256 fixture.
 
 The workflow is .github/workflows/passwall-ssh-core-openwrt24-mipsel-vm.yml. It uses [mips-stage=sdk] to build the R23 IPK and MIPS helpers, then [mips-stage=vm] [sdk_run_id=RUN_ID] to boot the MT7621 VM and run the tests.
+
+
+## Fixture forwarding target
+
+The MIPS helper issues SOCKS5 CONNECT to 127.0.0.1:18080. This is intentional: sshd runs on the fixture host and restricts forwarding with PermitOpen=127.0.0.1:18080. The HTTP Host header also uses 127.0.0.1. The guest's 10.0.2.2 address is only used by the QEMU user-network health check and is not the remote direct-tcpip destination.
