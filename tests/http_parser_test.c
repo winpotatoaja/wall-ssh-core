@@ -1013,6 +1013,12 @@ static int run_upstream_drain_state_regression(void) {
     }
 
     channels[0].channel_eof = 1;
+    channels[0].channel_present = 0;
+    if (classify_upstream_drain(&u, channels, 2, 0, 0,
+                                NULL, NULL, NULL) != UPSTREAM_DRAIN_FORCED) {
+        failed = 1;
+    }
+    channels[0].channel_present = 1;
     u.rx_terminal_rc = -ECONNRESET;
     if (classify_upstream_drain(&u, channels, 2, 0, 0,
                                 NULL, NULL, NULL) != UPSTREAM_DRAIN_FORCED) {
