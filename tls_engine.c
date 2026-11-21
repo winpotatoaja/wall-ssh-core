@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
+#include <sys/socket.h>
+#include <time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -44,6 +46,11 @@ struct tls_engine {
     char tls_version[32];
     char cipher[128];
     int rx_closed;
+    int rx_terminal_error;
+    int tx_terminal_error;
+    int stop_requested;
+    int graceful_stop;
+    int stop_timeout_ms;
 };
 
 /* All state exchanged across threads uses compiler atomics. */
@@ -106,40 +113,6 @@ static int ssl_error_to_errno(SSL *ssl, int rc, int saved_errno)
         return EPROTO;
     }
     return EIO;
-}
-
-static int wait_socket(int fd, short events, long long deadline_ms)
-{
-    for (;;) {
-        long long remaining = deadline_ms - (long long)(clock() * 1000 / CLOCKS_PER_SEC);
-        if (remaining <= 0) return 0;
-        if (remaining > 1000) remaining = 1000;
-        struct pollfd pfd = { .fd = fd, .events = events };
-        int rc = poll(&pfd, 1, (int)remaining);
-        if (rc < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (rc == 0) continue;
-        if (pfd.revents & POLLNVAL) {
-            errno = EBADF;
-            return -1;
-        }
-        if (pfd.revents & POLLERR) {
-            int error = 0;
-            socklen_t length = sizeof(error);
-            if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) < 0)
-                return -1;
-            errno = error ? error : EIO;
-            return -1;
-        }
-        if (pfd.revents & events) return 1;
-        if ((pfd.revents & POLLHUP) && (events & POLLIN)) return 1;
-        if (pfd.revents & (POLLHUP | POLLERR)) {
-            errno = EPIPE;
-            return -1;
-        }
-    }
 }
 
 static long long monotonic_ms(void)
@@ -262,8 +235,8 @@ static void publish_startup(tls_engine_t *engine, int ok, int error,
     pthread_mutex_lock(&engine->mutex);
     engine->startup_done = 1;
     engine->startup_ok = ok;
-    engine->startup_error = error;
-    engine->startup_retryable = retryable;
+    __atomic_store_n(&engine->startup_error, error, __ATOMIC_RELEASE);
+    __atomic_store_n(&engine->startup_retryable, retryable, __ATOMIC_RELEASE);
     pthread_cond_broadcast(&engine->cond);
     pthread_mutex_unlock(&engine->mutex);
     signal_eventfd(engine->owner_event_fd);
@@ -720,6 +693,7 @@ ssize_t tls_engine_send(tls_engine_t *engine, const void *data, size_t length)
         errno = EINVAL;
         return -1;
     }
+    if (length == 0) return 0;
     if (__atomic_load_n(&engine->tx_terminal_error, __ATOMIC_ACQUIRE) != 0 ||
         __atomic_load_n(&engine->stop_requested, __ATOMIC_ACQUIRE)) {
         errno = EPIPE;
