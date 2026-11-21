@@ -1,6 +1,8 @@
 ## Unreleased
 - Add an SSH-Owner-only bounded completion tracker keyed by task ID. A completion must match task ID, client ID, generation, and worker assignment before it can consume a task reference; duplicate and malformed completions cannot decrement another task's lifetime reference.
 - Add rollback for task registrations when worker submission fails, plus native regressions for exact-once completion, stale/mismatched identity, bounded capacity, and rollback.
+- Refuse to destroy the completion tracker while accepted tasks remain outstanding. The tracker is currently a tested Owner-side primitive; eventfd registration/draining and worker submission are not yet wired into `ssh-core.c`.
+- Add native and MIPS/QEMU regression coverage for completion identity, exactly-once consumption, bounded capacity, rollback, and shutdown guards.
 - Bump OpenWrt package release to r35.
 
 ## Unreleased
