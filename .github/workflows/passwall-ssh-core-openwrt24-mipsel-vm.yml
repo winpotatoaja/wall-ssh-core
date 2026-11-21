@@ -737,6 +737,7 @@ jobs:
             "$GITHUB_WORKSPACE/test-results/tls-engine-test" \
             "$GITHUB_WORKSPACE/test-results/io-worker-pool-test" \
             "$GITHUB_WORKSPACE/test-results/client-lifetime-test" \
+            "$GITHUB_WORKSPACE/test-results/client-event-token-test" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
@@ -778,7 +779,7 @@ jobs:
             fail "ImageBuilder firmware is missing libopenssl3 or libssh2-1"
           fi
 
-          echo "========== INSTALL R32 MIPS IPK (OFFLINE) =========="
+          echo "========== INSTALL R33 MIPS IPK (OFFLINE) =========="
           if [ "$STATUS" -eq 0 ]; then
             opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
@@ -787,8 +788,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r32'; then
-            pass "opkg installed passwall-ssh-core r32 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r33'; then
+            pass "opkg installed passwall-ssh-core r33 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
@@ -822,6 +823,19 @@ jobs:
             fi
           else
             fail "MIPS client lifetime test helper missing"
+          fi
+
+          if [ -f "$LOG/client-event-token-test" ] && cp "$LOG/client-event-token-test" /usr/bin/client-event-token-test; then
+            chmod 0755 /usr/bin/client-event-token-test
+            if /usr/bin/client-event-token-test >"$LOG/client-event-token-test.log" 2>&1; then
+              cat "$LOG/client-event-token-test.log"
+              pass "MIPS client epoll event-token encode/decode and reserved values"
+            else
+              cat "$LOG/client-event-token-test.log"
+              fail "MIPS client event-token regression failed"
+            fi
+          else
+            fail "MIPS client event-token test helper missing"
           fi
 
           if [ "$STATUS" -eq 0 ]; then
