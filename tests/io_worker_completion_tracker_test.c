@@ -136,7 +136,16 @@ static int test_capacity_duplicate_and_cancel(void)
               "tombstone slot is reusable"))
         goto fail;
 
-    io_worker_completion_tracker_destroy(tracker);
+    if (check(io_worker_completion_tracker_cancel(tracker, &refs[0]) == 0 &&
+              io_worker_completion_tracker_cancel(tracker, &refs[2]) == 0 &&
+              io_worker_completion_tracker_cancel(tracker, &refs[3]) == 0 &&
+              io_worker_completion_tracker_cancel(tracker, &extra) == 0 &&
+              io_worker_completion_tracker_outstanding(tracker) == 0,
+              "all remaining registrations drain before destruction"))
+        goto fail;
+
+    if (io_worker_completion_tracker_destroy(tracker) < 0)
+        return -1;
     puts("PASS bounded registry, rollback, and slot reuse");
     return 0;
 fail:
