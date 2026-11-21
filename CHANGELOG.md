@@ -1,4 +1,7 @@
 ## Unreleased
+- Defer client FD, ring-buffer, and object destruction while worker references remain; retire detached clients and reap them only from the SSH Owner after references drain.
+- Make shutdown use the same deferred-destruction path instead of closing client FDs before lifetime accounting.
+
 
 - [mips-stage=sdk] Build and validate r34 with embedded client lifetime state.
 - Embed an SSH-Owner-only `client_lifetime_t` in each accepted client and initialize it from the monotonic client ID/generation. Compile `client_lifetime.c` into the OpenWrt package; bump package to r34. This is bookkeeping only: no worker tasks are submitted and no worker accesses client state yet.
