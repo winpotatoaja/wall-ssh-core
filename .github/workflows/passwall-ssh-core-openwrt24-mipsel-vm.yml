@@ -102,7 +102,7 @@ jobs:
           mkdir -p "$PKG_DIR"
           cp Makefile "$PKG_DIR/Makefile"
           cp ssh-core.c "$PKG_DIR/ssh-core.c"
-          cp tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h "$PKG_DIR/"
+          cp tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h "$PKG_DIR/"
           cd "$GITHUB_WORKSPACE/sdk"
           echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
           make defconfig
@@ -159,6 +159,10 @@ jobs:
           chmod 0755 "$GITHUB_WORKSPACE/test-results/client-lifetime-test"
           file "$GITHUB_WORKSPACE/test-results/client-lifetime-test" | tee "$GITHUB_WORKSPACE/test-results/client-lifetime-file.txt"
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum client-lifetime-test > client-lifetime.sha256)
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -I"$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/client_event_token_test.c" -o "$GITHUB_WORKSPACE/test-results/client-event-token-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/client-event-token-test"
+          file "$GITHUB_WORKSPACE/test-results/client-event-token-test" | tee "$GITHUB_WORKSPACE/test-results/client-event-token-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum client-event-token-test > client-event-token.sha256)
       - name: Upload MIPS IPK and helper
         uses: actions/upload-artifact@v4
         with:
@@ -186,6 +190,9 @@ jobs:
             test-results/client-lifetime-test
             test-results/client-lifetime.sha256
             test-results/client-lifetime-file.txt
+            test-results/client-event-token-test
+            test-results/client-event-token.sha256
+            test-results/client-event-token-file.txt
           if-no-files-found: error
           retention-days: 14
       - name: SDK summary
