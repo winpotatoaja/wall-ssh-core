@@ -402,4 +402,4 @@
 - Native parser/core-state regression for the graceful EOF cleanup fix passed in GitHub Actions run #20 (commit 2697caad).
 - The OpenWrt 25.12.5 x86_64 SDK build for r12 succeeded in GitHub Actions run #24; the resulting artifact is reserved for the separate QEMU VM validation stage.
 
-- MIPS Phase 3: correct the TLS ownership CI grep pattern; the prior SDK build succeeded, but its malformed pattern emitted a grep diagnostic and did not provide a clean static-check result. Re-run the MT7621 QEMU stage against the latest MIPS SDK artifact before integrating asynchronous client socket operations.
+- MIPS Phase 3: correct the TLS ownership CI grep pattern. The first VM dispatch did not reach QEMU because its commit omitted the required `[sdk_run_id=RUN_ID]` provenance marker; retry with the successful SDK run ID `44889307446` before integrating asynchronous client socket operations.
