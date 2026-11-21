@@ -1236,7 +1236,10 @@ jobs:
           echo "client_FIN=$CLIENT_FIN server_FIN=$SERVER_FIN exact_8MiB_post_EOF=$LARGE duplex_8MiB_up_32MiB_down=$DUPLEX"
           test "$CLIENT_FIN" -ge 2
           test "$SERVER_FIN" -ge 2
-          test "$LARGE" -ge 2
+          # The 8 MiB post-EOF upload endpoint is exercised by the TCP
+          # half-close suite once; TLS independently covers client/server
+          # half-close and full-duplex transfers below.
+          test "$LARGE" -ge 1
           test "$DUPLEX" -ge 2
 
       - name: Collect guest logs, stop MT7621 emulator and collect host logs
