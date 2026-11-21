@@ -3,6 +3,7 @@
 - Add rollback for task registrations when worker submission fails, plus native regressions for exact-once completion, stale/mismatched identity, bounded capacity, and rollback.
 - Refuse to destroy the completion tracker while accepted tasks remain outstanding. The tracker is currently a tested Owner-side primitive; eventfd registration/draining and worker submission are not yet wired into `ssh-core.c`.
 - Add native and MIPS/QEMU regression coverage for completion identity, exactly-once consumption, bounded capacity, rollback, and shutdown guards.
+- MIPS OpenWrt 24.10.7 SDK build r35 succeeded in GitHub Actions run 44897393502; the completion tracker helper was cross-compiled for mipsel_24kc and included in the VM test artifact.
 - Bump OpenWrt package release to r35.
 
 ## Unreleased
