@@ -167,6 +167,10 @@ jobs:
           chmod 0755 "$GITHUB_WORKSPACE/test-results/client-event-token-test"
           file "$GITHUB_WORKSPACE/test-results/client-event-token-test" | tee "$GITHUB_WORKSPACE/test-results/client-event-token-file.txt"
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum client-event-token-test > client-event-token.sha256)
+           "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -I"$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/io_worker_completion_tracker_test.c" "$GITHUB_WORKSPACE/io_worker_completion_tracker.c" -o "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
+           chmod 0755 "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
+           file "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" | tee "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-file.txt"
+           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum io-worker-completion-tracker-test > io-worker-completion-tracker.sha256)
       - name: Upload MIPS IPK and helper
         uses: actions/upload-artifact@v4
         with:
@@ -194,7 +198,7 @@ jobs:
             test-results/client-lifetime-test
             test-results/client-lifetime.sha256
             test-results/client-lifetime-file.txt
-            test-results/client-event-token-test test-results/io-worker-completion-tracker-test
+            test-results/client-event-token-test
             test-results/client-event-token.sha256
             test-results/client-event-token-file.txt
             test-results/io-worker-completion-tracker-test
@@ -273,7 +277,7 @@ jobs:
             false
           fi
           (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256)
-          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test
+          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           grep -q 'Version: 1.0.0-r35' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
@@ -283,6 +287,7 @@ jobs:
           readelf -h test-results/io-worker-pool-test | grep -q 'MIPS'
           readelf -h test-results/client-lifetime-test | grep -q 'MIPS'
           readelf -h test-results/client-event-token-test | grep -q 'MIPS'
+          readelf -h test-results/io-worker-completion-tracker-test | grep -q 'MIPS'
           readelf -h test-results/io-worker-completion-tracker-test | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
@@ -744,6 +749,7 @@ jobs:
             "$GITHUB_WORKSPACE/test-results/io-worker-pool-test" \
             "$GITHUB_WORKSPACE/test-results/client-lifetime-test" \
             "$GITHUB_WORKSPACE/test-results/client-event-token-test" \
+             "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" \
             "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
