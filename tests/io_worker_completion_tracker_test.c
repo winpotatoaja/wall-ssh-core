@@ -45,6 +45,10 @@ static int test_exact_once_and_identity(void)
     if (check(io_worker_completion_tracker_outstanding(tracker) == 1,
               "outstanding increments"))
         goto fail;
+    errno = 0;
+    if (check(io_worker_completion_tracker_destroy(tracker) < 0 && errno == EBUSY,
+              "cannot destroy tracker with in-flight task"))
+        goto fail;
 
     io_worker_completion_t completion = make_completion(original);
     io_worker_task_ref_t taken;
@@ -82,11 +86,11 @@ static int test_exact_once_and_identity(void)
               "duplicate completion cannot release another task"))
         goto fail;
 
-    io_worker_completion_tracker_destroy(tracker);
+    if (io_worker_completion_tracker_destroy(tracker) < 0) return -1;
     puts("PASS completion identity and exactly-once consumption");
     return 0;
 fail:
-    io_worker_completion_tracker_destroy(tracker);
+    (void)io_worker_completion_tracker_destroy(tracker);
     return -1;
 }
 
