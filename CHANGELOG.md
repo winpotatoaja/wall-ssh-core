@@ -1,5 +1,5 @@
 ## Unreleased
-- Add a two-phase worker submission API: the SSH Owner selects a worker, registers the full task/client/generation/worker identity with the completion tracker, and only then publishes the copied task. This closes the race where a fast worker could complete before the Owner had registered its lifetime reference.
+- Implement `io_worker_pool_select_worker()` and `io_worker_pool_submit_to_worker()` so the SSH Owner selects a worker, registers the full task/client/generation/worker identity with the completion tracker, and only then publishes the copied task. This closes the race where a fast worker could complete before the Owner had registered its lifetime reference.
 - Add an end-to-end native and MIPS regression that waits on the worker completion eventfd, drains the completion, and consumes it against the pre-registered tracker identity.
 - Bump the OpenWrt package release to r36.
 
