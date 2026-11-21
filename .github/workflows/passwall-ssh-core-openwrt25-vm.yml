@@ -89,7 +89,7 @@ jobs:
           gcc -std=gnu11 -O1 -g -Wall -Wextra \
             -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
             -ffunction-sections -fdata-sections \
-            tests/http_parser_test.c tls_engine.c \
+            tests/http_parser_test.c tls_engine.c client_lifetime.c \
             -Wl,--gc-sections -o /tmp/http-parser-test \
             -lssh2 -lssl -lcrypto
           /tmp/http-parser-test | tee test-results/http-parser-test.log
