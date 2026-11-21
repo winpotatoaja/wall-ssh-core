@@ -1066,14 +1066,21 @@ jobs:
             else
               fail "TCP 32 MiB upload failed"
             fi
-            FULL="$(grep -c "SSH channel window penuh" "$LOG/tcp-ssh-core.log" 2>/dev/null || true)"
-            RECOVERED="$(grep -c "SSH channel window recovered; write resumed" "$LOG/tcp-ssh-core.log" 2>/dev/null || true)"
             NOT_DRAINED="$(grep -c "SSH channel buffer not drained at close" "$LOG/tcp-ssh-core.log" 2>/dev/null || true)"
-            echo "TCP window full=$FULL recovered=$RECOVERED not_drained=$NOT_DRAINED"
-            if [ "$FULL" -gt 0 ] && [ "$FULL" -eq "$RECOVERED" ] && [ "$NOT_DRAINED" -eq 0 ]; then
-              pass "TCP SSH write-window backpressure recovered without retained C2S data"
+            C2S_TOTALS="$(awk '{
+              for (i = 1; i <= NF; i++) {
+                if ($i ~ /^c2s_rx_bytes=/) { split($i, a, "="); rx += a[2] }
+                if ($i ~ /^c2s_ssh_write_bytes=/) { split($i, a, "="); written += a[2] }
+              }
+            } END { printf "%.0f %.0f\\n", rx, written }' "$LOG/tcp-ssh-core.log")"
+            set -- $C2S_TOTALS
+            C2S_RX_TOTAL="${1:-0}"
+            C2S_WRITE_TOTAL="${2:-0}"
+            echo "TCP C2S received=$C2S_RX_TOTAL committed=$C2S_WRITE_TOTAL not_drained=$NOT_DRAINED"
+            if [ "$C2S_RX_TOTAL" -gt 0 ] && [ "$C2S_RX_TOTAL" -eq "$C2S_WRITE_TOTAL" ] && [ "$NOT_DRAINED" -eq 0 ]; then
+              pass "TCP C2S bytes fully committed with no retained channel buffer at close"
             else
-              fail "TCP SSH backpressure recovery diagnostics incomplete"
+              fail "TCP C2S accounting mismatch or channel buffer remained queued at close"
             fi
           fi
 

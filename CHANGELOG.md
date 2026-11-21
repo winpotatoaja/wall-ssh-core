@@ -1,4 +1,5 @@
 ## Unreleased
+- Correct the MIPS QEMU C2S upload assertion: validate exact cumulative received/committed byte accounting and absence of retained channel data, rather than requiring optional zero-window log transitions that did not occur in this run.
 - Re-run MT7621 QEMU using the verified MIPS IPK from SDK run `44957061334` after correcting workflow artifact selection.
 - Fix the MIPS QEMU workflow to consume its dedicated `[mips_sdk_run_id=RUN_ID]` artifact instead of accidentally reusing the x86 SDK run ID.
 - Rebuilt the diagnostic-enabled source successfully for OpenWrt 25.12.5 x86_64 (APK) and OpenWrt 24.10.7 mipsel_24kc (IPK); queue QEMU validation against these exact SDK artifacts.
