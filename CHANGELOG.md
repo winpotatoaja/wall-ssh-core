@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Provision the TLS Engine pthread with a 512 KiB stack for musl targets. Bound graceful queue flushing and TLS close_notify shutdown to one deadline; retain the legacy endpoint retry policy for transport EOF/syscall failures while keeping non-EOF TLS protocol errors non-retryable.
+- Harden the TLS Engine test cleanup so it never shuts down a stale/reused server descriptor after the peer thread may already have closed it.
 - Fix two stale TLS Engine error-mapping call sites found by the first native -Werror CI build; retain the single SSL_get_error classification result instead of invoking the mapper with obsolete arguments.
 - Add the first dedicated TLS Engine module for the single-session pipeline. It creates and owns SSL* on one pthread from TLS handshake through SSL_free, communicates through two SPSC byte queues, and uses eventfds for bidirectional notifications. It preserves pinned SSL_write retries, distinguishes close_notify from fatal transport errors, and provides bounded shutdown. This is Phase 2 transport groundwork; ssh-core.c callbacks are not switched to the engine yet.
 - Bump package release to r30 and compile the TLS Engine module for OpenWrt SDK coverage before live relay integration.
