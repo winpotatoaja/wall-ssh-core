@@ -5,97 +5,32 @@ A non-blocking libssh2 client that owns exactly one upstream SSH session
 SSH `direct-tcpip` channels. CPU detection must never increase the number of
 upstream SSH logins; auxiliary multi-core I/O processing is developed separately.
 
-## Single-session safety policy (R28)\n\nThe process always creates exactly one upstream TCP/TLS connection and one SSH\nsession, regardless of the number of detected CPUs. Legacy `WORKERS` and\n`-workers` values remain accepted for launcher compatibility but are ignored\nfor upstream session creation; the startup log reports detected CPUs and the\nsingle-session policy. This prevents CPU auto-detection from multiplying\npassword authentications. It does not yet make libssh2 operations parallel:\nall calls on the single `LIBSSH2_SESSION` remain serialized.\n\n## Package and executable names
+## Single-session safety policy (R28+)
 
-The OpenWrt package is named `passwall-ssh-core`, and the runtime executable
-installed by the package is `/usr/bin/passwall-ssh-core`. The package manifest,
-service scripts, and VM integration test use this same executable path; no
-post-install rename is required.
+The process creates exactly one upstream TCP/TLS connection and one SSH
+session, regardless of detected CPU count. Legacy WORKERS and -workers
+settings remain accepted for launcher compatibility but are ignored when
+selecting upstream SSH sessions. This prevents CPU detection from multiplying
+password authentications. Calls on the single LIBSSH2_SESSION remain serialized.
 
-## OpenWrt 25.12.5 x86_64 build
+## SPSC queue foundation (R29)
 
-The repository includes an OpenWrt package recipe at `Makefile`.
-The recommended build path is the staged GitHub Actions workflow described
-below. It uses the official OpenWrt 25.12.5 x86_64 SDK and the matching
-OpenWrt 25.12 source package makefiles for OpenSSL and zlib, then builds
-libssh2 from the packages feed.
+The standalone spsc_rb.h module is the first primitive for the planned
+single-session multithreaded I/O pipeline. It is not yet wired into the live
+relay and does not create additional threads.
 
-## Security-related defaults
+The ring uses monotonically increasing uint32_t head/tail counters, a
+power-of-two capacity no larger than 2^30, unsigned counter differences, and
+acquire/release publication. It has no shared used field. Producer-owned tail
+and consumer-owned head are separated by a 64-byte stride. A pinned read-span
+API preserves the same byte pointer while libssh2 channel_write is pending on
+EAGAIN; the SSH Owner will be the only consumer allowed to commit head.
 
-- SOCKS5 listens on `127.0.0.1:1080` by default and supports no-authentication
-  only. Binding to a non-loopback address is rejected unless
-  `ALLOW_REMOTE_SOCKS=1` / `-allow-remote-socks 1` is explicitly selected.
-  If enabled, firewall restrictions are the operator's responsibility.
-- `HTTP_200_TUNNEL=0` by default. A non-CONNECT HTTP 200 response is not
-  treated as an SSH tunnel unless the legacy behavior is explicitly enabled.
-- `VERIFY_TLS=1` is the secure default. TLS certificate-chain and hostname
-  validation are enabled using the OpenWrt CA store. The profile option
-  `AllowInsecure` must explicitly map to `VERIFY_TLS=0`; TLS encryption remains
-  enabled, but certificate identity validation is skipped.
-- `HOSTKEY` optionally pins the SSH host-key fingerprint. Without a pin, the
-  fingerprint is informational; server rotation is not blocked by a known_hosts
-  database.
-- `MAX_CLIENTS` defaults to 64 and is capped at 256.
-- `IDLE_TIMEOUT` defaults to 600 seconds; set it to 0 to disable idle expiry.
-  Idle relay expiry is silent in normal logs; it still closes expired channels.
-- Per-channel backpressure/window-transition diagnostics are disabled by default
-  to keep normal logs quiet. Set `LOG_BACKPRESSURE=1` in the environment file,
-  or pass `-log-backpressure 1`, only when troubleshooting flow control. The
-  CI integration test enables this flag explicitly; it does not affect buffering
-  or retry behavior.
-
-## TLS upstream resilience (R15)
-
-The TLS transport retries a stalled or disconnected handshake on another
-DNS-resolved upstream address, excluding endpoints that already failed. The
-retry is bounded to four endpoints and applies only to transport-level
-failures/timeouts; certificate validation and TLS protocol/configuration
-failures remain fatal. The TCP racer also clears errno when a candidate wins,
-so a refused earlier candidate cannot leak an error into the TLS layer. DNS
-resolution and the operating-system routing table remain dynamic, so the
-core does not bind to a fixed WAN interface.
-
-OpenSSL non-blocking I/O clears the thread error queue before each
-`SSL_connect()`, `SSL_read()`, `SSL_write()`, and shutdown I/O so
-`SSL_get_error()` can classify retry readiness consistently. OpenSSL unexpected EOF during handshake
-is treated as a transport failure eligible for alternate-address retry. The
-TLS message-logging callback also restores `errno` before returning,
-preventing stdio/file logging from contaminating OpenSSL's error
-classification.
-
-## TLS diagnostics (R17)
-
-TLS handshake message tracing is disabled by default to avoid synchronous
-file logging inside OpenSSL callbacks. Enable it only for diagnosis with
-`TLS_DIAG=1` in the env file or `-tls-diag 1` on the core command line.
-The default connection path still reports handshake failures and alternate
-endpoint retries without message-by-message callback logging.
-
-## SSH/TLS terminal-state handling (R18)
-
-A serialized `PENDING_KEEPALIVE` remains active only while libssh2 returns
-`LIBSSH2_ERROR_EAGAIN`. A terminal transport/session result clears the
-pending marker before the main loop enters shutdown. TLS socket callbacks
-likewise retain `WANT_READ/WANT_WRITE` readiness only while OpenSSL explicitly
-requests a retry; a terminal result such as peer `close_notify` clears stale
-readiness, so shutdown does not mistake a completed operation for an active
-writable retry and skip bounded SSH/TLS cleanup.
-
-## R18 parser verification
-
-The parser stage passes new state-transition regressions proving that a
-pending keepalive is retained on EAGAIN and cleared on terminal error/success,
-and that terminal TLS callback results clear stale WANT_WRITE readiness while
-WANT_READ/WANT_WRITE still request the correct retry. The full existing parser,
-SOCKS, TCP dial, TLS retry, ring-buffer, half-close, pending-cleanup, and core
-state regression suite also passes. The next stages build this R18 source with
-the OpenWrt 25.12.5 x86_64 SDK and run the resulting APK in QEMU.
-
-# Passwall SSH Core
-
-A non-blocking libssh2 client that opens one or more independent SSH sessions
-(one per worker thread) and multiplexes local
-SOCKS5 clients over SSH `direct-tcpip` channels.
+Native and mipsel_24kc tests cover full/empty states, physical wrap, pinned
+span stability during producer appends, irregular chunk sizes, byte integrity,
+and uint32_t counter rollover. This validates the queue primitive only;
+eventfd, TLS ownership, I/O workers, and live relay integration remain future
+stages.
 
 ## Package and executable names
 
@@ -225,13 +160,13 @@ buffers are not discarded. A stalled S2C channel remains incomplete until the
 bounded drain deadline rather than risking loss of packets still queued inside
 libssh2.
 
-The OpenWrt 24.10.7 mipsel_24kc workflow builds package r23 and performs
+The OpenWrt 24.10.7 mipsel_24kc workflow builds package r29 and performs
 cross-architecture ELF/package checks before its separate QEMU integration run.
 
 
 ## Four-vCPU performance investigation (experimental)
 
-The experimental branch `perf/4core-ssh-relay-benchmark` runs the existing OpenWrt 25.12.5 QEMU integration and sustained concurrent-transfer workload with a four-vCPU guest (`qemu -smp 4`) on the GitHub-hosted Ubuntu runner. The workflow records the host CPU topology as an artifact. This validates behavior under a four-core guest and provides a repeatable baseline; it does not by itself make the current single-threaded SSH event loop parallel. The current core shares one libssh2 session and TLS transport, so channel operations must remain serialized. A future parallel design must move only independent work off-thread or use independent SSH sessions, then prove correctness and throughput against this baseline.
+The experimental branch `perf/4core-ssh-relay-benchmark` runs the existing OpenWrt 25.12.5 QEMU integration and sustained concurrent-transfer workload with a four-vCPU guest (`qemu -smp 4`) on the GitHub-hosted Ubuntu runner. The workflow records the host CPU topology as an artifact. This validates behavior under a four-core guest and provides a repeatable baseline; it does not by itself make the current single-threaded SSH event loop parallel. The current core shares one libssh2 session and TLS transport, so channel operations must remain serialized. The planned single-session pipeline moves TLS and local socket I/O off-thread while keeping libssh2 session operations serialized.
 
 ## Continuous integration tests
 
@@ -313,42 +248,15 @@ installs that exact SDK artifact and exercises SOCKS forwarding, SSH channel
 I/O, half-close and reconnect behavior.
 
 
-## In-process pthread workers (R24 experimental)
+## Historical independent-session worker mode (R24–R27)
 
-The worker count is selected automatically at startup from the CPUs available
-to the process (Linux CPU affinity first, then the online-CPU count). The
-default is one worker per available logical CPU, capped at four workers:
-1 CPU → 1 worker, 2 CPUs → 2 workers, 3 CPUs → 3 workers, and 4 or more
-CPUs → 4 workers. A single worker stays on the main event-loop thread and
-does not create an extra pthread.
-
-Manual overrides remain available: set `WORKERS=1..4` in the core environment
-file, or pass `-workers 1..4` to the executable. The command-line value
-takes precedence over the environment-file setting. When neither override is
-present, CPU-based automatic selection is used.
-
-With more than one worker, the process creates one pthread per worker. Each
-thread owns its own upstream TCP/TLS connection, TLS context, `LIBSSH2_SESSION`,
-epoll instance, pending-operation state, client list, and relay ring buffers.
-No `LIBSSH2_SESSION` or per-session TLS state is shared across threads.
-Each worker binds the configured SOCKS address and port in a Linux
-`SO_REUSEPORT` listener group; the kernel distributes incoming TCP connections
-among those listeners.
-
-The process-wide `MAX_CLIENTS` limit is enforced with an atomic admission
-counter, so it is not multiplied by the number of workers. Per-worker relay
-state is thread-local. The payload rotation file and shared failure-marker
-writes are protected by mutexes. `libssh2_init()` is called once by the process
-before workers start, and `libssh2_exit()` is called only after all workers
-have joined. A worker startup/runtime failure requests a coordinated stop of
-the remaining workers.
-
-When multiple workers are enabled, each log line is prefixed with
-`[worker N/TOTAL]`. The shutdown summary includes each worker's accepted
-client count. Enable `LOG_PERF=1` to collect independent per-worker relay
-counters. These features are experimental until the OpenWrt 24.10.7 MIPS VM
-matrix and physical-router tests have been completed; the QEMU result is not
-a substitute for a real MT7621 hardware benchmark.
+The R24–R27 experimental implementation created one upstream transport and
+one SSH authentication per worker. That could multiply logins when CPU
+auto-detection or WORKERS selected more than one worker. It is no longer the
+active policy: R28 and later enforce one upstream SSH session per process,
+and legacy WORKERS/-workers values are ignored for session creation. The
+planned replacement is a single-session pipeline with separate TLS and local
+I/O ownership; libssh2 session operations remain serialized by one SSH Owner.
 
 ## R25: MIPS TLS cipher preference and diagnostics
 

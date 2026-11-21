@@ -24,7 +24,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential clang flex bison gawk gettext git libncurses-dev libssl-dev libssh2-1-dev python3 rsync unzip wget zstd curl ca-certificates binutils file
-      - name: Run native relay-core regression tests
+      - name: Run native relay-core and SPSC regressions
         shell: bash
         run: |
           set -euo pipefail
@@ -36,6 +36,9 @@ jobs:
             -Wl,--gc-sections -o /tmp/http-parser-test \
             -lssh2 -lssl -lcrypto
           /tmp/http-parser-test | tee test-results/http-parser-test.log
+          gcc -std=c11 -O2 -g -Wall -Wextra -Werror -pthread \
+            tests/spsc_rb_test.c -o /tmp/spsc-rb-test
+          timeout 90s /tmp/spsc-rb-test | tee test-results/spsc-rb-test-native.log
       - name: Download OpenWrt 24.10.7 SDK
         shell: bash
         run: |
@@ -83,7 +86,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r27 MIPS ChaCha pthread-worker IPK, half-close helper and download benchmark
+      - name: Build r29 single-session MIPS IPK and SPSC/relay test helpers
         shell: bash
         run: |
           set -euo pipefail
@@ -108,6 +111,10 @@ jobs:
           readelf -h "$BIN" | tee "$GITHUB_WORKSPACE/test-results/elf-header.txt"
           CROSS_CC="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -path '*/bin/*-openwrt-linux-musl-gcc' -print | head -n 1)"
           test -n "$CROSS_CC"
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -pthread "$GITHUB_WORKSPACE/tests/spsc_rb_test.c" -o "$GITHUB_WORKSPACE/test-results/spsc-rb-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/spsc-rb-test"
+          file "$GITHUB_WORKSPACE/test-results/spsc-rb-test" | tee "$GITHUB_WORKSPACE/test-results/spsc-rb-test-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum spsc-rb-test > spsc-rb.sha256)
           "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror "$GITHUB_WORKSPACE/tests/socks_halfclose.c" -o "$GITHUB_WORKSPACE/test-results/socks-halfclose"
           chmod 0755 "$GITHUB_WORKSPACE/test-results/socks-halfclose"
           file "$GITHUB_WORKSPACE/test-results/socks-halfclose" | tee "$GITHUB_WORKSPACE/test-results/helper-file.txt"
@@ -133,6 +140,9 @@ jobs:
             test-results/halfclose.sha256
             test-results/socks-mt-download
             test-results/mt-download.sha256
+            test-results/spsc-rb-test
+            test-results/spsc-rb.sha256
+            test-results/spsc-rb-test-file.txt
             test-results/mt-helper-file.txt
             test-results/elf-header.txt
             test-results/helper-file.txt
@@ -203,16 +213,16 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/http_parser_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/http_parser_test.c tests/spsc_rb.h tests/spsc_rb_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
             echo "SDK artifact was built from different package or test sources."
             git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/socks_halfclose.c tests/socks_mt_download.c
             false
           fi
-          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256)
-          file test-results/passwall-ssh-core*.ipk test-results/socks-halfclose test-results/socks-mt-download
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256)
+          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r27' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r29' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
           readelf -h test-results/socks-mt-download | grep -q 'MIPS'
 
@@ -668,7 +678,8 @@ jobs:
 
           IPK="$(find "$GITHUB_WORKSPACE/test-results" -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
           scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            "$IPK" "$GITHUB_WORKSPACE/test-results/socks-halfclose" \
+            "$IPK" "$GITHUB_WORKSPACE/test-results/spsc-rb-test" \
+            "$GITHUB_WORKSPACE/test-results/socks-halfclose" \
             "$GITHUB_WORKSPACE/test-results/socks-mt-download" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
@@ -696,7 +707,7 @@ jobs:
             fail "guest opkg architecture is not mipsel_24kc"
           fi
 
-          echo "========== INSTALL R24 MIPS IPK =========="
+          echo "========== INSTALL R29 MIPS IPK =========="
           opkg update
           OPKG_RC=$?
           if [ "$OPKG_RC" -eq 0 ]; then
@@ -705,12 +716,24 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install MIPS package or runtime dependencies"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r27'; then
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r29'; then
             pass "opkg installed passwall-ssh-core r27 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
 
+          if [ -x "$LOG/spsc-rb-test" ] && cp "$LOG/spsc-rb-test" /usr/bin/spsc-rb-test; then
+            chmod 0755 /usr/bin/spsc-rb-test
+            if /usr/bin/spsc-rb-test >"$LOG/spsc-rb-test.log" 2>&1; then
+              cat "$LOG/spsc-rb-test.log"
+              pass "MIPS SPSC ring stress, pinned-span and uint32_t wraparound tests"
+            else
+              cat "$LOG/spsc-rb-test.log"
+              fail "MIPS SPSC ring test failed"
+            fi
+          else
+            fail "could not stage static MIPS SPSC test binary"
+          fi
           if [ "$STATUS" -eq 0 ]; then
             "$BIN" -h
             if [ "$?" -eq 0 ]; then
@@ -734,6 +757,7 @@ jobs:
           VERIFY_TLS=0
           MAX_CLIENTS=32
           IDLE_TIMEOUT=600
+          WORKERS=2
           LOG_BACKPRESSURE=1
           TCP_ENV
 
@@ -757,7 +781,7 @@ jobs:
           fi
 
           if [ "$STATUS" -eq 0 ]; then
-            "$BIN" -env "$LOG/tcp.env" -log "$LOG/tcp-ssh-core.log" \
+            "$BIN" -env "$LOG/tcp.env" -workers 4 -log "$LOG/tcp-ssh-core.log" \
               -log-backpressure 1 -log-perf 1 >"$LOG/tcp-stdout.log" 2>&1 &
             APP_PID=$!
             READY=0
@@ -770,6 +794,14 @@ jobs:
             done
             if [ "$READY" -eq 1 ]; then
               pass "MIPS TCP SSH authentication and SOCKS listener"
+              LISTENER_COUNT="$(grep -c "SOCKS5 Listening" "$LOG/tcp-ssh-core.log" 2>/dev/null || true)"
+              LOGIN_COUNT="$(grep -cF '[AUTH-DIAG] authentication accepted via password' "$LOG/tcp-ssh-core.log" 2>/dev/null || true)"
+              if grep -qF 'SSH_sessions=1 mode=single-session; legacy requested workers=4 (ignored to prevent multiple SSH logins)' "$LOG/tcp-ssh-core.log" &&
+                 [ "$LISTENER_COUNT" -eq 1 ] && [ "$LOGIN_COUNT" -eq 1 ]; then
+                pass "WORKERS=2 and -workers=4 still produce one listener and one SSH login"
+              else
+                fail "legacy worker options violated the one-session/one-login invariant"
+              fi
               if grep -qF '[AUTH-DIAG] authentication accepted via password' "$LOG/tcp-ssh-core.log" && \
                  grep -qF '[AUTH-DIAG] configured credential sizes: username=10 password=24 bytes' "$LOG/tcp-ssh-core.log"; then
                 pass "valid SSH password accepted; only redacted credential lengths were logged"
@@ -911,225 +943,6 @@ jobs:
               SPID="$(cat "$LOG/$LABEL-sampler.pid" 2>/dev/null)"
               [ -n "$SPID" ] && wait "$SPID" 2>/dev/null || true
             }
-            start_workers() {
-              COUNT="$1"; ENV_FILE="$2"; BASE_PORT="$3"; TAG="$4"
-              : > "$LOG/active-worker-pids"; I=0
-              while [ "$I" -lt "$COUNT" ]; do
-                PORT=$((BASE_PORT + I))
-                WORKER_ENV="$LOG/$TAG-$COUNT-sessions-worker-$I.env"
-                WORKER_LOG="$LOG/$TAG-$COUNT-sessions-worker-$I.log"
-                WORKER_STDOUT="$LOG/$TAG-$COUNT-sessions-worker-$I-stdout.log"
-                sed "s|^SOCKS_ADDR=.*|SOCKS_ADDR=127.0.0.1:$PORT|" "$ENV_FILE" > "$WORKER_ENV"
-                rm -f "$WORKER_LOG" "$WORKER_STDOUT"
-                "$BIN" -env "$WORKER_ENV" -log "$WORKER_LOG" \
-                  -log-backpressure 1 -log-perf 1 >"$WORKER_STDOUT" 2>&1 &
-                P=$!; echo "$P" >> "$LOG/active-worker-pids"
-                READY=0; J=0
-                while [ "$J" -lt 90 ]; do
-                  if grep -q "SOCKS5 Listening" "$WORKER_LOG" 2>/dev/null; then READY=1; break; fi
-                  if ! kill -0 "$P" 2>/dev/null; then break; fi
-                  J=$((J + 1)); sleep 1
-                done
-                if [ "$READY" -ne 1 ]; then
-                  echo "Worker $I failed on port $PORT"
-                  cat "$WORKER_STDOUT" "$WORKER_LOG" 2>/dev/null || true
-                  return 1
-                fi
-                echo "WORKER_READY tag=$TAG index=$I pid=$P port=$PORT"
-                I=$((I + 1))
-              done
-              return 0
-            }
-            stop_workers() {
-              if [ -f "$LOG/active-worker-pids" ]; then
-                while IFS= read -r P; do [ -n "$P" ] && kill -TERM "$P" 2>/dev/null || true; done < "$LOG/active-worker-pids"
-                while IFS= read -r P; do [ -n "$P" ] && wait "$P" 2>/dev/null || true; done < "$LOG/active-worker-pids"
-              fi
-              rm -f "$LOG/active-worker-pids"
-            }
-            run_worker_benchmark() {
-              COUNT="$1"; ENV_FILE="$2"; BASE_PORT="$3"; TAG="$4"
-              LABEL="$TAG-parallel-$COUNT-sessions"
-              echo "========== $LABEL: 4 pthread clients over $COUNT independent SSH sessions =========="
-              if ! start_workers "$COUNT" "$ENV_FILE" "$BASE_PORT" "$TAG"; then
-                fail "$TAG $COUNT-session worker pool failed"; stop_workers; return
-              fi
-              cp "$LOG/active-worker-pids" "$LOG/$LABEL-pids"
-              /usr/bin/socks-mt-download 4 "$COUNT" "$BASE_PORT" "$EXPECTED_BYTES" "$EXPECTED_SHA" >"$LOG/$LABEL-download.log" 2>&1 &
-              MT_PID=$!
-              echo "$MT_PID" >> "$LOG/$LABEL-pids"
-              start_sampler "$LABEL" "$LOG/$LABEL-pids"
-              wait "$MT_PID"
-              RUN_RC=$?
-              stop_sampler "$LABEL"
-              cat "$LOG/$LABEL-download.log"
-              if [ "$RUN_RC" -eq 0 ]; then
-                pass "4 pthread downloads streamed and SHA-256 verified over $COUNT independent $TAG SSH sessions"
-              else
-                fail "$TAG $COUNT-session download or streamed SHA-256 verification failed"
-              fi
-              stop_workers
-            }
-
-            run_thread_benchmark() {
-              COUNT="$1"; ENV_FILE="$2"; BASE_PORT="$3"; TAG="$4"
-              LABEL="$TAG-inprocess-$COUNT-workers"
-              CORE_LOG="$LOG/$LABEL-core.log"
-              CORE_STDOUT="$LOG/$LABEL-stdout.log"
-              PID_FILE="$LOG/$LABEL-pids"
-              rm -f "$CORE_LOG" "$CORE_STDOUT" "$PID_FILE"
-              echo "========== $LABEL: one PID with $COUNT SSH worker loops =========="
-              RUN_ENV="$LOG/$LABEL.env"
-              if [ "$COUNT" -eq 1 ]; then
-                sed "/^MAX_CLIENTS=/a WORKERS=1" "$ENV_FILE" > "$RUN_ENV"
-                "$BIN" -env "$RUN_ENV" -log "$CORE_LOG" \
-                  -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
-              elif [ "$COUNT" -eq 2 ]; then
-                sed "/^MAX_CLIENTS=/a WORKERS=$COUNT" "$ENV_FILE" > "$RUN_ENV"
-                "$BIN" -env "$RUN_ENV" -log "$CORE_LOG" \
-                  -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
-              else
-                RUN_ENV="$LOG/$LABEL.env"
-                # Env requests two workers; CLI must override it to four.
-                sed "/^MAX_CLIENTS=/a WORKERS=2" "$ENV_FILE" > "$RUN_ENV"
-                "$BIN" -env "$RUN_ENV" -workers "$COUNT" -log "$CORE_LOG" \
-                  -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
-              fi
-              CORE_PID=$!
-              echo "$CORE_PID" > "$PID_FILE"
-              READY=0; J=0
-              while [ "$J" -lt 90 ]; do
-                LISTENERS="$(grep -c "SOCKS5 Listening" "$CORE_LOG" 2>/dev/null || true)"
-                if [ "$LISTENERS" -ge "$COUNT" ]; then READY=1; break; fi
-                if ! kill -0 "$CORE_PID" 2>/dev/null; then break; fi
-                J=$((J + 1)); sleep 1
-              done
-              if [ "$READY" -ne 1 ]; then
-                fail "$TAG in-process $COUNT-worker core failed to bind all SO_REUSEPORT listeners"
-                cat "$CORE_STDOUT" "$CORE_LOG" 2>/dev/null || true
-                kill -TERM "$CORE_PID" 2>/dev/null || true
-                wait "$CORE_PID" 2>/dev/null || true
-                return 1
-              fi
-              THREADS="$(awk '/^Threads:/ {print $2}' "/proc/$CORE_PID/status" 2>/dev/null)"
-              echo "INPROCESS pid=$CORE_PID configured_workers=$COUNT proc_threads=$THREADS listeners=$LISTENERS"
-              case "$THREADS" in
-                ''|*[!0-9]*)
-                  fail "$TAG in-process thread count unavailable from /proc"
-                  kill -TERM "$CORE_PID" 2>/dev/null || true
-                  wait "$CORE_PID" 2>/dev/null || true
-                  return 1
-                  ;;
-              esac
-              EXPECTED_THREADS="$COUNT"
-              [ "$COUNT" -gt 1 ] && EXPECTED_THREADS=$((COUNT + 1))
-              if [ "$THREADS" -lt "$EXPECTED_THREADS" ]; then
-                fail "$TAG worker count not reflected in /proc Threads"
-                kill -TERM "$CORE_PID" 2>/dev/null || true
-                wait "$CORE_PID" 2>/dev/null || true
-                return 1
-              fi
-              if [ "$COUNT" -eq 1 ]; then
-                pass "one PID runs the baseline single-thread SSH event loop (proc Threads=$THREADS)"
-              else
-                pass "one PID runs $COUNT pthread workers (proc Threads=$THREADS), with $COUNT SO_REUSEPORT listeners"
-              fi
-
-              /usr/bin/socks-mt-download 16 1 "$BASE_PORT" "$EXPECTED_BYTES" "$EXPECTED_SHA" \
-                >"$LOG/$LABEL-download.log" 2>&1 &
-              MT_PID=$!
-              echo "$MT_PID" >> "$PID_FILE"
-              start_sampler "$LABEL" "$PID_FILE"
-              wait "$MT_PID"
-              RUN_RC=$?
-              stop_sampler "$LABEL"
-              cat "$LOG/$LABEL-download.log"
-              kill -TERM "$CORE_PID" 2>/dev/null || true
-              wait "$CORE_PID"
-              CORE_RC=$?
-              ACCEPTED="$(awk -F'accepted_total=' '/accepted_total=/ {split($2,a,/[^0-9]/); sum+=a[1]} END {print sum+0}' "$CORE_LOG")"
-              ACTIVE_WORKERS="$(awk -F'accepted_total=' '/accepted_total=/ {split($2,a,/[^0-9]/); if (a[1] > 0) active++} END {print active+0}' "$CORE_LOG")"
-              REQUIRED_ACTIVE="$COUNT"
-              [ "$COUNT" -eq 4 ] && REQUIRED_ACTIVE=3
-              echo "INPROCESS_ACCEPTED tag=$TAG workers=$COUNT total=$ACCEPTED active_workers=$ACTIVE_WORKERS required_active=$REQUIRED_ACTIVE core_exit=$CORE_RC"
-              if [ "$RUN_RC" -eq 0 ] && [ "$CORE_RC" -eq 0 ] && \
-                 [ "$ACCEPTED" -ge 16 ] && [ "$ACTIVE_WORKERS" -ge "$REQUIRED_ACTIVE" ]; then
-                pass "one-process $COUNT-worker $TAG transfer: 16 pthread clients, exact bytes and SHA-256; accepted=$ACCEPTED active_workers=$ACTIVE_WORKERS"
-              else
-                fail "$TAG in-process $COUNT-worker download or accepted-client accounting failed"
-                cat "$CORE_STDOUT" "$CORE_LOG" 2>/dev/null || true
-                return 1
-              fi
-              return 0
-            }
-
-            run_auto_thread_benchmark() {
-              ENV_FILE="$1"; BASE_PORT="$2"; TAG="$3"
-              LABEL="$TAG-inprocess-auto"
-              CORE_LOG="$LOG/$LABEL-core.log"
-              CORE_STDOUT="$LOG/$LABEL-stdout.log"
-              PID_FILE="$LOG/$LABEL-pids"
-              RUN_ENV="$LOG/$LABEL.env"
-              rm -f "$CORE_LOG" "$CORE_STDOUT" "$PID_FILE"
-              sed '/^[[:space:]]*WORKERS[[:space:]]*=/d' "$ENV_FILE" > "$RUN_ENV"
-              echo "========== $LABEL: CPU-based automatic worker selection =========="
-              "$BIN" -env "$RUN_ENV" -log "$CORE_LOG" \
-                -log-backpressure 1 -log-perf 1 >"$CORE_STDOUT" 2>&1 &
-              CORE_PID=$!
-              echo "$CORE_PID" > "$PID_FILE"
-              READY=0; J=0; AUTO_INFO=""
-              while [ "$J" -lt 90 ]; do
-                AUTO_INFO="$(sed -n 's/.*CPU topology: detected=\([0-9][0-9]*\) selected=\([0-9][0-9]*\) mode=auto max=4.*/\1 \2/p' "$CORE_LOG" 2>/dev/null | head -n 1)"
-                if [ -n "$AUTO_INFO" ]; then
-                  set -- $AUTO_INFO
-                  AUTO_DETECTED="$1"; AUTO_EXPECTED="$2"
-                  LISTENERS="$(grep -c "SOCKS5 Listening" "$CORE_LOG" 2>/dev/null || true)"
-                  if [ "$LISTENERS" -ge "$AUTO_EXPECTED" ]; then READY=1; break; fi
-                fi
-                if ! kill -0 "$CORE_PID" 2>/dev/null; then break; fi
-                J=$((J + 1)); sleep 1
-              done
-              if [ "$READY" -ne 1 ]; then
-                fail "$TAG automatic worker selection did not start the detected worker pool"
-                cat "$CORE_STDOUT" "$CORE_LOG" 2>/dev/null || true
-                kill -TERM "$CORE_PID" 2>/dev/null || true
-                wait "$CORE_PID" 2>/dev/null || true
-                return 1
-              fi
-              set -- $AUTO_INFO
-              AUTO_DETECTED="$1"; AUTO_EXPECTED="$2"
-              AUTO_CALCULATED="$AUTO_DETECTED"
-              [ "$AUTO_CALCULATED" -gt 4 ] && AUTO_CALCULATED=4
-              THREADS="$(awk '/^Threads:/ {print $2}' "/proc/$CORE_PID/status" 2>/dev/null)"
-              EXPECTED_THREADS="$AUTO_EXPECTED"
-              [ "$AUTO_EXPECTED" -gt 1 ] && EXPECTED_THREADS=$((AUTO_EXPECTED + 1))
-              if [ "$AUTO_DETECTED" -lt 1 ] || [ "$AUTO_EXPECTED" -ne "$AUTO_CALCULATED" ] || \
-                 [ "$LISTENERS" -ne "$AUTO_EXPECTED" ] || [ "$THREADS" -lt "$EXPECTED_THREADS" ]; then
-                fail "$TAG automatic CPU-to-worker mapping or process thread count is inconsistent"
-                cat "$CORE_STDOUT" "$CORE_LOG" 2>/dev/null || true
-                kill -TERM "$CORE_PID" 2>/dev/null || true
-                wait "$CORE_PID" 2>/dev/null || true
-                return 1
-              fi
-              echo "AUTO_WORKERS detected_cpus=$AUTO_DETECTED selected_workers=$AUTO_EXPECTED threads=$THREADS listeners=$LISTENERS"
-              /usr/bin/socks-mt-download 4 1 "$BASE_PORT" "$EXPECTED_BYTES" "$EXPECTED_SHA" \
-                >"$LOG/$LABEL-download.log" 2>&1 &
-              MT_PID=$!
-              wait "$MT_PID"; RUN_RC=$?
-              cat "$LOG/$LABEL-download.log"
-              kill -TERM "$CORE_PID" 2>/dev/null || true
-              wait "$CORE_PID"; CORE_RC=$?
-              ACCEPTED="$(awk -F'accepted_total=' '/accepted_total=/ {split($2,a,/[^0-9]/); sum+=a[1]} END {print sum+0}' "$CORE_LOG")"
-              if [ "$RUN_RC" -eq 0 ] && [ "$CORE_RC" -eq 0 ] && [ "$ACCEPTED" -ge 4 ]; then
-                pass "$TAG automatic $AUTO_EXPECTED-worker pool selected from $AUTO_DETECTED available CPU(s); 4 transfers verified"
-              else
-                fail "$TAG automatic worker-pool transfer or accepted-client accounting failed"
-                cat "$CORE_STDOUT" "$CORE_LOG" 2>/dev/null || true
-                return 1
-              fi
-              return 0
-            }
-
             if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
               echo "$APP_PID" > "$LOG/tcp-single-core-pids"
               /usr/bin/socks-mt-download 4 1 1080 "$EXPECTED_BYTES" "$EXPECTED_SHA" >"$LOG/tcp-single-core-download.log" 2>&1 &
@@ -1150,30 +963,8 @@ jobs:
             fi
           fi
 
-          if [ "$STATUS" -eq 0 ]; then
-            if [ -n "$APP_PID" ]; then
-              kill -TERM "$APP_PID" 2>/dev/null || true
-              wait "$APP_PID" 2>/dev/null || true
-              APP_PID=
-            fi
-            run_worker_benchmark 2 "$LOG/tcp.env" 1080 tcp
-            if [ "$STATUS" -eq 0 ]; then run_worker_benchmark 4 "$LOG/tcp.env" 1080 tcp; fi
-            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 1 "$LOG/tcp.env" 1080 tcp || true; fi
-            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 2 "$LOG/tcp.env" 1080 tcp || true; fi
-            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 4 "$LOG/tcp.env" 1080 tcp || true; fi
-            if [ "$STATUS" -eq 0 ]; then run_auto_thread_benchmark "$LOG/tcp.env" 1080 tcp || true; fi
-          fi
-
-          echo "========== TCP MULTI-WORKER LOGS =========="
-          for F in "$LOG"/tcp-single-core-download.log "$LOG"/tcp-single-core-4clients-sampler.log \
-                   "$LOG"/tcp-parallel-2-sessions-download.log "$LOG"/tcp-parallel-2-sessions-sampler.log \
-                   "$LOG"/tcp-parallel-4-sessions-download.log "$LOG"/tcp-parallel-4-sessions-sampler.log \
-                   "$LOG"/tcp-ssh-core.log "$LOG"/tcp-*-sessions-worker-*.log "$LOG"/tcp-*-sessions-worker-*-stdout.log \
-                   "$LOG"/tcp-inprocess-*-workers-*; do
-            [ -f "$F" ] || continue
-            echo "----- $F -----"; cat "$F"
-          done
-
+          echo "========== TCP SINGLE-SESSION RELAY LOG =========="
+          cat "$LOG/tcp-ssh-core.log" 2>/dev/null || true
           if [ -n "$APP_PID" ]; then
             kill -TERM "$APP_PID" 2>/dev/null || true
             wait "$APP_PID" 2>/dev/null || true
@@ -1181,7 +972,7 @@ jobs:
           fi
 
           if [ "$STATUS" -eq 0 ]; then
-            echo "========== TLS/SNI PTHREAD LOAD TEST: ONE SSH SESSION =========="
+            echo "========== TLS/SNI SINGLE-SESSION MULTI-CLIENT TEST =========="
             sed -e 's|^TRANSPORT=.*$|TRANSPORT=TLS|' \
                 -e 's|^HOST_PORT=.*$|HOST_PORT=8443|' \
                 -e 's|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:1080|' \
@@ -1229,22 +1020,10 @@ jobs:
             fi
             kill -TERM "$TLS_BENCH_PID" 2>/dev/null || true
             wait "$TLS_BENCH_PID" 2>/dev/null || true
-            run_worker_benchmark 2 "$LOG/bench-tls.env" 1080 tls
-            if [ "$STATUS" -eq 0 ]; then run_worker_benchmark 4 "$LOG/bench-tls.env" 1080 tls; fi
-            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 1 "$LOG/bench-tls.env" 1080 tls || true; fi
-            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 2 "$LOG/bench-tls.env" 1080 tls || true; fi
-            if [ "$STATUS" -eq 0 ]; then run_thread_benchmark 4 "$LOG/bench-tls.env" 1080 tls || true; fi
           fi
 
-          echo "========== TLS/SNI MULTI-WORKER LOGS =========="
-          for F in "$LOG"/tls-single-core-download.log "$LOG"/tls-single-core-4clients-sampler.log \
-                   "$LOG"/tls-parallel-2-sessions-download.log "$LOG"/tls-parallel-2-sessions-sampler.log \
-                   "$LOG"/tls-parallel-4-sessions-download.log "$LOG"/tls-parallel-4-sessions-sampler.log \
-                   "$LOG"/tls-single-core.log "$LOG"/tls-*-sessions-worker-*.log "$LOG"/tls-*-sessions-worker-*-stdout.log \
-                   "$LOG"/tls-inprocess-*-workers-*; do
-            [ -f "$F" ] || continue
-            echo "----- $F -----"; cat "$F"
-          done
+          echo "========== TLS/SNI SINGLE-SESSION LOG =========="
+          cat "$LOG/tls-single-core.log" 2>/dev/null || true
 
           if [ "$STATUS" -eq 0 ]; then
             echo "========== TLS HALF-CLOSE AND FULL-DUPLEX =========="

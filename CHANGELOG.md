@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a standalone SPSC byte-ring primitive for the planned single-session I/O pipeline. Use monotonically increasing uint32_t head/tail counters, power-of-two capacity <= 2^30, acquire/release publication, no shared used field, and 64-byte separation between producer and consumer indices.
+- Add native tests for capacity validation, full/empty and physical wrap behavior, pinned read-span stability during producer appends, irregular chunk sizes, byte integrity, and uint32_t counter rollover.
+- Cross-compile the SPSC test with the OpenWrt 24.10.7 mipsel_24kc SDK and execute the static binary in the MT7621 QEMU guest.
+- Correct package metadata to describe the active one-session SSH relay rather than the historical independent-session worker implementation.
+- Enforce exactly one upstream SSH session and one authentication per process (R28); legacy WORKERS/-workers values remain accepted only for launcher compatibility.
+- Bump the OpenWrt package release to r29.
+
 - Select the default pthread worker count automatically from CPUs available to the process: respect Linux CPU affinity when available, fall back to the online CPU count, and cap the pool at four workers. Keep explicit `WORKERS=1..4` and `-workers 1..4` overrides; add synthetic 1/2/3/4/8/16-CPU regression coverage and a guest test of the automatic default.
 - Bump the OpenWrt package release to r27.
 - Extend `[PERF]` with C2S bytes received from local clients, bytes accepted by libssh2, C2S occupancy, remote-EOF relay counts, zero-window waits after remote EOF, and WINDOW_ADJUST/input wakeup counts.

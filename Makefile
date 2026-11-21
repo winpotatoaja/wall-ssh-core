@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=28
+PKG_RELEASE:=29
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1
@@ -19,13 +19,13 @@ endif
 define Package/passwall-ssh-core
   SECTION:=net
   CATEGORY:=Network
-  TITLE:=Multi-worker non-blocking libssh2 SOCKS5 client core
+  TITLE:=Single-session non-blocking libssh2 SOCKS5 relay core
   DEPENDS:=+libssh2 +libopenssl
 endef
 
 define Package/passwall-ssh-core/description
- A pthread-based multi-worker SSH client core with independent libssh2 sessions
- and a SO_REUSEPORT SOCKS5 listener group.
+ A single-session libssh2 SSH client core that multiplexes local SOCKS5 clients
+ over direct-tcpip channels. Auxiliary multithreaded I/O is being developed separately.
 endef
 
 define Build/Prepare
