@@ -134,6 +134,11 @@ Implementasi yang sudah ada pada branch ini:
 - Pool awal menggunakan **1 I/O worker** sebagai baseline. Ini berbeda dari
   konfigurasi worker proses lama dan bukan berarti empat I/O worker sudah aktif.
 
+**Perbaikan source terbaru (validasi masih menunggu):**
+- Completion yang ditolak tracker karena task tidak dikenal (`ENOENT`) diperlakukan sebagai duplikat/stale dan diabaikan tanpa melepas reference lagi.
+- Completion dengan identitas yang tidak cocok (`EPROTO`/error tracker lain), client-generation yang tidak ditemukan setelah tracker menerima task, kegagalan release lifetime, atau task tanpa arah in-flight yang cocok kini menjadi invariant failure. Drain mengembalikan error; SSH Owner menghentikan relay dengan exit status gagal, bukan melanjutkan dengan state yang tidak konsisten.
+- Jalur drain saat shutdown/startup juga memeriksa hasil invariant; status validasi tetap terbuka sampai native/MIPS/QEMU lulus.
+
 **Audit dan validasi yang masih wajib:**
 - Menuntaskan audit semua jalur completion: sukses, partial write, EAGAIN,
   error terminal, completion stale/duplikat, dan identitas client yang tidak ditemukan.
