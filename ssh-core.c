@@ -3162,7 +3162,8 @@ static void drain_io_worker_completions(int epfd,
                 if (c->fd >= 0 && c->state == ST_RELAY) {
                     if ((c->hup_pending || c->rdhup_pending) &&
                         !c->client_eof && rb_free_space(&c->c2s) > 0U) {
-                        handle_client_io(epfd, c, EPOLLIN | EPOLLHUP);
+                        handle_client_io(epfd, c, EPOLLIN |
+                            (c->hup_pending ? EPOLLHUP : EPOLLRDHUP));
                     } else {
                         uint32_t want = client_rdhup_flag(c);
                         if (!c->client_eof && !c->c2s_worker_inflight &&
