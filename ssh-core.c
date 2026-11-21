@@ -2577,7 +2577,8 @@ static int flush_ctrl_send(int epfd, client_conn_t *c) {
         want = EPOLLIN | client_rdhup_flag(c);
     } else {
         want = (c->epoll_events & ~(uint32_t)EPOLLOUT);
-        if (c->state == ST_RELAY && c->s2c.used > 0) want |= EPOLLOUT;
+        if (c->state == ST_RELAY && c->s2c.used > 0 &&
+            !c->s2c_worker_inflight) want |= EPOLLOUT;
     }
     if (!c->hup_pending && !c->client_dead) {
         update_client_epoll(epfd, c, want);
@@ -2849,6 +2850,15 @@ static int submit_s2c_worker_write(io_worker_pool_t *pool,
     return 0;
 }
 
+static int flush_s2c_to_client(int epfd, client_conn_t *c) {
+    if (!c || c->fd < 0 || c->ctrl_len > 0U || c->s2c.used == 0U)
+        return 0;
+    if (c->s2c_worker_inflight) return 0;
+    int submit_rc = submit_s2c_worker_write(g_io_pool, g_io_tracker, c);
+    if (submit_rc == 0) return 0;
+    return send_from_rb(c->fd, &c->s2c, 0) < 0 ? -1 : 0;
+}
+
 static int drain_socks_req_buf(client_conn_t *c, int *eof_out) {
     *eof_out = 0;
     while (c->req_len < sizeof(c->req_buf)) {
@@ -3087,7 +3097,7 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
             if (submit_rc != 0) {
                 /* Keep the original Owner send as a bounded backpressure fallback. */
                 size_t s2c_before = c->s2c.used;
-                if (send_from_rb(c->fd, &c->s2c, 0) < 0) {
+                if (flush_s2c_to_client(epfd, c) < 0) {
                     c->client_dead = 1;
                     c->client_reset = 1;
                     c->client_eof = 1;
@@ -3292,7 +3302,8 @@ static void drain_io_worker_completions(int epfd,
                         if (!c->client_eof && !c->c2s_worker_inflight &&
                             rb_free_space(&c->c2s) > 0U)
                             want |= EPOLLIN;
-                        if (c->s2c.used > 0U || c->ctrl_len > 0U)
+                        if ((c->s2c.used > 0U && !c->s2c_worker_inflight) ||
+                            c->ctrl_len > 0U)
                             want |= EPOLLOUT;
                         update_client_epoll(epfd, c, want);
                     }
@@ -3460,7 +3471,8 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
     if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
         uint32_t want = client_rdhup_flag(c);
         if (!c->client_eof && rb_free_space(&c->c2s) > 0) want |= EPOLLIN;
-        if (c->s2c.used > 0 || c->ctrl_len > 0) want |= EPOLLOUT;
+        if ((c->s2c.used > 0 && !c->s2c_worker_inflight) ||
+            c->ctrl_len > 0) want |= EPOLLOUT;
         update_client_epoll(epfd, c, want);
     }
     return 1;
@@ -3771,7 +3783,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 return 1;
             }
             int send_failed = c->fd >= 0 && c->ctrl_len == 0 &&
-                              send_from_rb(c->fd, &c->s2c, 0) < 0;
+                              flush_s2c_to_client(epfd, c) < 0;
             if (send_failed) c->client_reset = 1;
             if (c->abort_on_pending || send_failed) {
                 c->abort_on_pending = 0;
@@ -4149,7 +4161,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         c->last_activity_ms=now_ms();
                         any_progress = 1;
                         int client_send_failed = c->fd >= 0 && c->ctrl_len == 0 &&
-                                                 send_from_rb(c->fd, &c->s2c, 0) < 0;
+                                                 flush_s2c_to_client(epfd, c) < 0;
                         if (client_send_failed) c->client_reset = 1;
                         if (c->abort_on_pending || client_send_failed) {
                             c->abort_on_pending = 0;
