@@ -246,7 +246,9 @@ typedef struct {
     uint64_t tls_rx_calls, tls_rx_bytes, tls_rx_eagain;
     uint64_t ssh_rx_bytes, ssh_rx_eagain;
     uint64_t s2c_read_calls, s2c_read_bytes, s2c_read_eagain;
-    uint64_t socks_tx_calls, socks_tx_bytes, socks_tx_eagain;
+    uint64_t socks_tx_calls, socks_tx_bytes, socks_tx_eagain, socks_tx_partial;
+    uint64_t epoll_ctl_add_fail, epoll_ctl_mod_fail;
+    int epoll_ctl_last_errno;
     uint64_t s2c_full, libssh2_eagain, pending_blocks;
 } perf_stats_t;
 
@@ -722,8 +724,23 @@ static int load_env(const char *path, app_cfg_t *cfg) {
         if (!strcmp(k,"TRANSPORT")) snprintf(cfg->transport,sizeof(cfg->transport),"%s",v);
         else if (!strcmp(k,"HOST")) snprintf(cfg->host,sizeof(cfg->host),"%s",v);
         else if (!strcmp(k,"HOST_PORT")) snprintf(cfg->host_port,sizeof(cfg->host_port),"%s",v);
-        else if (!strcmp(k,"USERNAME")) snprintf(cfg->username,sizeof(cfg->username),"%s",v);
-        else if (!strcmp(k,"PASSWORD")) snprintf(cfg->password,sizeof(cfg->password),"%s",v);
+        else if (!strcmp(k,"USERNAME")) {
+            if (strlen(v) >= sizeof(cfg->username)) {
+                log_red("USERNAME melebihi batas %zu byte; nilai ditolak tanpa dipotong",
+                        sizeof(cfg->username) - 1U);
+                fclose(f);
+                return -1;
+            }
+            snprintf(cfg->username,sizeof(cfg->username),"%s",v);
+        } else if (!strcmp(k,"PASSWORD")) {
+            if (strlen(v) >= sizeof(cfg->password)) {
+                log_red("PASSWORD melebihi batas %zu byte; nilai ditolak tanpa dipotong",
+                        sizeof(cfg->password) - 1U);
+                fclose(f);
+                return -1;
+            }
+            snprintf(cfg->password,sizeof(cfg->password),"%s",v);
+        }
         else if (!strcmp(k,"PROXY")) snprintf(cfg->proxy,sizeof(cfg->proxy),"%s",v);
         else if (!strcmp(k,"PROXY_PORT")) snprintf(cfg->proxy_port,sizeof(cfg->proxy_port),"%s",v);
         else if (!strcmp(k,"SNI")) snprintf(cfg->sni,sizeof(cfg->sni),"%s",v);
@@ -1210,14 +1227,32 @@ static void perf_log_interval(long long now) {
     if (span_ms < 1000) return;
 
     unsigned int relay_clients = 0;
-    for (const client_conn_t *c = g_clients; c; c = c->next)
-        if (c->state == ST_RELAY) relay_clients++;
+    unsigned int s2c_nonempty_clients = 0;
+    unsigned int epollout_armed_clients = 0;
+    unsigned int s2c_epollout_missing = 0;
+    size_t s2c_used_sum = 0;
+    size_t s2c_used_max = 0;
+    for (const client_conn_t *c = g_clients; c; c = c->next) {
+        if (c->state != ST_RELAY) continue;
+        relay_clients++;
+        s2c_used_sum += c->s2c.used;
+        if (c->s2c.used > s2c_used_max) s2c_used_max = c->s2c.used;
+        if (c->s2c.used > 0) {
+            s2c_nonempty_clients++;
+            if (c->fd >= 0 && (c->epoll_events & EPOLLOUT))
+                epollout_armed_clients++;
+            else if (c->fd >= 0 && !c->hup_pending && !c->client_dead)
+                s2c_epollout_missing++;
+        }
+    }
 
     log_raw("[PERF] span_ms=%lld clients=%d relay=%u "
             "ep_calls=%llu ep_wait_ms=%llu ep_wait_max_ms=%llu ep_wakeups=%llu ep_timeouts=%llu "
             "tls_rx_calls=%llu tls_rx_bytes=%llu tls_rx_eagain=%llu ssh_rx_bytes=%llu ssh_rx_eagain=%llu "
             "s2c_read_calls=%llu s2c_read_bytes=%llu s2c_read_eagain=%llu "
-            "socks_tx_calls=%llu socks_tx_bytes=%llu socks_tx_eagain=%llu "
+            "socks_tx_calls=%llu socks_tx_bytes=%llu socks_tx_eagain=%llu socks_tx_partial=%llu "
+            "epoll_ctl_add_fail=%llu epoll_ctl_mod_fail=%llu epoll_ctl_errno=%d "
+            "s2c_used_sum=%zu s2c_used_max=%zu s2c_nonempty=%u epollout_armed=%u s2c_epollout_missing=%u "
             "s2c_full=%llu libssh2_eagain=%llu pend_blk=%llu",
             span_ms, g_client_count, relay_clients,
             (unsigned long long)g_perf_stats.epoll_calls,
@@ -1236,6 +1271,12 @@ static void perf_log_interval(long long now) {
             (unsigned long long)g_perf_stats.socks_tx_calls,
             (unsigned long long)g_perf_stats.socks_tx_bytes,
             (unsigned long long)g_perf_stats.socks_tx_eagain,
+            (unsigned long long)g_perf_stats.socks_tx_partial,
+            (unsigned long long)g_perf_stats.epoll_ctl_add_fail,
+            (unsigned long long)g_perf_stats.epoll_ctl_mod_fail,
+            g_perf_stats.epoll_ctl_last_errno,
+            s2c_used_sum, s2c_used_max, s2c_nonempty_clients,
+            epollout_armed_clients, s2c_epollout_missing,
             (unsigned long long)g_perf_stats.s2c_full,
             (unsigned long long)g_perf_stats.libssh2_eagain,
             (unsigned long long)g_perf_stats.pending_blocks);
@@ -1959,6 +2000,21 @@ static ssize_t ssh_send_cb(libssh2_socket_t sock, const void *buffer, size_t len
     return r < 0 ? -errno : 0;
 }
 
+static int auth_method_offered(const char *methods, const char *wanted) {
+    if (!methods || !wanted || !*wanted) return 0;
+    size_t wanted_len = strlen(wanted);
+    const char *p = methods;
+    while (*p) {
+        const char *end = strchr(p, ',');
+        size_t token_len = end ? (size_t)(end - p) : strlen(p);
+        if (token_len == wanted_len && memcmp(p, wanted, wanted_len) == 0)
+            return 1;
+        if (!end) break;
+        p = end + 1;
+    }
+    return 0;
+}
+
 static void kbd_auth_cb(const char *name, int name_len, const char *instruction, int instruction_len,
                         int num_prompts, const LIBSSH2_USERAUTH_KBDINT_PROMPT *prompts,
                         LIBSSH2_USERAUTH_KBDINT_RESPONSE *responses, void **abstract) {
@@ -2322,10 +2378,16 @@ static void update_client_epoll(int epfd, client_conn_t *c, uint32_t want_ev) {
         if (epoll_ctl(epfd, EPOLL_CTL_ADD, c->fd, &ev) == 0) {
             c->in_epoll = 1;
             c->epoll_events = want_ev;
+        } else if (g_log_perf) {
+            g_perf_stats.epoll_ctl_add_fail++;
+            g_perf_stats.epoll_ctl_last_errno = errno;
         }
     } else if (c->epoll_events != want_ev) {
         if (epoll_ctl(epfd, EPOLL_CTL_MOD, c->fd, &ev) == 0) {
             c->epoll_events = want_ev;
+        } else if (g_log_perf) {
+            g_perf_stats.epoll_ctl_mod_fail++;
+            g_perf_stats.epoll_ctl_last_errno = errno;
         }
     }
 }
@@ -2553,7 +2615,10 @@ static int send_from_rb(int fd, rb_t *r, int keep_pos) {
         if (n > 0) {
             if (g_log_perf) g_perf_stats.socks_tx_bytes += (uint64_t)n;
             if (rb_commit_read(r, (size_t)n, keep_pos) < 0) return -1;
-            if ((size_t)n < avail) break;
+            if ((size_t)n < avail) {
+                if (g_log_perf) g_perf_stats.socks_tx_partial++;
+                break;
+            }
         } else if (n < 0 && errno == EINTR) {
             continue;
         } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
@@ -4176,8 +4241,21 @@ static int core_worker_run(int argc, char **argv) {
         else if (strcmp(argv[i], "-transport") == 0 && i + 1 < argc) snprintf(cfg.transport, sizeof(cfg.transport), "%s", argv[++i]);
         else if (strcmp(argv[i], "-host") == 0 && i + 1 < argc) snprintf(cfg.host, sizeof(cfg.host), "%s", argv[++i]);
         else if (strcmp(argv[i], "-port") == 0 && i + 1 < argc) snprintf(cfg.host_port, sizeof(cfg.host_port), "%s", argv[++i]);
-        else if (strcmp(argv[i], "-user") == 0 && i + 1 < argc) snprintf(cfg.username, sizeof(cfg.username), "%s", argv[++i]);
-        else if (strcmp(argv[i], "-pass") == 0 && i + 1 < argc) snprintf(cfg.password, sizeof(cfg.password), "%s", argv[++i]);
+        else if (strcmp(argv[i], "-user") == 0 && i + 1 < argc) {
+            const char *value = argv[++i];
+            if (strlen(value) >= sizeof(cfg.username)) {
+                log_red("-user melebihi batas %zu byte", sizeof(cfg.username) - 1U);
+                return 1;
+            }
+            snprintf(cfg.username, sizeof(cfg.username), "%s", value);
+        } else if (strcmp(argv[i], "-pass") == 0 && i + 1 < argc) {
+            const char *value = argv[++i];
+            if (strlen(value) >= sizeof(cfg.password)) {
+                log_red("-pass melebihi batas %zu byte", sizeof(cfg.password) - 1U);
+                return 1;
+            }
+            snprintf(cfg.password, sizeof(cfg.password), "%s", value);
+        }
         else if (strcmp(argv[i], "-proxy") == 0 && i + 1 < argc) snprintf(cfg.proxy, sizeof(cfg.proxy), "%s", argv[++i]);
         else if (strcmp(argv[i], "-proxy-port") == 0 && i + 1 < argc) snprintf(cfg.proxy_port, sizeof(cfg.proxy_port), "%s", argv[++i]);
         else if (strcmp(argv[i], "-sni") == 0 && i + 1 < argc) snprintf(cfg.sni, sizeof(cfg.sni), "%s", argv[++i]);
@@ -4198,6 +4276,8 @@ static int core_worker_run(int argc, char **argv) {
 
     g_log_backpressure = cfg.log_backpressure;
     g_log_perf = cfg.log_perf;
+    log_blue("[AUTH-DIAG] configured credential sizes: username=%zu password=%zu bytes (values redacted)",
+             strlen(cfg.username), strlen(cfg.password));
     log_blue("Worker %d/%d starting (process-wide MAX_CLIENTS=%d)",
              g_worker_id + 1, g_worker_count, cfg.max_clients);
     if (g_log_perf)
@@ -4290,6 +4370,26 @@ static int core_worker_run(int argc, char **argv) {
             goto fail_cleanup;
         }
         SSL_CTX_set_mode(ssl_ctx, SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER);
+#if defined(SSH_CORE_MIPSEL_24KC)
+        /*
+         * Prefer ChaCha20-Poly1305 on the MT7621/MIPS build, where software
+         * AES-GCM may be more CPU-expensive. Keep both AES-GCM suites as
+         * interoperable fallbacks; this affects TLS 1.3 only, not SSH ciphers.
+         */
+        static const char mips_tls13_ciphersuites[] =
+            "TLS_CHACHA20_POLY1305_SHA256:"
+            "TLS_AES_256_GCM_SHA384:"
+            "TLS_AES_128_GCM_SHA256";
+        ERR_clear_error();
+        if (SSL_CTX_set_ciphersuites(ssl_ctx, mips_tls13_ciphersuites) == 1) {
+            log_blue("[TLS] mipsel_24kc TLS 1.3 cipher preference configured: ChaCha20-Poly1305, AES-256-GCM, AES-128-GCM");
+        } else {
+            unsigned long tls_cipher_error = ERR_get_error();
+            log_yellow("[TLS] mipsel_24kc ChaCha preference unavailable; using OpenSSL defaults (%s)",
+                       tls_cipher_error ? ERR_reason_error_string(tls_cipher_error) : "no OpenSSL detail");
+            ERR_clear_error();
+        }
+#endif
         if (cfg.tls_diag) {
             SSL_CTX_set_msg_callback(ssl_ctx, tls_message_callback);
             log_blue("TLS message tracing enabled (TLS_DIAG=1)");
@@ -4542,7 +4642,15 @@ static int core_worker_run(int argc, char **argv) {
     }
 
     int auth_ok = 0;
-    if (!authlist || strstr(authlist, "password")) {
+    const char *auth_method_used = "none";
+    log_blue("[AUTH-DIAG] server methods: %s",
+             authlist ? authlist : "(unavailable; password fallback will be attempted)");
+    if (!authlist) {
+        log_yellow("[AUTH-DIAG] userauth_list returned no method list; session_errno=%d",
+                   libssh2_session_last_errno(session));
+    }
+
+    if (!authlist || auth_method_offered(authlist, "password")) {
         long long deadline = now_ms() + HANDSHAKE_TIMEOUT_MS;
         int auth_rc;
         while ((auth_rc = libssh2_userauth_password(session, cfg.username, cfg.password)) == LIBSSH2_ERROR_EAGAIN) {
@@ -4552,9 +4660,18 @@ static int core_worker_run(int argc, char **argv) {
                 goto fail_cleanup;
             }
         }
-        if (auth_rc == 0) auth_ok = 1;
+        if (auth_rc == 0) {
+            auth_ok = 1;
+            auth_method_used = "password";
+        } else {
+            log_yellow("[AUTH-DIAG] password method rejected: rc=%d session_errno=%d",
+                       auth_rc, libssh2_session_last_errno(session));
+        }
+    } else {
+        log_yellow("[AUTH-DIAG] server did not advertise password authentication");
     }
-    if (!auth_ok && (!authlist || strstr(authlist, "keyboard-interactive"))) {
+
+    if (!auth_ok && (!authlist || auth_method_offered(authlist, "keyboard-interactive"))) {
         g_kbd_password = cfg.password;
         long long deadline = now_ms() + HANDSHAKE_TIMEOUT_MS;
         int auth_rc;
@@ -4565,15 +4682,30 @@ static int core_worker_run(int argc, char **argv) {
                 goto fail_cleanup;
             }
         }
-        if (auth_rc == 0) auth_ok = 1;
+        if (auth_rc == 0) {
+            auth_ok = 1;
+            auth_method_used = "keyboard-interactive";
+        } else {
+            log_yellow("[AUTH-DIAG] keyboard-interactive method rejected: rc=%d session_errno=%d",
+                       auth_rc, libssh2_session_last_errno(session));
+        }
+    } else if (!auth_ok && authlist) {
+        log_yellow("[AUTH-DIAG] server did not advertise keyboard-interactive authentication");
     }
+
     if (!auth_ok) {
         char *emsg = NULL;
+        int auth_error_code = libssh2_session_last_errno(session);
         libssh2_session_last_error(session, &emsg, NULL, 0);
-        log_red("Authentication Failed: %s", emsg ? emsg : "Permission denied");
+        log_red("Authentication Failed: %s (code=%d methods=%s username_len=%zu password_len=%zu)",
+                emsg ? emsg : "Permission denied", auth_error_code,
+                authlist ? authlist : "unknown",
+                strlen(cfg.username), strlen(cfg.password));
         write_marker(AUTH_FAILED_FILE, emsg ? emsg : "Permission denied");
         goto fail_cleanup;
     }
+
+    log_blue("[AUTH-DIAG] authentication accepted via %s", auth_method_used);
 
     log_blue("Session Keys Established");
     {
