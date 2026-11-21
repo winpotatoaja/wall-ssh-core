@@ -95,7 +95,7 @@ jobs:
           /tmp/http-parser-test | tee test-results/http-parser-test.log
           gcc -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread tests/io_worker_pool_test.c io_worker_pool.c -o /tmp/io-worker-pool-test
           timeout 120s /tmp/io-worker-pool-test | tee test-results/io-worker-pool-test-native.log
-          gcc -std=c11 -O2 -g -Wall -Wextra -Werror -I. tests/io_worker_completion_tracker_test.c io_worker_completion_tracker.c -o /tmp/io-worker-completion-tracker-test
+          gcc -std=c11 -O2 -g -Wall -Wextra -Werror -I. tests/io_worker_completion_tracker_test.c io_worker_completion_tracker.c io_worker_pool.c -pthread -o /tmp/io-worker-completion-tracker-test
           timeout 10s /tmp/io-worker-completion-tracker-test | tee test-results/io-worker-completion-tracker-test-native.log
 
       - name: Download and configure OpenWrt 25.12.5 x86_64 SDK
