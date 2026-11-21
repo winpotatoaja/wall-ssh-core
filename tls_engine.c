@@ -507,7 +507,9 @@ static void *tls_engine_thread(void *opaque)
          */
         if (!write_pending && !read_pending && !rx_closed &&
             SSL_pending(ssl) > 0 && ring_free(&engine->tls_to_ssh) > 0) {
+#ifdef TLS_ENGINE_DIAGNOSTICS
             int before = ring_used(&engine->tls_to_ssh);
+#endif
             int rc = engine_try_read(engine, ssl, &read_pending,
                                      &read_buffer, &read_ticket, &read_length,
                                      &read_want, &fatal_error);
@@ -580,7 +582,9 @@ static void *tls_engine_thread(void *opaque)
         /* Pinned SSL_write must complete before another SSL operation. */
         if (write_pending) {
             if (pfds[0].revents & write_want) {
+#ifdef TLS_ENGINE_DIAGNOSTICS
                 int before = ring_used(&engine->ssh_to_tls);
+#endif
                 int rc = engine_try_write(engine, ssl, &write_pending,
                                           &write_ticket, &write_length,
                                           &write_want, &fatal_error);
@@ -601,7 +605,9 @@ static void *tls_engine_thread(void *opaque)
         /* Pinned SSL_read must likewise complete before another SSL operation. */
         if (read_pending) {
             if (pfds[0].revents & read_want) {
+#ifdef TLS_ENGINE_DIAGNOSTICS
                 int before = ring_used(&engine->tls_to_ssh);
+#endif
                 int rc = engine_try_read(engine, ssl, &read_pending,
                                          &read_buffer, &read_ticket, &read_length,
                                          &read_want, &fatal_error);
@@ -624,7 +630,9 @@ static void *tls_engine_thread(void *opaque)
          */
         if (!rx_closed && ring_free(&engine->tls_to_ssh) > 0 &&
             (pfds[0].revents & (POLLIN | POLLHUP))) {
+#ifdef TLS_ENGINE_DIAGNOSTICS
             int before = ring_used(&engine->tls_to_ssh);
+#endif
             int rc = engine_try_read(engine, ssl, &read_pending,
                                      &read_buffer, &read_ticket, &read_length,
                                      &read_want, &fatal_error);
@@ -642,7 +650,9 @@ static void *tls_engine_thread(void *opaque)
 
         if (ring_used(&engine->ssh_to_tls) > 0 &&
             (pfds[0].revents & POLLOUT)) {
+#ifdef TLS_ENGINE_DIAGNOSTICS
             int before = ring_used(&engine->ssh_to_tls);
+#endif
             int rc = engine_try_write(engine, ssl, &write_pending,
                                       &write_ticket, &write_length,
                                       &write_want, &fatal_error);
