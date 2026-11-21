@@ -347,11 +347,12 @@ done:
         (void)tls_engine_join(engine);
         tls_engine_destroy(engine);
     }
-    if (server_started) {
-        shutdown(server_args.fd, SHUT_RDWR);
-        (void)pthread_join(server_thread, NULL);
+    if (sockets[0] >= 0) {
+        close(sockets[0]);
+        sockets[0] = -1;
     }
-    if (sockets[0] >= 0) close(sockets[0]);
+    if (server_started)
+        (void)pthread_join(server_thread, NULL);
     if (sockets[1] >= 0) close(sockets[1]);
     SSL_CTX_free(client_ctx);
     SSL_CTX_free(server_ctx);
