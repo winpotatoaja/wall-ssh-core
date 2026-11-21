@@ -896,7 +896,19 @@ ssize_t tls_engine_recv(tls_engine_t *engine, void *data, size_t length)
         copied += amount;
     }
 
-    if (copied) signal_eventfd(engine->worker_event_fd);
+    if (copied) {
+        signal_eventfd(engine->worker_event_fd);
+        /*
+         * RX close_notify/error can be observed while plaintext is still in
+         * tls_to_ssh. The SSH Owner intentionally delays publishing its RX
+         * terminal state until that queue is empty. Re-notify it when the last
+         * queued bytes are consumed, otherwise the close event may have been
+         * drained before the queue reached zero (lost terminal wakeup).
+         */
+        if (ring_used(&engine->tls_to_ssh) == 0 &&
+            tls_engine_rx_terminal(engine, NULL))
+            signal_eventfd(engine->owner_event_fd);
+    }
     if (copied) return (ssize_t)copied;
 
     int terminal_error = 0;

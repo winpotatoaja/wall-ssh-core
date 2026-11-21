@@ -4198,6 +4198,10 @@ static int core_worker_run(int argc, char **argv) {
         return 1;
     }
 
+    /* Keep the socket number as libssh2's callback cookie. For TLS it remains
+     * open but is owned exclusively by TLS Engine; only upstream_watch_fd is
+     * registered with epoll and upstream_fd is set to -1 for cleanup safety. */
+    int upstream_libssh2_socket = upstream_fd;
     int upstream_watch_fd = upstream_fd;
     upstream_ctx_t uctx = {
         .fd = upstream_fd, .log_path = g_log_path,
@@ -4321,6 +4325,7 @@ static int core_worker_run(int argc, char **argv) {
                 goto fail_cleanup;
             }
             uctx.fd = upstream_fd;
+            upstream_libssh2_socket = upstream_fd;
             upstream_watch_fd = upstream_fd;
             uctx.last_activity = time(NULL);
         }
@@ -4437,7 +4442,7 @@ static int core_worker_run(int argc, char **argv) {
     {
         long long deadline = now_ms() + HANDSHAKE_TIMEOUT_MS;
         int hs_rc;
-        while ((hs_rc = libssh2_session_handshake(session, upstream_fd)) == LIBSSH2_ERROR_EAGAIN) {
+        while ((hs_rc = libssh2_session_handshake(session, upstream_libssh2_socket)) == LIBSSH2_ERROR_EAGAIN) {
             if (wait_ssh_nb(session, &uctx, deadline) <= 0) { hs_rc = -1; break; }
         }
         if (hs_rc != 0) {
