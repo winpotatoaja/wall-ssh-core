@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=31
+PKG_RELEASE:=32
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1
@@ -33,11 +33,15 @@ define Build/Prepare
 	test -s ./tls_engine.c
 	test -s ./tls_engine.h
 	test -s ./spsc_rb.h
+	test -s ./io_worker_pool.c
+	test -s ./io_worker_pool.h
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) ./ssh-core.c $(PKG_BUILD_DIR)/ssh-core.c
 	$(CP) ./tls_engine.c $(PKG_BUILD_DIR)/tls_engine.c
 	$(CP) ./tls_engine.h $(PKG_BUILD_DIR)/tls_engine.h
 	$(CP) ./spsc_rb.h $(PKG_BUILD_DIR)/spsc_rb.h
+	$(CP) ./io_worker_pool.c $(PKG_BUILD_DIR)/io_worker_pool.c
+	$(CP) ./io_worker_pool.h $(PKG_BUILD_DIR)/io_worker_pool.h
 	test -s $(PKG_BUILD_DIR)/ssh-core.c
 	test -s $(PKG_BUILD_DIR)/tls_engine.c
 endef
@@ -45,7 +49,7 @@ endef
 define Build/Compile
 	$(TARGET_CC) $(TARGET_CPPFLAGS) $(CORE_ARCH_CPPFLAGS) $(TARGET_CFLAGS) -std=gnu11 -pthread \
 		-Wall -Wextra \
-		-o $(PKG_BUILD_DIR)/passwall-ssh-core $(PKG_BUILD_DIR)/ssh-core.c $(PKG_BUILD_DIR)/tls_engine.c \
+		-o $(PKG_BUILD_DIR)/passwall-ssh-core $(PKG_BUILD_DIR)/ssh-core.c $(PKG_BUILD_DIR)/tls_engine.c $(PKG_BUILD_DIR)/io_worker_pool.c \
 		$(TARGET_LDFLAGS) -pthread -Wl,--as-needed -lssh2 -lssl -lcrypto
 	test -x $(PKG_BUILD_DIR)/passwall-ssh-core
 endef
