@@ -504,7 +504,17 @@ static void *tls_engine_thread(void *opaque)
             if (rc > 0) did_work = 1;
             if (rc == 2) rx_closed = 1;
         }
-        if (did_work) continue;
+        /*
+         * Do not drain the entire SSH->TLS queue before servicing TLS RX.
+         * A successful SSL_write may generate an echo/response immediately;
+         * polling both directions here lets the next iteration read it before
+         * a large TX burst fills the socket send buffer. SSL_pending() is the
+         * only reason to spin without polling, because those bytes are already
+         * decrypted inside OpenSSL and may not make the fd readable again.
+         */
+        if (did_work && !write_pending && !read_pending &&
+            SSL_pending(ssl) > 0 && ring_free(&engine->tls_to_ssh) > 0)
+            continue;
 
         short socket_events = 0;
         if (write_pending) socket_events |= (short)write_want;
