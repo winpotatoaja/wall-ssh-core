@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix the Phase 3 CI wiring: compile the MIPS worker helper as a single compiler command and link `tls_engine.c` into the x86 native parser regression target. Re-run the MIPS SDK/native gate after the workflow correction.
 - Add the Phase 3 bounded I/O worker-pool foundation and strict regressions: per-worker control/task/completion SPSC queues, eventfd wakeups, copied task/result payloads, client-generation tokens, per-worker outstanding credits, round-robin distribution, partial-drain eventfd rearming, cancel/drain shutdown, and retryable bounded join. The module is compiled into package r32 but is not yet connected to the live relay; SSH Owner and TLS Engine ownership boundaries and the single upstream SSH session remain unchanged.
 - Add native worker-pool coverage for 50,000 exactly-once task completions, payload integrity, stale-generation rejection, EAGAIN backpressure, partial completion drains, idle wakeups, and teardown. Native ASan/UBSan and ThreadSanitizer runs pass on the implementation branch; MT7621 SDK/QEMU verification is the next CI gate.
 - Run the R31 TLS Engine SSH integration suite on MT7621 QEMU using the exact SDK artifact from run 44878511673. Validate package install, TLS handshake, libssh2 authentication callbacks, SOCKS relay throughput, close_notify half-close, graceful teardown, and ensure the TLS Engine eventfd/socket ownership changes work on the emulated MIPS target.
