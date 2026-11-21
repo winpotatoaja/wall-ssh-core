@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Start OpenWrt 25.12.5 x86_64 QEMU runtime validation using successful SDK artifact run `44886874544`; this is a documentation-only trigger commit.
 - Correct the OpenWrt 25 x86_64 SDK workflow's two helper-build line continuations. The r32 APK had compiled, but the follow-on static worker-pool helper link failed because a literal backslash reached the linker; the SDK gate must also build and checksum both helpers before its artifact is considered complete.
 - MIPS SDK gate passed on OpenWrt 24.10.7/ramips/mt7621: package r32 and the statically linked mipsel_24kc worker-pool helper were built and uploaded successfully (SDK run 44884770746). Proceed to the MT7621 QEMU runtime gate with that exact artifact and to the OpenWrt 25 x86_64 SDK build.
 - Fix the Phase 3 CI wiring: compile the MIPS worker helper as a single compiler command and link `tls_engine.c` into the x86 native parser regression target. Re-run the MIPS SDK/native gate after the workflow correction.
