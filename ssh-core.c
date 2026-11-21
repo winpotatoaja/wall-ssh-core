@@ -15,6 +15,7 @@
 #include <openssl/ssl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -71,6 +72,39 @@ static inline void request_stop(void) {
     __atomic_store_n(&g_stop, 1, __ATOMIC_RELAXED);
 }
 #define MAX_WORKERS 4
+
+/*
+ * Prefer the CPUs actually allowed to this process (cpuset/affinity). This
+ * avoids oversubscribing a device when the service is pinned to fewer CPUs.
+ * Older/minimal libc builds may not expose affinity helpers, so sysconf is
+ * the portable fallback.
+ */
+static long detect_available_cpu_count(void) {
+#if defined(__linux__) && defined(CPU_COUNT)
+    cpu_set_t allowed_cpus;
+    CPU_ZERO(&allowed_cpus);
+    if (sched_getaffinity(0, sizeof(allowed_cpus), &allowed_cpus) == 0) {
+        int allowed_count = CPU_COUNT(&allowed_cpus);
+        if (allowed_count > 0) return (long)allowed_count;
+    }
+#endif
+
+    long online_count = sysconf(_SC_NPROCESSORS_ONLN);
+#ifdef _SC_NPROCESSORS_CONF
+    if (online_count < 1) online_count = sysconf(_SC_NPROCESSORS_CONF);
+#endif
+    return online_count > 0 ? online_count : 1;
+}
+
+/* The current worker/session architecture intentionally caps the pool at 4. */
+static int worker_count_for_cpu_count(long cpu_count) {
+    if (cpu_count < 1) return 1;
+    if (cpu_count > MAX_WORKERS) return MAX_WORKERS;
+    return (int)cpu_count;
+}
+
+static long g_detected_cpu_count = 1;
+static int g_worker_count_auto = 1;
 static __thread int g_worker_id = 0;
 static __thread int g_worker_count = 1;
 static __thread uint64_t g_accepted_total = 0;
@@ -4369,6 +4403,11 @@ static int core_worker_run(int argc, char **argv) {
 
     g_log_backpressure = cfg.log_backpressure;
     g_log_perf = cfg.log_perf;
+    if (g_worker_id == 0) {
+        log_blue("CPU topology: detected=%ld selected=%d mode=%s max=%d",
+                 g_detected_cpu_count, g_worker_count,
+                 g_worker_count_auto ? "auto" : "manual", MAX_WORKERS);
+    }
     log_blue("[AUTH-DIAG] configured credential sizes: username=%zu password=%zu bytes (values redacted)",
              strlen(cfg.username), strlen(cfg.password));
     log_blue("Worker %d/%d starting (process-wide MAX_CLIENTS=%d)",
@@ -5255,9 +5294,12 @@ typedef struct {
 
 static int resolve_worker_count(int argc, char **argv, int *out_count) {
     if (!out_count) return -1;
-    int workers = 1;
+
+    g_detected_cpu_count = detect_available_cpu_count();
+    int workers = worker_count_for_cpu_count(g_detected_cpu_count);
     int cli_workers_set = 0;
     const char *env_file = NULL;
+    g_worker_count_auto = 1;
 
     /* Parse CLI first so a valid -workers value overrides even a malformed
      * WORKERS entry in the environment file. */
@@ -5275,6 +5317,7 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
     }
 
     if (cli_workers_set) {
+        g_worker_count_auto = 0;
         *out_count = workers;
         return 0;
     }
@@ -5300,11 +5343,13 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
                     value[n - 1] = 0;
                     value++;
                 }
-                if (strcmp(key, "WORKERS") == 0 &&
-                    parse_int_range(value, 1, MAX_WORKERS, &workers) < 0) {
-                    fclose(f);
-                    fprintf(stderr, "WORKERS harus 1..%d\n", MAX_WORKERS);
-                    return -1;
+                if (strcmp(key, "WORKERS") == 0) {
+                    if (parse_int_range(value, 1, MAX_WORKERS, &workers) < 0) {
+                        fclose(f);
+                        fprintf(stderr, "WORKERS harus 1..%d\n", MAX_WORKERS);
+                        return -1;
+                    }
+                    g_worker_count_auto = 0;
                 }
             }
             fclose(f);

@@ -2,14 +2,27 @@
 
 ## Configuration
 
-R24 remains single-worker by default. Configure the process worker count with
-one of:
+The default worker count is automatic. At startup the core counts the CPUs
+available to the process, preferring the Linux scheduler affinity mask and
+falling back to `sysconf(_SC_NPROCESSORS_ONLN)`. It selects one worker per
+available logical CPU and caps the pool at four:
 
-- `WORKERS=2` or `WORKERS=4` in the env file passed with `-env`
-- `-workers 2` or `-workers 4` on the executable command line
+| Available CPUs | Automatic workers |
+| ---: | ---: |
+| 1 | 1 |
+| 2 | 2 |
+| 3 | 3 |
+| 4 or more | 4 |
 
-The command-line option takes precedence over the env-file value. Valid values
-are 1 through 4. A value of 1 preserves the original single-session behavior.
+A one-worker configuration keeps the event loop on the main thread and does
+not create an additional pthread. Configure an explicit override only when
+needed:
+
+- `WORKERS=1..4` in the env file passed with `-env`
+- `-workers 1..4` on the executable command line
+
+The command-line option takes precedence over the env-file value. When neither
+override is supplied, CPU-based automatic selection is used.
 
 Example:
 
@@ -63,6 +76,11 @@ For in-process cases the guest additionally verifies:
   at least two active workers in the 2-worker case and at least three in the
   4-worker case, based on each worker's accepted-client shutdown counter.
 - All download byte-count and SHA-256 checks pass.
+
+The guest also runs once without any `WORKERS` setting and checks that the
+detected CPU count selects the expected number of listeners and process
+threads. Native regressions exercise synthetic CPU counts from one through
+sixteen, including the four-worker cap.
 
 The guest sampler captures per-thread CPU ticks, process RSS/context switches,
 per-core CPU use, TCP queue/drop counters, socket queues, softirqs, and

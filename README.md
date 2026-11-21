@@ -314,10 +314,17 @@ I/O, half-close and reconnect behavior.
 
 ## In-process pthread workers (R24 experimental)
 
-R24 keeps the original single-worker behavior by default. Set `WORKERS=2` or
-`WORKERS=4` in the core environment file, or pass `-workers 2` /
-`-workers 4` to the executable. The accepted range is 1–4; a CLI value
-overrides the environment-file setting. `WORKERS=1` remains the default.
+The worker count is selected automatically at startup from the CPUs available
+to the process (Linux CPU affinity first, then the online-CPU count). The
+default is one worker per available logical CPU, capped at four workers:
+1 CPU → 1 worker, 2 CPUs → 2 workers, 3 CPUs → 3 workers, and 4 or more
+CPUs → 4 workers. A single worker stays on the main event-loop thread and
+does not create an extra pthread.
+
+Manual overrides remain available: set `WORKERS=1..4` in the core environment
+file, or pass `-workers 1..4` to the executable. The command-line value
+takes precedence over the environment-file setting. When neither override is
+present, CPU-based automatic selection is used.
 
 With more than one worker, the process creates one pthread per worker. Each
 thread owns its own upstream TCP/TLS connection, TLS context, `LIBSSH2_SESSION`,

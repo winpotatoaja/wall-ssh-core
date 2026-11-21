@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Select the default pthread worker count automatically from CPUs available to the process: respect Linux CPU affinity when available, fall back to the online CPU count, and cap the pool at four workers. Keep explicit `WORKERS=1..4` and `-workers 1..4` overrides; add synthetic 1/2/3/4/8/16-CPU regression coverage and a guest test of the automatic default.
+- Bump the OpenWrt package release to r27.
 - Extend `[PERF]` with C2S bytes received from local clients, bytes accepted by libssh2, C2S occupancy, remote-EOF relay counts, zero-window waits after remote EOF, and WINDOW_ADJUST/input wakeup counts.
 - Add opt-in `[LOG_BACKPRESSURE]` diagnostics for C2S data arriving after remote SSH EOF, writes progressing after EOF, and window-zero waits while the opposite direction remains open. This specifically traces full-duplex/half-close behavior without logging payload contents.
 - Bump the OpenWrt package release to r26 for the additional C2S/SSH-window observability.

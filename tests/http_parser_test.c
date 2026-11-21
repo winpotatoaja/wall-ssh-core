@@ -1936,10 +1936,53 @@ static int run_perf_metrics_regression(void) {
     return 0;
 }
 
+static int run_worker_count_regressions(void) {
+    static const struct {
+        long cpu_count;
+        int expected_workers;
+    } cases[] = {
+        { -2, 1 },
+        {  0, 1 },
+        {  1, 1 },
+        {  2, 2 },
+        {  3, 3 },
+        {  4, 4 },
+        {  8, 4 },
+        { 16, 4 }
+    };
+    int failures = 0;
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int actual = worker_count_for_cpu_count(cases[i].cpu_count);
+        if (actual != cases[i].expected_workers) {
+            fprintf(stderr,
+                    "[FAIL] CPU count %ld selected %d workers; expected %d\n",
+                    cases[i].cpu_count, actual, cases[i].expected_workers);
+            failures++;
+        } else {
+            printf("[PASS] CPU count %ld selects %d worker(s)\n",
+                   cases[i].cpu_count, actual);
+        }
+    }
+
+    long detected = detect_available_cpu_count();
+    int selected = worker_count_for_cpu_count(detected);
+    if (detected < 1 || selected < 1 || selected > MAX_WORKERS) {
+        fprintf(stderr, "[FAIL] live CPU detection returned %ld CPU(s), %d worker(s)\n",
+                detected, selected);
+        failures++;
+    } else {
+        printf("[PASS] live CPU detection: %ld available CPU(s) -> %d worker(s)\n",
+               detected, selected);
+    }
+    return failures;
+}
+
 int main(void) {
     g_log_path = "-";
     int failures = run_core_state_regressions();
     failures += run_perf_metrics_regression();
+    failures += run_worker_count_regressions();
 
     failures += run_case(
         "GET 200 Content-Length body is not a tunnel",
@@ -2056,6 +2099,6 @@ int main(void) {
         fprintf(stderr, "HTTP parser regression tests failed: %d\n", failures);
         return 1;
     }
-    puts("All HTTP parser, SOCKS validation, IPv6 and core state regression tests passed.");
+    puts("All HTTP parser, SOCKS validation, IPv6, worker-selection and core state regression tests passed.");
     return 0;
 }
