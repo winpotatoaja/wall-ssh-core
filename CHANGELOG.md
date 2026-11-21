@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add the Phase 3 bounded I/O worker-pool foundation and strict regressions: per-worker control/task/completion SPSC queues, eventfd wakeups, copied task/result payloads, client-generation tokens, per-worker outstanding credits, round-robin distribution, partial-drain eventfd rearming, cancel/drain shutdown, and retryable bounded join. The module is compiled into package r32 but is not yet connected to the live relay; SSH Owner and TLS Engine ownership boundaries and the single upstream SSH session remain unchanged.
+- Add native worker-pool coverage for 50,000 exactly-once task completions, payload integrity, stale-generation rejection, EAGAIN backpressure, partial completion drains, idle wakeups, and teardown. Native ASan/UBSan and ThreadSanitizer runs pass on the implementation branch; MT7621 SDK/QEMU verification is the next CI gate.
 - Run the R31 TLS Engine SSH integration suite on MT7621 QEMU using the exact SDK artifact from run 44878511673. Validate package install, TLS handshake, libssh2 authentication callbacks, SOCKS relay throughput, close_notify half-close, graceful teardown, and ensure the TLS Engine eventfd/socket ownership changes work on the emulated MIPS target.
 - Preserve the original upstream socket number as libssh2's callback cookie after TLS Engine takes descriptor ownership; the SSH Owner continues using only the engine eventfd for polling/epoll and never closes or performs socket I/O on that descriptor.
 - Re-signal the SSH Owner eventfd when the final queued TLS plaintext is consumed after RX close_notify/error was already published. Add a deterministic native/MIPS regression proving the terminal wake is not lost when queued plaintext drains after the original terminal event was observed.
