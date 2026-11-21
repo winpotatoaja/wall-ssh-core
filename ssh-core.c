@@ -2717,6 +2717,67 @@ static int drain_pending_eof_to_c2s(int epfd, client_conn_t *c) {
     return (c->c2s.used > before || c->client_eof) ? 1 : 0;
 }
 
+static uint64_t allocate_io_task_id(void) {
+    uint64_t id = g_next_io_task_id++;
+    if (id == 0U) id = g_next_io_task_id++;
+    return id;
+}
+
+/* Owner pins the FD/client lifetime before publishing a copied socket-read task. */
+static int submit_c2s_worker_read(io_worker_pool_t *pool,
+                                  io_worker_completion_tracker_t *tracker,
+                                  client_conn_t *c) {
+    if (!pool || !tracker || !c || c->fd < 0 || c->c2s_worker_inflight ||
+        c->client_eof || rb_free_space(&c->c2s) == 0U) {
+        errno = EINVAL;
+        return -1;
+    }
+    uint32_t worker_id = 0U;
+    if (io_worker_pool_select_worker(pool, &worker_id) < 0)
+        return errno == EAGAIN ? 1 : -1;
+
+    size_t contiguous = 0U;
+    (void)rb_write_slice(&c->c2s, &contiguous);
+    if (contiguous == 0U) return 1;
+    if (contiguous > IO_WORKER_POOL_PAYLOAD_SIZE) contiguous = IO_WORKER_POOL_PAYLOAD_SIZE;
+
+    io_worker_task_t task;
+    memset(&task, 0, sizeof(task));
+    task.task_id = allocate_io_task_id();
+    task.client_id = c->client_id;
+    task.generation = c->generation;
+    task.opcode = IO_WORKER_OP_SOCKET_READ;
+    task.payload_len = 8U;
+    int32_t fd_value = (int32_t)c->fd;
+    uint32_t length = (uint32_t)contiguous;
+    memcpy(task.payload, &fd_value, sizeof(fd_value));
+    memcpy(task.payload + sizeof(fd_value), &length, sizeof(length));
+
+    io_worker_task_ref_t ref = {
+        .task_id = task.task_id,
+        .client_id = task.client_id,
+        .generation = task.generation,
+        .worker_id = worker_id
+    };
+    /* Required transaction: lifetime acquire -> tracker register -> publish. */
+    if (client_lifetime_acquire(&c->lifetime, c->client_id, c->generation) < 0)
+        return -1;
+    if (io_worker_completion_tracker_register(tracker, &ref) < 0) {
+        (void)client_lifetime_release(&c->lifetime, c->client_id, c->generation);
+        return -1;
+    }
+    if (io_worker_pool_submit_to_worker(pool, &task, worker_id) < 0) {
+        int saved_errno = errno;
+        (void)io_worker_completion_tracker_cancel(tracker, &ref);
+        (void)client_lifetime_release(&c->lifetime, c->client_id, c->generation);
+        errno = saved_errno;
+        return saved_errno == EAGAIN ? 1 : -1;
+    }
+    c->c2s_worker_task_id = task.task_id;
+    c->c2s_worker_inflight = 1;
+    return 0;
+}
+
 static int drain_socks_req_buf(client_conn_t *c, int *eof_out) {
     *eof_out = 0;
     while (c->req_len < sizeof(c->req_buf)) {
@@ -3006,6 +3067,105 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
             return;
         }
     }
+}
+
+static void drain_io_worker_completions(int epfd,
+                                           io_worker_pool_t *pool,
+                                           io_worker_completion_tracker_t *tracker) {
+    if (!pool || !tracker) return;
+    uint32_t workers = io_worker_pool_worker_count(pool);
+    io_worker_completion_t completions[32];
+    for (uint32_t worker_id = 0U; worker_id < workers; worker_id++) {
+        for (;;) {
+            size_t count = io_worker_pool_drain_completions(
+                pool, worker_id, completions,
+                sizeof(completions) / sizeof(completions[0]));
+            if (count == 0U) break;
+            for (size_t i = 0U; i < count; i++) {
+                io_worker_completion_t *completion = &completions[i];
+                io_worker_task_ref_t ref;
+                if (io_worker_completion_tracker_take(tracker, completion, &ref) < 0) {
+                    log_red("[IO worker] rejected completion identity task=%llu",
+                            (unsigned long long)completion->task_id);
+                    continue;
+                }
+                client_conn_t *c = find_client_any_by_id(ref.client_id);
+                if (!c || c->generation != ref.generation) {
+                    log_red("[IO worker] accepted task has no retained client: %llu",
+                            (unsigned long long)ref.task_id);
+                    continue;
+                }
+
+                int current = client_lifetime_completion_current(
+                    &c->lifetime, ref.client_id, ref.generation);
+                int release_rc = client_lifetime_release(
+                    &c->lifetime, ref.client_id, ref.generation);
+                if (release_rc < 0) {
+                    log_red("[IO worker] lifetime release failed task=%llu: %s",
+                            (unsigned long long)ref.task_id, strerror(errno));
+                    continue;
+                }
+
+                if (c->c2s_worker_task_id != ref.task_id)
+                    continue;
+                c->c2s_worker_task_id = 0U;
+                c->c2s_worker_inflight = 0;
+                if (!current || c->state != ST_RELAY || c->fd < 0)
+                    continue;
+
+                if (completion->status == 0) {
+                    if (completion->result_len > 0U) {
+                        if (rb_push(&c->c2s, completion->result,
+                                    completion->result_len) < 0) {
+                            c->client_dead = 1;
+                            c->client_reset = 1;
+                            c->client_eof = 1;
+                            c->need_send_eof = 1;
+                            detach_client_fd(epfd, c);
+                        } else {
+                            c->last_activity_ms = now_ms();
+                            note_c2s_buffer_peak(c);
+                            if (g_log_perf) {
+                                g_perf_stats.c2s_rx_bytes += completion->result_len;
+                                if (c->ssh_eof)
+                                    g_perf_stats.c2s_post_eof_rx_bytes += completion->result_len;
+                            }
+                        }
+                    } else {
+                        c->client_eof = 1;
+                        c->need_send_eof = 1;
+                        c->hup_pending = 0;
+                        c->rdhup_pending = 0;
+                    }
+                } else if (completion->status != EAGAIN &&
+                           completion->status != EWOULDBLOCK) {
+                    c->client_eof = 1;
+                    c->need_send_eof = 1;
+                    c->client_dead = 1;
+                    c->client_reset = 1;
+                    c->hup_pending = 0;
+                    c->rdhup_pending = 0;
+                    detach_client_fd(epfd, c);
+                }
+
+                if (c->fd >= 0 && c->state == ST_RELAY) {
+                    if ((c->hup_pending || c->rdhup_pending) &&
+                        !c->client_eof && rb_free_space(&c->c2s) > 0U) {
+                        handle_client_io(epfd, c, EPOLLIN | EPOLLHUP);
+                    } else {
+                        uint32_t want = client_rdhup_flag(c);
+                        if (!c->client_eof && !c->c2s_worker_inflight &&
+                            rb_free_space(&c->c2s) > 0U)
+                            want |= EPOLLIN;
+                        if (c->s2c.used > 0U || c->ctrl_len > 0U)
+                            want |= EPOLLOUT;
+                        update_client_epoll(epfd, c, want);
+                    }
+                }
+            }
+        }
+    }
+    reap_retired_clients(epfd);
 }
 
 static int is_libssh2_socket_fatal(int err) {
