@@ -104,7 +104,7 @@ jobs:
           mkdir -p "$PKG_DIR"
           cp Makefile "$PKG_DIR/Makefile"
           cp ssh-core.c "$PKG_DIR/ssh-core.c"
-          cp tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h "$PKG_DIR/"
+          cp tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h client_lifetime.c client_lifetime.h "$PKG_DIR/"
           cd "$GITHUB_WORKSPACE/sdk"
           echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
           make defconfig
