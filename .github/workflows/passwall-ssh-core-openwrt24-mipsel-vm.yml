@@ -708,11 +708,18 @@ jobs:
           fi
 
           echo "========== VERIFY OFFLINE RUNTIME DEPENDENCIES =========="
-          if opkg status libopenssl | grep -q 'Status:.*installed' &&
-             opkg status libssh2 | grep -q 'Status:.*installed'; then
-            pass "libopenssl and libssh2 are preinstalled in the MT7621 firmware"
+          opkg status libopenssl3 >"$LOG/opkg-libopenssl3.status" 2>&1
+          OPENSSL_STATUS_RC=$?
+          opkg status libssh2-1 >"$LOG/opkg-libssh2-1.status" 2>&1
+          SSH2_STATUS_RC=$?
+          if [ "$OPENSSL_STATUS_RC" -eq 0 ] && [ "$SSH2_STATUS_RC" -eq 0 ] &&
+             grep -q 'Status:.*installed' "$LOG/opkg-libopenssl3.status" &&
+             grep -q 'Status:.*installed' "$LOG/opkg-libssh2-1.status"; then
+            pass "libopenssl3 and libssh2-1 are preinstalled in the MT7621 firmware"
           else
-            fail "ImageBuilder firmware is missing libopenssl or libssh2"
+            cat "$LOG/opkg-libopenssl3.status" "$LOG/opkg-libssh2-1.status" 2>/dev/null || true
+            opkg list-installed | grep -E '^(libopenssl|libssh2)' || true
+            fail "ImageBuilder firmware is missing libopenssl3 or libssh2-1"
           fi
 
           echo "========== INSTALL R29 MIPS IPK (OFFLINE) =========="

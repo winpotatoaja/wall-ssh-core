@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Correct the offline MT7621 VM dependency assertion to use the actual OpenWrt 24.10.7 runtime package names `libopenssl3` and `libssh2-1` (confirmed in the ImageBuilder install log). The previous assertion used build/dependency aliases and failed despite both runtime libraries being installed. The MIPS SPSC stress binary had already passed in that run.
 - The first MT7621 QEMU attempt booted successfully but could not run package/SPSC checks because guest `opkg update` was blocked by the isolated VM network. The VM harness now preinstalls `libopenssl` and `libssh2` into the ImageBuilder firmware, installs the local IPK offline, normalizes the staged SPSC binary mode before copying it out of `/tmp`, and checks startup CPU diagnostics in stderr capture.
 - Native SPSC stress tests pass on the GitHub runner; the OpenWrt 24.10.7 SDK cross-compiled the standalone static MIPS32 Release 2 SPSC test binary and built the r29 IPK (SDK run 44866732425). MT7621 QEMU execution remains the next validation step.
 - Add a standalone SPSC byte-ring primitive for the planned single-session I/O pipeline. Use monotonically increasing uint32_t head/tail counters, power-of-two capacity <= 2^30, acquire/release publication, no shared used field, and 64-byte separation between producer and consumer indices.
