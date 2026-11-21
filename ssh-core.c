@@ -5097,9 +5097,12 @@ static int core_worker_run(int argc, char **argv) {
     }
     while (g_clients) {
         client_conn_t *c = g_clients;
-        if (c->fd >= 0) detach_client_fd(epfd, c);
+        /* remove_client owns FD detachment and may have to defer it. */
         remove_client(epfd, c);
     }
+    /* No worker pool is submitted to yet; any nonzero ref here is a hard
+     * shutdown invariant violation and must not be freed unsafely. */
+    reap_retired_clients(epfd);
     clear_pending_operation();
     g_opening_client = NULL;
     if (epfd >= 0) close(epfd);
