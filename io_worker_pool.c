@@ -400,9 +400,8 @@ fail_resources:
     return NULL;
 }
 
-int io_worker_pool_submit(io_worker_pool_t *pool,
-                          const io_worker_task_t *task,
-                          uint32_t *worker_id_out)
+static int validate_submit(io_worker_pool_t *pool,
+                           const io_worker_task_t *task)
 {
     if (!pool || !task || task->payload_len > IO_WORKER_POOL_PAYLOAD_SIZE) {
         errno = EINVAL;
@@ -417,35 +416,86 @@ int io_worker_pool_submit(io_worker_pool_t *pool,
         errno = fatal;
         return -1;
     }
+    return 0;
+}
 
+int io_worker_pool_select_worker(const io_worker_pool_t *pool,
+                                 uint32_t *worker_id_out)
+{
+    if (!pool || !worker_id_out) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (__atomic_load_n(&pool->stop_mode, __ATOMIC_ACQUIRE) >= 0) {
+        errno = ESHUTDOWN;
+        return -1;
+    }
+    int fatal = __atomic_load_n(&pool->fatal_error, __ATOMIC_ACQUIRE);
+    if (fatal != 0) {
+        errno = fatal;
+        return -1;
+    }
     for (uint32_t step = 0U; step < pool->worker_count; step++) {
         uint32_t index = (pool->next_worker + step) % pool->worker_count;
-        io_worker_t *worker = &pool->workers[index];
-        if (worker->outstanding >= pool->queue_capacity)
-            continue;
-        int push_rc = queue_push(&worker->tasks, task);
-        if (push_rc < 0) {
-            pool_set_error(pool, errno);
-            return -1;
-        }
-        if (push_rc == 0)
-            continue;
-
-        worker->outstanding++;
-        pool->next_worker = (index + 1U) % pool->worker_count;
-        if (worker_id_out)
+        if (pool->workers[index].outstanding < pool->queue_capacity) {
             *worker_id_out = index;
-        /* Task publication always precedes the eventfd write. */
-        if (eventfd_signal(worker->task_event_fd) < 0) {
-            pool_set_error(pool, errno);
-            return 0; /* Accepted task; pool_error() reports fatal notification failure. */
+            return 0;
         }
-        return 0;
     }
     errno = EAGAIN;
     return -1;
 }
 
+int io_worker_pool_submit_to_worker(io_worker_pool_t *pool,
+                                    const io_worker_task_t *task,
+                                    uint32_t worker_id)
+{
+    if (validate_submit(pool, task) < 0)
+        return -1;
+    if (worker_id >= pool->worker_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    io_worker_t *worker = &pool->workers[worker_id];
+    if (worker->outstanding >= pool->queue_capacity) {
+        errno = EAGAIN;
+        return -1;
+    }
+    int push_rc = queue_push(&worker->tasks, task);
+    if (push_rc < 0) {
+        pool_set_error(pool, errno);
+        return -1;
+    }
+    if (push_rc == 0) {
+        errno = EAGAIN;
+        return -1;
+    }
+
+    worker->outstanding++;
+    pool->next_worker = (worker_id + 1U) % pool->worker_count;
+    /* Task publication always precedes the eventfd write. */
+    if (eventfd_signal(worker->task_event_fd) < 0) {
+        pool_set_error(pool, errno);
+        return 0; /* Accepted task; pool_error() reports fatal notification failure. */
+    }
+    return 0;
+}
+
+int io_worker_pool_submit(io_worker_pool_t *pool,
+                          const io_worker_task_t *task,
+                          uint32_t *worker_id_out)
+{
+    if (validate_submit(pool, task) < 0)
+        return -1;
+    uint32_t worker_id = 0U;
+    if (io_worker_pool_select_worker(pool, &worker_id) < 0)
+        return -1;
+    if (io_worker_pool_submit_to_worker(pool, task, worker_id) < 0)
+        return -1;
+    if (worker_id_out)
+        *worker_id_out = worker_id;
+    return 0;
+}
 int io_worker_pool_completion_fd(const io_worker_pool_t *pool,
                                  uint32_t worker_id)
 {
