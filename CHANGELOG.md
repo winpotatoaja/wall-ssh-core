@@ -1,4 +1,5 @@
 ## Unreleased
+- Start MT7621 mipsel_24kc QEMU runtime validation using the successful SDK artifact from run 44908474616; source changes remain documentation-only.
 - Start OpenWrt 25.12.5 x86_64 QEMU runtime validation using the successful SDK artifact from run 44908474679; source changes remain limited to documentation.
 - Defer client FD closure whenever either relay direction still owns a worker reference; the final completion performs the pending close, preventing one direction from closing a descriptor still used by the other.
 - Wire one bounded I/O worker pool into the live SSH Owner epoll loop for asynchronous C2S reads and S2C writes. Completion identity is validated by the Owner before C2S ring commit or S2C ring-head advancement; partial writes commit only accepted bytes, client lifetime references defer teardown, and pending HUP/RDHUP drains are serialized with worker reads. Consolidated native/MIPS/QEMU validation is pending.
