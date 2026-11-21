@@ -1072,7 +1072,7 @@ jobs:
                 if ($i ~ /^c2s_rx_bytes=/) { split($i, a, "="); rx += a[2] }
                 if ($i ~ /^c2s_ssh_write_bytes=/) { split($i, a, "="); written += a[2] }
               }
-            } END { printf "%.0f %.0f\\n", rx, written }' "$LOG/tcp-ssh-core.log")"
+            } END { printf "%.0f %.0f", rx, written }' "$LOG/tcp-ssh-core.log")"
             set -- $C2S_TOTALS
             C2S_RX_TOTAL="${1:-0}"
             C2S_WRITE_TOTAL="${2:-0}"
