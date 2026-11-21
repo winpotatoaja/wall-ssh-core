@@ -279,7 +279,7 @@ jobs:
           fi
           # Permit workflow/docs-only commits, but reject changes to compiled inputs.
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/socks_halfclose.c tests/io_worker_pool_test.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/io_worker_pool_test.c; then
             echo "The APK or half-close helper was built from different source inputs."
             git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/socks_halfclose.c tests/io_worker_pool_test.c
             false
