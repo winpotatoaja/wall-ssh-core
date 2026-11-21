@@ -3256,7 +3256,9 @@ static void drain_io_worker_completions(int epfd,
 
                 if (completion->status == 0) {
                     if (completion->result_len > 0U) {
-                        if (rb_push(&c->c2s, completion->result,
+                        if (completion->result_len > IO_WORKER_POOL_PAYLOAD_SIZE ||
+                            completion->result_len > rb_free_space(&c->c2s) ||
+                            rb_push(&c->c2s, completion->result,
                                     completion->result_len) < 0) {
                             c->client_dead = 1;
                             c->client_reset = 1;
@@ -4245,7 +4247,9 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
 
             if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
                 uint32_t want = client_rdhup_flag(c);
-                if (upstream_client_write_allowed(u) && !c->client_eof && rb_free_space(&c->c2s) > 0) want |= EPOLLIN;
+                if (upstream_client_write_allowed(u) && !c->client_eof &&
+                    !c->c2s_worker_inflight && rb_free_space(&c->c2s) > 0)
+                    want |= EPOLLIN;
                 if ((c->s2c.used > 0 && !c->s2c_worker_inflight) ||
                     c->ctrl_len > 0) want |= EPOLLOUT;
                 update_client_epoll(epfd, c, want);
