@@ -1,4 +1,5 @@
 ## Unreleased
+- Queue fresh OpenWrt 25.12.5 x86_64 and OpenWrt 24.10.7 mipsel_24kc SDK builds for the pending-operation diagnostic update; QEMU stages must consume these new source-matched artifacts.
 - Add SSH serialized-pending diagnostics (operation, libssh2 block directions, C2S/S2C occupancy, channel write window, and worker in-flight state); enable backpressure/performance counters in the x86 QEMU relay run to identify the full-duplex stall without changing relay behavior.
 - Start MT7621 mipsel_24kc QEMU runtime validation using the successful SDK artifact from run 44908474616; source changes remain documentation-only.
 - Start OpenWrt 25.12.5 x86_64 QEMU runtime validation using the successful SDK artifact from run 44908474679; source changes remain limited to documentation.
