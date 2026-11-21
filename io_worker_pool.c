@@ -3,6 +3,7 @@
 
 #include <errno.h>
 #include <poll.h>
+#include <sys/socket.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -646,4 +647,52 @@ int io_worker_pool_destroy(io_worker_pool_t *pool)
         worker_resources_close(&pool->workers[i]);
     free(pool);
     return 0;
+}
+
+/*
+ * Execute one bounded, nonblocking operation on a local client socket.
+ * The SSH Owner passes only an FD value and copied bytes; no client/session
+ * pointer crosses the thread boundary. The Owner must pin the FD lifetime
+ * until it consumes this task's completion (including stale completions).
+ */
+int io_worker_socket_execute(const io_worker_task_t *task,
+                             io_worker_completion_t *completion,
+                             const void *context)
+{
+    int32_t fd_value;
+    uint32_t length;
+    ssize_t n;
+
+    (void)context;
+    if (!task || !completion || task->payload_len < 8U) return EINVAL;
+    memcpy(&fd_value, task->payload, sizeof(fd_value));
+    memcpy(&length, task->payload + sizeof(fd_value), sizeof(length));
+    if (fd_value < 0 || length == 0U) return EINVAL;
+
+    if (task->opcode == IO_WORKER_OP_SOCKET_READ) {
+        if (task->payload_len != 8U ||
+            length > IO_WORKER_POOL_PAYLOAD_SIZE) return EINVAL;
+        do {
+            n = recv((int)fd_value, completion->result, (size_t)length,
+                     MSG_DONTWAIT);
+        } while (n < 0 && errno == EINTR);
+        if (n < 0) return errno;
+        completion->result_len = (uint32_t)n; /* zero is orderly EOF */
+        return 0;
+    }
+
+    if (task->opcode == IO_WORKER_OP_SOCKET_WRITE) {
+        if (length > IO_WORKER_SOCKET_WRITE_MAX ||
+            task->payload_len != 8U + length) return EINVAL;
+        do {
+            n = send((int)fd_value, task->payload + 8U, (size_t)length,
+                     MSG_DONTWAIT | MSG_NOSIGNAL);
+        } while (n < 0 && errno == EINTR);
+        if (n < 0) return errno;
+        if (n == 0) return EPIPE;
+        completion->result_len = (uint32_t)n; /* partial writes are valid */
+        return 0;
+    }
+
+    return EOPNOTSUPP;
 }
