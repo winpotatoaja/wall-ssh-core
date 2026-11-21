@@ -736,7 +736,28 @@ jobs:
           IDLE_TIMEOUT=600
           LOG_BACKPRESSURE=1
           TCP_ENV
-            "$BIN" -env "$LOG/tcp.env" -log "$LOG/tcp-ssh-core.log" \
+
+            echo "========== SSH AUTH DIAGNOSTIC: INTENTIONALLY INVALID PASSWORD =========="
+            sed 's|^PASSWORD=.*$|PASSWORD=R25-INTENTIONAL-BAD-SECRET|' \
+              "$LOG/tcp.env" > "$LOG/tcp-bad-auth.env"
+            if "$BIN" -env "$LOG/tcp-bad-auth.env" -log "$LOG/tcp-bad-auth.log" \
+              -log-backpressure 1 -log-perf 1 >"$LOG/tcp-bad-auth-stdout.log" 2>&1; then
+              fail "invalid SSH password was unexpectedly accepted"
+            else
+              if grep -qF '[AUTH-DIAG] server methods: password' "$LOG/tcp-bad-auth.log" && \
+                 grep -qF '[AUTH-DIAG] password method rejected: rc=' "$LOG/tcp-bad-auth.log" && \
+                 grep -qE 'Authentication Failed:.*methods=.*username_len=10 password_len=' "$LOG/tcp-bad-auth.log" && \
+                 ! grep -qF 'R25-INTENTIONAL-BAD-SECRET' "$LOG/tcp-bad-auth.log" "$LOG/tcp-bad-auth-stdout.log"; then
+                pass "invalid password rejected with method/return-code diagnostics and no secret leakage"
+              else
+                fail "invalid-password diagnostics missing or the test secret appeared in logs"
+                cat "$LOG/tcp-bad-auth.log" "$LOG/tcp-bad-auth-stdout.log" 2>/dev/null || true
+              fi
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            "$BIN" -env "$LOG/tcp.env" -log "$LOG/tcp-ssh-core.log" \\
               -log-backpressure 1 -log-perf 1 >"$LOG/tcp-stdout.log" 2>&1 &
             APP_PID=$!
             READY=0
@@ -749,6 +770,13 @@ jobs:
             done
             if [ "$READY" -eq 1 ]; then
               pass "MIPS TCP SSH authentication and SOCKS listener"
+              if grep -qF '[AUTH-DIAG] authentication accepted via password' "$LOG/tcp-ssh-core.log" && \
+                 grep -qF '[AUTH-DIAG] configured credential sizes: username=10 password=24 bytes' "$LOG/tcp-ssh-core.log"; then
+                pass "valid SSH password accepted; only redacted credential lengths were logged"
+              else
+                fail "valid-password authentication diagnostics were incomplete"
+                cat "$LOG/tcp-ssh-core.log" 2>/dev/null || true
+              fi
             else
               fail "MIPS TCP SSH session did not start"
               cat "$LOG/tcp-stdout.log" "$LOG/tcp-ssh-core.log" 2>/dev/null
