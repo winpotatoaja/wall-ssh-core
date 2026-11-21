@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 #include <openssl/ssl.h>
 
 #ifdef __cplusplus
