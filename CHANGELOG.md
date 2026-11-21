@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Add a dedicated client epoll-cookie encoder/decoder and regression coverage for invalid IDs, boundary IDs, and pointer-tag separation. The SSH Owner now decodes tagged client IDs and resolves them through the active client list; stale client cookies are ignored without dereferencing freed client pointers. Package preparation now installs the helper header. Native and MT7621 static MIPS tests required. [mips-stage=sdk]
+
 - Introduce process-wide monotonic client IDs and generation fields, and encode client IDs in epoll event cookies. SSH Owner resolves client cookies through its active-client list, ignoring stale events instead of dereferencing freed `client_conn_t` pointers. This remains synchronous; no worker tasks or deferred client destruction are enabled. Native and MT7621 QEMU validation required. [mips-stage=sdk]
 - Complete MT7621 OpenWrt 24.10.7 QEMU validation for the standalone client lifetime helper using SDK artifact run `44891359077` (QEMU run `44892754687`); the full VM workflow succeeded.
 
