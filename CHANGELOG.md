@@ -1,3 +1,13 @@
+## Unreleased
+
+- Fix the OpenWrt 24.10.7 mipsel_24kc link failure caused by 64-bit atomic
+  operations requiring `__atomic_load_8`: link the relay with `-latomic`
+  only for the MIPS ABI, and link the statically cross-compiled I/O worker
+  pool regression with the same runtime. Bump the package release to r33.
+- MIPS SDK run #44893762192 reached the relay link stage; OpenSSL, zlib,
+  libssh2, source staging, and compilation succeeded before the missing
+  libatomic link dependency stopped the build.
+
 - Correct the MT7621 QEMU host-side half-close assertion: the 8 MiB post-EOF endpoint is exercised once by the TCP suite, while TLS has separate half-close and duplex coverage. Re-run against SDK artifact `44891359077`.
 - Dispatch MT7621 QEMU runtime validation for the client lifetime helper using successful SDK artifact run `44891359077`; verify the exact SDK artifact and execute the static `mipsel_24kc` lifetime regression in the guest before live relay integration.
 
