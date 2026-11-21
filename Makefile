@@ -36,6 +36,8 @@ define Build/Prepare
 	test -s ./tls_engine.c
 	test -s ./tls_engine.h
 	test -s ./client_event_token.h
+	test -s ./client_lifetime.h
+	test -s ./client_lifetime.c
 	test -s ./spsc_rb.h
 	test -s ./io_worker_pool.c
 	test -s ./io_worker_pool.h
@@ -44,6 +46,8 @@ define Build/Prepare
 	$(CP) ./tls_engine.c $(PKG_BUILD_DIR)/tls_engine.c
 	$(CP) ./tls_engine.h $(PKG_BUILD_DIR)/tls_engine.h
 	$(CP) ./client_event_token.h $(PKG_BUILD_DIR)/client_event_token.h
+	$(CP) ./client_lifetime.h $(PKG_BUILD_DIR)/client_lifetime.h
+	$(CP) ./client_lifetime.c $(PKG_BUILD_DIR)/client_lifetime.c
 	$(CP) ./spsc_rb.h $(PKG_BUILD_DIR)/spsc_rb.h
 	$(CP) ./io_worker_pool.c $(PKG_BUILD_DIR)/io_worker_pool.c
 	$(CP) ./io_worker_pool.h $(PKG_BUILD_DIR)/io_worker_pool.h
@@ -54,7 +58,7 @@ endef
 define Build/Compile
 	$(TARGET_CC) $(TARGET_CPPFLAGS) $(CORE_ARCH_CPPFLAGS) $(TARGET_CFLAGS) -std=gnu11 -pthread \
 		-Wall -Wextra \
-		-o $(PKG_BUILD_DIR)/passwall-ssh-core $(PKG_BUILD_DIR)/ssh-core.c $(PKG_BUILD_DIR)/tls_engine.c $(PKG_BUILD_DIR)/io_worker_pool.c \
+		-o $(PKG_BUILD_DIR)/passwall-ssh-core $(PKG_BUILD_DIR)/ssh-core.c $(PKG_BUILD_DIR)/tls_engine.c $(PKG_BUILD_DIR)/io_worker_pool.c $(PKG_BUILD_DIR)/client_lifetime.c \
 		$(TARGET_LDFLAGS) -pthread -Wl,--as-needed -lssh2 -lssl -lcrypto $(CORE_ARCH_LDLIBS)
 	test -x $(PKG_BUILD_DIR)/passwall-ssh-core
 endef
