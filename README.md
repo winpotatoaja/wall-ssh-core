@@ -1,10 +1,11 @@
 # Passwall SSH Core
 
-A non-blocking libssh2 client that opens one or more independent SSH sessions
-(one per worker thread) and multiplexes local
-SOCKS5 clients over SSH `direct-tcpip` channels.
+A non-blocking libssh2 client that owns exactly one upstream SSH session
+(one authentication per process) and multiplexes local SOCKS5 clients over
+SSH `direct-tcpip` channels. CPU detection must never increase the number of
+upstream SSH logins; auxiliary multi-core I/O processing is developed separately.
 
-## Package and executable names
+## Single-session safety policy (R28)\n\nThe process always creates exactly one upstream TCP/TLS connection and one SSH\nsession, regardless of the number of detected CPUs. Legacy `WORKERS` and\n`-workers` values remain accepted for launcher compatibility but are ignored\nfor upstream session creation; the startup log reports detected CPUs and the\nsingle-session policy. This prevents CPU auto-detection from multiplying\npassword authentications. It does not yet make libssh2 operations parallel:\nall calls on the single `LIBSSH2_SESSION` remain serialized.\n\n## Package and executable names
 
 The OpenWrt package is named `passwall-ssh-core`, and the runtime executable
 installed by the package is `/usr/bin/passwall-ssh-core`. The package manifest,

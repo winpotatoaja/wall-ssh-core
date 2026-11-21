@@ -96,11 +96,11 @@ static long detect_available_cpu_count(void) {
     return online_count > 0 ? online_count : 1;
 }
 
-/* The current worker/session architecture intentionally caps the pool at 4. */
-static int worker_count_for_cpu_count(long cpu_count) {
-    if (cpu_count < 1) return 1;
-    if (cpu_count > MAX_WORKERS) return MAX_WORKERS;
-    return (int)cpu_count;
+/* A process owns exactly one upstream SSH session. CPU count is used
+ * for auxiliary I/O parallelism, never to multiply SSH authentications. */
+static int ssh_session_count_for_cpu_count(long cpu_count) {
+    (void)cpu_count;
+    return 1;
 }
 
 static long g_detected_cpu_count = 1;
@@ -5296,33 +5296,27 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
     if (!out_count) return -1;
 
     g_detected_cpu_count = detect_available_cpu_count();
-    int workers = worker_count_for_cpu_count(g_detected_cpu_count);
-    int cli_workers_set = 0;
+    int requested_workers = 1;
+    int manual_workers = 0;
     const char *env_file = NULL;
     g_worker_count_auto = 1;
 
-    /* Parse CLI first so a valid -workers value overrides even a malformed
-     * WORKERS entry in the environment file. */
+    /* Keep legacy options parseable, but never turn CPU count into SSH sessions.
+     * One process must create one upstream TCP/TLS connection and one SSH login. */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-env") == 0 && i + 1 < argc) {
             env_file = argv[++i];
         } else if (strcmp(argv[i], "-workers") == 0) {
             if (i + 1 >= argc ||
-                parse_int_range(argv[++i], 1, MAX_WORKERS, &workers) < 0) {
-                fprintf(stderr, "-workers harus 1..%d\n", MAX_WORKERS);
+                parse_int_range(argv[++i], 1, MAX_WORKERS, &requested_workers) < 0) {
+                fprintf(stderr, "-workers harus 1..%d\\n", MAX_WORKERS);
                 return -1;
             }
-            cli_workers_set = 1;
+            manual_workers = 1;
         }
     }
 
-    if (cli_workers_set) {
-        g_worker_count_auto = 0;
-        *out_count = workers;
-        return 0;
-    }
-
-    if (env_file) {
+    if (!manual_workers && env_file) {
         FILE *f = fopen(env_file, "r");
         if (f) {
             char line[2048];
@@ -5344,19 +5338,25 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
                     value++;
                 }
                 if (strcmp(key, "WORKERS") == 0) {
-                    if (parse_int_range(value, 1, MAX_WORKERS, &workers) < 0) {
+                    if (parse_int_range(value, 1, MAX_WORKERS, &requested_workers) < 0) {
                         fclose(f);
-                        fprintf(stderr, "WORKERS harus 1..%d\n", MAX_WORKERS);
+                        fprintf(stderr, "WORKERS harus 1..%d\\n", MAX_WORKERS);
                         return -1;
                     }
-                    g_worker_count_auto = 0;
+                    manual_workers = 1;
                 }
             }
             fclose(f);
         }
     }
 
-    *out_count = workers;
+    g_worker_count_auto = 1;
+    *out_count = ssh_session_count_for_cpu_count(g_detected_cpu_count);
+    fprintf(stderr,
+            "[CPU] detected=%ld SSH_sessions=1 mode=single-session; "
+            "legacy requested workers=%d%s\\n",
+            g_detected_cpu_count, requested_workers,
+            manual_workers ? " (ignored to prevent multiple SSH logins)" : "");
     return 0;
 }
 
