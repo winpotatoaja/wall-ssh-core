@@ -32,6 +32,7 @@ define Build/Prepare
 	test -s ./ssh-core.c
 	test -s ./tls_engine.c
 	test -s ./tls_engine.h
+	test -s ./client_event_token.h
 	test -s ./spsc_rb.h
 	test -s ./io_worker_pool.c
 	test -s ./io_worker_pool.h
@@ -39,6 +40,7 @@ define Build/Prepare
 	$(CP) ./ssh-core.c $(PKG_BUILD_DIR)/ssh-core.c
 	$(CP) ./tls_engine.c $(PKG_BUILD_DIR)/tls_engine.c
 	$(CP) ./tls_engine.h $(PKG_BUILD_DIR)/tls_engine.h
+	$(CP) ./client_event_token.h $(PKG_BUILD_DIR)/client_event_token.h
 	$(CP) ./spsc_rb.h $(PKG_BUILD_DIR)/spsc_rb.h
 	$(CP) ./io_worker_pool.c $(PKG_BUILD_DIR)/io_worker_pool.c
 	$(CP) ./io_worker_pool.h $(PKG_BUILD_DIR)/io_worker_pool.h
