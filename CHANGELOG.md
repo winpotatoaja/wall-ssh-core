@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Run the RX-priority TLS Engine scheduling and diagnostic counters in the OpenWrt 24.10.7 MT7621 QEMU guest, using SDK artifact from run 44875434248. This is the required runtime regression gate before SSH callback integration.
 - Guard TLS Engine diagnostic-only queue occupancy snapshots with TLS_ENGINE_DIAGNOSTICS so the production package builds without unused-variable warnings while the strict native/MIPS test helper retains byte counters.
 - Rework TLS Engine readiness scheduling: a pinned SSL_write/SSL_read is retried exclusively with its original arguments; otherwise SSL_pending/readable RX is serviced before the next TX write. Prefer POLLIN when both directions are ready. Add test-only MIPS/native worker counters and queue/terminal snapshots so another emulated failure is diagnosable rather than guessed.
 - Re-run the MIPS TLS Engine owner-thread QEMU regression with full-duplex RX/TX scheduling fix from SDK run 44873978405; require the guest transfer, SHA-256, close_notify and graceful shutdown checks before Stage 2 callback integration.
