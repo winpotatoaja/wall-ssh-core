@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix two stale TLS Engine error-mapping call sites found by the first native -Werror CI build; retain the single SSL_get_error classification result instead of invoking the mapper with obsolete arguments.
 - Add the first dedicated TLS Engine module for the single-session pipeline. It creates and owns SSL* on one pthread from TLS handshake through SSL_free, communicates through two SPSC byte queues, and uses eventfds for bidirectional notifications. It preserves pinned SSL_write retries, distinguishes close_notify from fatal transport errors, and provides bounded shutdown. This is Phase 2 transport groundwork; ssh-core.c callbacks are not switched to the engine yet.
 - Bump package release to r30 and compile the TLS Engine module for OpenWrt SDK coverage before live relay integration.
 - Correct the offline MT7621 VM dependency assertion to use the actual OpenWrt 24.10.7 runtime package names `libopenssl3` and `libssh2-1` (confirmed in the ImageBuilder install log). The previous assertion used build/dependency aliases and failed despite both runtime libraries being installed. The MIPS SPSC stress binary had already passed in that run.
