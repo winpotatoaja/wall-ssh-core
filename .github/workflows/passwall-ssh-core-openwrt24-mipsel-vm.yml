@@ -83,7 +83,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r24 pthread-worker IPK, half-close helper and download benchmark
+      - name: Build r25 MIPS ChaCha pthread-worker IPK, half-close helper and download benchmark
         shell: bash
         run: |
           set -euo pipefail
@@ -212,7 +212,7 @@ jobs:
           file test-results/passwall-ssh-core*.ipk test-results/socks-halfclose test-results/socks-mt-download
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r24' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r25' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
           readelf -h test-results/socks-mt-download | grep -q 'MIPS'
 
@@ -695,7 +695,7 @@ jobs:
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install MIPS package or runtime dependencies"
           elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r24'; then
-            pass "opkg installed passwall-ssh-core r24 on mipsel_24kc"
+            pass "opkg installed passwall-ssh-core r25 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
@@ -1103,6 +1103,16 @@ jobs:
               cat "$LOG/tls-single-core-download.log"
               if [ "$TLS_SINGLE_RC" -eq 0 ]; then
                 pass "4 pthread downloads passed through one TLS/SNI SSH session with exact bytes and SHA-256"
+                if grep -q 'TLS Connected: TLSv1.3 (TLS_CHACHA20_POLY1305_SHA256)' "$LOG/tls-single-core.log"; then
+                  pass "mipsel_24kc negotiated TLS_CHACHA20_POLY1305_SHA256 as the preferred TLS 1.3 suite"
+                else
+                  fail "MIPS TLS connection did not negotiate the required ChaCha20-Poly1305 suite"
+                fi
+                if grep -q 'mipsel_24kc TLS 1.3 cipher preference configured' "$LOG/tls-single-core.log"; then
+                  pass "MIPS-only TLS 1.3 cipher preference was compiled and applied"
+                else
+                  fail "MIPS-only TLS 1.3 cipher preference was not applied"
+                fi
               else
                 fail "TLS/SNI single-session pthread download failed"
               fi
