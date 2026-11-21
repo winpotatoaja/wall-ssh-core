@@ -90,7 +90,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r29 single-session MIPS IPK and SPSC/relay test helpers
+      - name: Build r30 single-session MIPS IPK and TLS Engine test helper
         shell: bash
         run: |
           set -euo pipefail
@@ -229,18 +229,19 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/http_parser_test.c spsc_rb.h tests/spsc_rb_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
             echo "SDK artifact was built from different package or test sources."
             git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c spsc_rb.h tests/spsc_rb_test.c tests/socks_halfclose.c tests/socks_mt_download.c
             false
           fi
-          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256)
-          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256)
+          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r29' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r30' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
           readelf -h test-results/socks-mt-download | grep -q 'MIPS'
+          readelf -h test-results/tls-engine-test | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
         shell: bash
@@ -697,6 +698,7 @@ jobs:
             "$IPK" "$GITHUB_WORKSPACE/test-results/spsc-rb-test" \
             "$GITHUB_WORKSPACE/test-results/socks-halfclose" \
             "$GITHUB_WORKSPACE/test-results/socks-mt-download" \
+            "$GITHUB_WORKSPACE/test-results/tls-engine-test" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
@@ -738,7 +740,7 @@ jobs:
             fail "ImageBuilder firmware is missing libopenssl3 or libssh2-1"
           fi
 
-          echo "========== INSTALL R29 MIPS IPK (OFFLINE) =========="
+          echo "========== INSTALL R30 MIPS IPK (OFFLINE) =========="
           if [ "$STATUS" -eq 0 ]; then
             opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
@@ -747,8 +749,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r29'; then
-            pass "opkg installed passwall-ssh-core r29 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r30'; then
+            pass "opkg installed passwall-ssh-core r30 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
@@ -769,6 +771,28 @@ jobs:
             fi
           else
             fail "static MIPS SPSC test binary is missing from /tmp/mips-test"
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== MIPS TLS ENGINE OWNER-THREAD REGRESSION =========="
+            TLS_TEST_RC=0
+            if [ -f "$LOG/tls-engine-test" ] &&
+               cp "$LOG/tls-engine-test" /usr/bin/tls-engine-test; then
+              chmod 0755 /usr/bin/tls-engine-test
+              if command -v timeout >/dev/null 2>&1; then
+                timeout 60 /usr/bin/tls-engine-test >"$LOG/tls-engine-test.log" 2>&1 || TLS_TEST_RC=$?
+              else
+                /usr/bin/tls-engine-test >"$LOG/tls-engine-test.log" 2>&1 || TLS_TEST_RC=$?
+              fi
+              cat "$LOG/tls-engine-test.log"
+              if [ "$TLS_TEST_RC" -eq 0 ]; then
+                pass "MIPS TLS Engine owner-thread duplex, close_notify and graceful shutdown"
+              else
+                fail "MIPS TLS Engine test failed (rc=$TLS_TEST_RC)"
+              fi
+            else
+              fail "MIPS TLS Engine helper missing or could not be staged"
+            fi
           fi
           if [ "$STATUS" -eq 0 ]; then
             "$BIN" -h
