@@ -248,12 +248,15 @@ jobs:
         run: |
           set -euo pipefail
           MESSAGE="$(jq -r '.head_commit.message // empty' "$GITHUB_EVENT_PATH")"
-          SDK_RUN_ID="$(printf '%s\n' "$MESSAGE" | sed -n 's/.*\[sdk_run_id=\([0-9][0-9]*\)\].*/\1/p')"
+          SDK_RUN_ID="$(printf '%s\n' "$MESSAGE" | sed -n 's/.*\[mips_sdk_run_id=\([0-9][0-9]*\)\].*/\1/p')"
+          if [ -z "$SDK_RUN_ID" ]; then
+            SDK_RUN_ID="$(printf '%s\n' "$MESSAGE" | sed -n 's/.*\[sdk_run_id=\([0-9][0-9]*\)\].*/\1/p')"
+          fi
           case "$SDK_RUN_ID" in
-            ""|*[!0-9]*) echo "Missing [sdk_run_id=RUN_ID] in commit message."; false ;;
+            ""|*[!0-9]*) echo "Missing [mips_sdk_run_id=RUN_ID] in commit message."; false ;;
           esac
           echo "SDK_RUN_ID=$SDK_RUN_ID" >> "$GITHUB_ENV"
-          echo "Using SDK run ID: $SDK_RUN_ID"
+          echo "Using MIPS SDK run ID: $SDK_RUN_ID"
 
       - name: Download the MIPS IPK and test helper
         uses: actions/download-artifact@v4

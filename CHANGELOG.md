@@ -1,4 +1,5 @@
 ## Unreleased
+- Fix the MIPS QEMU workflow to consume its dedicated `[mips_sdk_run_id=RUN_ID]` artifact instead of accidentally reusing the x86 SDK run ID.
 - Rebuilt the diagnostic-enabled source successfully for OpenWrt 25.12.5 x86_64 (APK) and OpenWrt 24.10.7 mipsel_24kc (IPK); queue QEMU validation against these exact SDK artifacts.
 - Queue fresh OpenWrt 25.12.5 x86_64 and OpenWrt 24.10.7 mipsel_24kc SDK builds for the pending-operation diagnostic update; QEMU stages must consume these new source-matched artifacts.
 - Add SSH serialized-pending diagnostics (operation, libssh2 block directions, C2S/S2C occupancy, channel write window, and worker in-flight state); enable backpressure/performance counters in the x86 QEMU relay run to identify the full-duplex stall without changing relay behavior.
