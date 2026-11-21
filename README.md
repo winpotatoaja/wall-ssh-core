@@ -341,3 +341,38 @@ client count. Enable `LOG_PERF=1` to collect independent per-worker relay
 counters. These features are experimental until the OpenWrt 24.10.7 MIPS VM
 matrix and physical-router tests have been completed; the QEMU result is not
 a substitute for a real MT7621 hardware benchmark.
+
+## R25: MIPS TLS cipher preference and diagnostics
+
+The `mipsel_24kc` package build prefers the TLS 1.3 suite
+`TLS_CHACHA20_POLY1305_SHA256`, followed by
+`TLS_AES_256_GCM_SHA384` and `TLS_AES_128_GCM_SHA256`. This policy is
+compiled only when the OpenWrt package architecture resolves to
+`mipsel_24kc`; x86_64 and other targets retain OpenSSL's default policy.
+The AES suites remain available as fallbacks. This affects the outer TLS
+connection only; the SSH cipher negotiated inside the tunnel is independent.
+
+When `LOG_PERF=1`, the interval counters now include S2C ring occupancy
+(sum, maximum and nonempty-client count), the number of S2C clients with
+`EPOLLOUT` armed, eligible S2C clients missing `EPOLLOUT`, partial SOCKS
+sends, and epoll ADD/MOD failures. These values distinguish a genuinely
+full local ring from aggregate TLS/SSH byte-counter differences. A nonzero
+`s2c_epollout_missing` or epoll-control failure is a diagnostic signal,
+not by itself proof of the root cause.
+
+Authentication failure logs now include the server-advertised methods,
+libssh2 return/error codes, and username/password byte lengths. Secret values
+are always redacted. Username and password values exceeding the configured
+buffer sizes are rejected instead of being silently truncated. If a session
+worked and an immediate reconnect is rejected by every worker, compare the
+redacted lengths and server methods across attempts; also inspect server-side
+account/session limits and whether the previous SSH sessions have expired.
+The core does not automatically retry an explicit authentication rejection,
+to avoid repeatedly submitting credentials to a server that may be rate
+limiting or temporarily locking the account.
+
+The QEMU test uses a TLS test server restricted to ChaCha20-Poly1305 and
+requires the MIPS client to negotiate that exact TLS 1.3 suite. QEMU results
+remain an integration check; final throughput and stability decisions require
+testing on the physical MT7621 router.
+
