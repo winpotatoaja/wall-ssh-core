@@ -148,6 +148,8 @@ static __thread int g_listen_tag = 0;
 static __thread int g_upstream_tag = 0;
 static __thread int g_worker_completion_tag = 0;
 static __thread uint64_t g_next_io_task_id = 1U;
+static __thread io_worker_pool_t *g_io_pool = NULL;
+static __thread io_worker_completion_tracker_t *g_io_tracker = NULL;
 
 typedef struct {
     uint8_t *data;
@@ -2975,35 +2977,38 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
         int would_block = 0;
         int recv_rc = 0;
         if ((events & (EPOLLIN | EPOLLERR | EPOLLHUP | EPOLLRDHUP)) &&
-            !c->client_eof && rb_free_space(&c->c2s) > 0) {
-            size_t c2s_before=c->c2s.used;
-            recv_rc = recv_to_rb(c->fd, &c->c2s, &eof_hit, &would_block);
-            note_c2s_buffer_peak(c);
-            if (recv_rc < 0) {
-                c->client_eof = 1;
-                c->need_send_eof = 1;
-                c->client_dead = 1;
-                c->client_reset = 1;
-                c->hup_pending = 0;
-                c->rdhup_pending = 0;
-                detach_client_fd(epfd, c);
-            } else if (eof_hit) {
-                c->client_eof = 1;
-                c->need_send_eof = 1;
-                c->hup_pending = 0;
-                c->rdhup_pending = 0;
-            }
-            if (c->c2s.used > c2s_before) {
-                size_t received = c->c2s.used - c2s_before;
-                c->last_activity_ms = now_ms();
-                if (g_log_perf) {
-                    g_perf_stats.c2s_rx_bytes += received;
-                    if (c->ssh_eof) g_perf_stats.c2s_post_eof_rx_bytes += received;
+            !c->client_eof && !c->c2s_worker_inflight &&
+            rb_free_space(&c->c2s) > 0) {
+            if (events & (EPOLLHUP | EPOLLERR)) c->hup_pending = 1;
+            else if (events & EPOLLRDHUP) c->rdhup_pending = 1;
+            int submit_rc = submit_c2s_worker_read(g_io_pool, g_io_tracker, c);
+            if (submit_rc != 0) {
+                /* Temporary queue pressure falls back to the original Owner read. */
+                size_t c2s_before = c->c2s.used;
+                recv_rc = recv_to_rb(c->fd, &c->c2s, &eof_hit, &would_block);
+                note_c2s_buffer_peak(c);
+                if (recv_rc < 0) {
+                    c->client_eof = 1;
+                    c->need_send_eof = 1;
+                    c->client_dead = 1;
+                    c->client_reset = 1;
+                    c->hup_pending = 0;
+                    c->rdhup_pending = 0;
+                    detach_client_fd(epfd, c);
+                } else if (eof_hit) {
+                    c->client_eof = 1;
+                    c->need_send_eof = 1;
+                    c->hup_pending = 0;
+                    c->rdhup_pending = 0;
                 }
-                if (c->ssh_eof && g_log_backpressure)
-                    log_blue("C2S bytes received after remote EOF (%s:%u; added=%zu queued=%zu; client_eof=%d)",
-                             c->target_host, (unsigned)c->target_port, received,
-                             c->c2s.used, c->client_eof);
+                if (c->c2s.used > c2s_before) {
+                    size_t received = c->c2s.used - c2s_before;
+                    c->last_activity_ms = now_ms();
+                    if (g_log_perf) {
+                        g_perf_stats.c2s_rx_bytes += received;
+                        if (c->ssh_eof) g_perf_stats.c2s_post_eof_rx_bytes += received;
+                    }
+                }
             }
         }
 
@@ -3051,7 +3056,8 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
 
         if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
             uint32_t want = client_rdhup_flag(c);
-            if (!c->client_eof && rb_free_space(&c->c2s) > 0) want |= EPOLLIN;
+            if (!c->client_eof && !c->c2s_worker_inflight &&
+                rb_free_space(&c->c2s) > 0) want |= EPOLLIN;
             if (c->s2c.used > 0 || c->ctrl_len > 0) want |= EPOLLOUT;
             update_client_epoll(epfd, c, want);
         }
@@ -4536,6 +4542,8 @@ static int core_worker_run(int argc, char **argv) {
     LIBSSH2_SESSION *session = NULL;
     int listen_fd = -1;
     int epfd = -1;
+    io_worker_pool_t *io_pool = NULL;
+    io_worker_completion_tracker_t *io_tracker = NULL;
     int exit_code = 1;
 
     if (is_tls) {
@@ -4927,6 +4935,32 @@ static int core_worker_run(int argc, char **argv) {
         goto fail_cleanup;
     }
 
+    io_pool = io_worker_pool_create(1U, 64U, io_worker_socket_execute, NULL);
+    if (!io_pool) {
+        log_red("Unable to create local socket I/O worker pool: %s", strerror(errno));
+        goto fail_cleanup;
+    }
+    io_tracker = io_worker_completion_tracker_create(1U, 64U);
+    if (!io_tracker) {
+        log_red("Unable to create I/O completion tracker: %s", strerror(errno));
+        goto fail_cleanup;
+    }
+    g_io_pool = io_pool;
+    g_io_tracker = io_tracker;
+    int io_completion_fd = io_worker_pool_completion_fd(io_pool, 0U);
+    if (io_completion_fd < 0) {
+        log_red("Unable to obtain I/O worker completion fd: %s", strerror(errno));
+        goto fail_cleanup;
+    }
+    struct epoll_event io_completion_ev = {
+        .events = EPOLLIN,
+        .data.ptr = &g_worker_completion_tag
+    };
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, io_completion_fd, &io_completion_ev) < 0) {
+        log_red("Unable to register I/O worker completion fd: %s", strerror(errno));
+        goto fail_cleanup;
+    }
+
     uint32_t upstream_ev = uctx.tls ? EPOLLIN : (EPOLLIN | EPOLLRDHUP);
     struct epoll_event ev = { .events = EPOLLIN, .data.ptr = &g_listen_tag };
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, listen_fd, &ev) < 0) {
@@ -4979,6 +5013,11 @@ static int core_worker_run(int argc, char **argv) {
             uint64_t event_token = events[i].data.u64;
             void *ptr = (void *)(uintptr_t)event_token;
             uint32_t e = events[i].events;
+
+            if (ptr == &g_worker_completion_tag) {
+                drain_io_worker_completions(epfd, io_pool, io_tracker);
+                continue;
+            }
 
             uint64_t client_id = 0;
             if (client_event_token_decode(event_token, &client_id)) {
@@ -5298,6 +5337,12 @@ static int core_worker_run(int argc, char **argv) {
         log_yellow("A libssh2/OpenSSL operation is still pending at process shutdown; skipping further transport I/O");
         g_skip_libssh2_cleanup = 1;
     }
+    if (io_pool) {
+        (void)io_worker_pool_request_stop(io_pool, 1);
+        if (io_worker_pool_join(io_pool, SHUTDOWN_IO_TIMEOUT_MS) != 0)
+            log_yellow("I/O worker pool join timed out; retaining referenced client storage");
+        drain_io_worker_completions(epfd, io_pool, io_tracker);
+    }
     while (g_clients) {
         client_conn_t *c = g_clients;
         /* remove_client owns FD detachment and may have to defer it. */
@@ -5308,6 +5353,20 @@ static int core_worker_run(int argc, char **argv) {
     reap_retired_clients(epfd);
     clear_pending_operation();
     g_opening_client = NULL;
+    g_io_pool = NULL;
+    g_io_tracker = NULL;
+    if (io_tracker) {
+        if (io_worker_completion_tracker_outstanding(io_tracker) == 0U)
+            (void)io_worker_completion_tracker_destroy(io_tracker);
+        else
+            log_yellow("I/O completion tracker retains outstanding tasks during shutdown");
+        io_tracker = NULL;
+    }
+    if (io_pool) {
+        if (io_worker_pool_destroy(io_pool) < 0)
+            log_yellow("I/O worker pool retained because workers did not fully join");
+        io_pool = NULL;
+    }
     if (epfd >= 0) close(epfd);
     if (listen_fd >= 0) close(listen_fd);
     long long shutdown_deadline_ms = now_ms() + SHUTDOWN_IO_TIMEOUT_MS;
@@ -5356,6 +5415,20 @@ static int core_worker_run(int argc, char **argv) {
 
 fail_cleanup:
     if (raw_payload) free(raw_payload);
+    if (io_pool) {
+        (void)io_worker_pool_request_stop(io_pool, 1);
+        if (io_worker_pool_join(io_pool, SHUTDOWN_IO_TIMEOUT_MS) == 0) {
+            if (io_tracker) drain_io_worker_completions(epfd, io_pool, io_tracker);
+            if (io_tracker && io_worker_completion_tracker_outstanding(io_tracker) == 0U)
+                (void)io_worker_completion_tracker_destroy(io_tracker);
+            if (io_worker_pool_destroy(io_pool) == 0) io_pool = NULL;
+            io_tracker = NULL;
+        } else {
+            log_yellow("Startup cleanup: worker pool join timed out; retaining worker-owned state");
+        }
+    }
+    g_io_pool = NULL;
+    g_io_tracker = NULL;
     if (epfd >= 0) close(epfd);
     if (listen_fd >= 0) close(listen_fd);
     if (session) {
