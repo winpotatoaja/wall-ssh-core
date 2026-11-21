@@ -288,7 +288,6 @@ jobs:
           readelf -h test-results/client-lifetime-test | grep -q 'MIPS'
           readelf -h test-results/client-event-token-test | grep -q 'MIPS'
           readelf -h test-results/io-worker-completion-tracker-test | grep -q 'MIPS'
-          readelf -h test-results/io-worker-completion-tracker-test | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
         shell: bash
