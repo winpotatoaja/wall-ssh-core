@@ -3098,7 +3098,7 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
             if (submit_rc != 0) {
                 /* Keep the original Owner send as a bounded backpressure fallback. */
                 size_t s2c_before = c->s2c.used;
-                if (flush_s2c_to_client(epfd, c) < 0) {
+                if (send_from_rb(c->fd, &c->s2c, 0) < 0) {
                     c->client_dead = 1;
                     c->client_reset = 1;
                     c->client_eof = 1;
@@ -3457,7 +3457,7 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
     }
 
     if (c->fd >= 0 && c->ctrl_len == 0) {
-        if (send_from_rb(c->fd, &c->s2c, 0) < 0) {
+        if (flush_s2c_to_client(epfd, c) < 0) {
             c->client_dead = 1;
             c->client_reset = 1;
             c->client_eof = 1;
