@@ -1,4 +1,5 @@
 ## Unreleased
+- Re-run MT7621 QEMU using the verified MIPS IPK from SDK run `44957061334` after correcting workflow artifact selection.
 - Fix the MIPS QEMU workflow to consume its dedicated `[mips_sdk_run_id=RUN_ID]` artifact instead of accidentally reusing the x86 SDK run ID.
 - Rebuilt the diagnostic-enabled source successfully for OpenWrt 25.12.5 x86_64 (APK) and OpenWrt 24.10.7 mipsel_24kc (IPK); queue QEMU validation against these exact SDK artifacts.
 - Queue fresh OpenWrt 25.12.5 x86_64 and OpenWrt 24.10.7 mipsel_24kc SDK builds for the pending-operation diagnostic update; QEMU stages must consume these new source-matched artifacts.
