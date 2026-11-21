@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix a TLS Engine full-duplex starvation path: successful SSL_write progress no longer causes the worker to continue draining outbound data without polling inbound readiness. The MIPS QEMU regression exposed the deadlock when the socket send buffer filled while the peer was writing its echo response. Extend the emulated transfer deadline so slow MIPS crypto is not misclassified as a functional timeout.
 - Add MT7621 QEMU guest execution of the standalone TLS Engine regression binary and validate the R30 artifact checksum, MIPS ELF metadata and package release before installing it.
 - Preserve a nonzero TX-side TLS shutdown timeout/error after a graceful RX close_notify; do not clear a terminal shutdown result during TLS thread exit.
 - Provision the TLS Engine pthread with a 512 KiB stack for musl targets. Bound graceful queue flushing and TLS close_notify shutdown to one deadline; retain the legacy endpoint retry policy for transport EOF/syscall failures while keeping non-EOF TLS protocol errors non-retryable.
