@@ -37,22 +37,23 @@ integration remain future stages.
 ## Phase 3 live relay integration (in progress)
 
 The SSH Owner now creates one bounded local-socket I/O worker pool and registers
-its completion eventfd with the Owner epoll loop. The first live integration
-moves C2S client-socket reads to that pool: workers receive only a copied file
+its completion eventfd with the Owner epoll loop. The live relay now moves both C2S client-socket reads and S2C client-socket
+writes to that pool: workers receive only copied socket metadata and payload
 descriptor, requested length, and immutable client/task identity. They never
 access `client_conn_t`, ring buffers, libssh2, or TLS state.
 
 The Owner acquires the client lifetime reference, registers the exact task
 identity with the completion tracker, and then publishes the task. On
 completion, the Owner validates and consumes that identity, releases the
-reference exactly once, and only then commits returned bytes into the C2S ring.
-A single in-flight C2S read is allowed per client. Pending HUP drains are
-serialized with worker reads, and TCP RDHUP remains a half-close rather than
-being upgraded to a full close.
+reference exactly once, and commits C2S bytes or advances the S2C ring head.
+S2C tasks carry copied bytes plus a pinned ring-head/generation token, so
+partial writes commit only the exact number of bytes accepted by the socket.
+Only one task per direction is in flight for each client. Pending HUP drains
+are serialized with worker reads, and TCP RDHUP remains a half-close rather
+than being upgraded to a full close.
 
-This is an incremental integration, not the completed worker-pool relay:
-S2C socket writes are still synchronous, and the initial pool uses one worker
-as a conservative baseline. Consolidated native, MIPS SDK, and MT7621 QEMU
+This remains an incremental integration: the initial pool uses one worker as
+a conservative baseline, and consolidated native, MIPS SDK, and MT7621 QEMU
 validation is still required before treating this path as production-ready.
 
 ## TLS Engine integration (Phase 2, R31)
