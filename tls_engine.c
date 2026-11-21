@@ -308,7 +308,7 @@ static int engine_try_write(tls_engine_t *engine, SSL *ssl,
         return 0;
     }
 
-    *fatal_error = ssl_error_to_errno(ssl, rc, saved_errno);
+    *fatal_error = ssl_error_to_errno(error, saved_errno);
     if (*fatal_error == 0) *fatal_error = EPIPE;
     return -1;
 }
@@ -384,7 +384,7 @@ static int engine_try_read(tls_engine_t *engine, SSL *ssl,
         return 2;
     }
 
-    *fatal_error = ssl_error_to_errno(ssl, rc, saved_errno);
+    *fatal_error = ssl_error_to_errno(error, saved_errno);
     if (*fatal_error == 0) *fatal_error = EIO;
     return -1;
 }
