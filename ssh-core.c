@@ -271,9 +271,12 @@ typedef struct client_conn {
 
     struct client_conn *prev;
     struct client_conn *next;
+    struct client_conn *retired_next;
 } client_conn_t;
 
 static __thread client_conn_t *g_clients = NULL;
+/* Clients detached from epoll remain here while worker tasks hold references. */
+static __thread client_conn_t *g_retired_clients = NULL;
 static uint64_t g_next_client_id = 1;
 
 /* IDs are process-wide, monotonic, and never recycled. Reserve the top bit
@@ -2307,24 +2310,71 @@ static void set_client_cleanup_deadline(client_conn_t *c) {
         c->cleanup_deadline_ms = now_ms() + SSH_CHANNEL_CLEANUP_TIMEOUT_MS;
 }
 
-static void remove_client(int epfd, client_conn_t *c) {
-    if (g_opening_client == c) g_opening_client = NULL;
-    if (g_pending_client == c) {
-        clear_pending_operation();
-    }
-    detach_client_fd(epfd, c);
-    rb_free(&c->c2s);
-    rb_free(&c->s2c);
+static void unlink_client_from_active_list(client_conn_t *c) {
     if (c->prev) c->prev->next = c->next;
     else g_clients = c->next;
     if (c->next) c->next->prev = c->prev;
+    c->prev = NULL;
+    c->next = NULL;
     if (g_client_count > 0) g_client_count--;
     release_client_slot();
+}
+
+static void free_client_storage(client_conn_t *c) {
+    if (!c) return;
+    rb_free(&c->c2s);
+    rb_free(&c->s2c);
+    (void)client_lifetime_finalize(&c->lifetime);
     free(c);
+}
+
+/* Retired clients are reaped only by the SSH Owner after all task references
+ * have been released by their completion records. */
+static void reap_retired_clients(int epfd) {
+    client_conn_t **link = &g_retired_clients;
+    while (*link) {
+        client_conn_t *c = *link;
+        if (c->lifetime.worker_refs != 0U) {
+            link = &c->retired_next;
+            continue;
+        }
+        *link = c->retired_next;
+        c->retired_next = NULL;
+        detach_client_fd(epfd, c);
+        free_client_storage(c);
+    }
+}
+
+static void remove_client(int epfd, client_conn_t *c) {
+    if (!c) return;
+    if (g_opening_client == c) g_opening_client = NULL;
+    if (g_pending_client == c) clear_pending_operation();
+
+    if (!c->lifetime.close_requested)
+        (void)client_lifetime_request_close(&c->lifetime);
+
+    /* Unlink first: no further epoll event may resolve this client as active. */
+    unlink_client_from_active_list(c);
+    if (c->lifetime.worker_refs != 0U) {
+        /* Keep the FD and both rings alive until every worker acknowledges. */
+        if (c->fd >= 0 && c->in_epoll) {
+            (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
+            c->in_epoll = 0;
+            c->epoll_events = 0;
+        }
+        c->retired_next = g_retired_clients;
+        g_retired_clients = c;
+        return;
+    }
+
+    detach_client_fd(epfd, c);
+    free_client_storage(c);
 }
 
 static void start_closing_client(int epfd, client_conn_t *c) {
     if (!c) return;
+    if (!c->lifetime.close_requested)
+        (void)client_lifetime_request_close(&c->lifetime);
     /* A pending channel OPEN follows SSH_OPEN_HARD_TO_MS, not the shorter
      * channel cleanup budget. Keep retrying the same open until it resolves
      * or the existing 30-second hard deadline restarts the session. */
@@ -2332,13 +2382,29 @@ static void start_closing_client(int epfd, client_conn_t *c) {
         g_pending_op == PENDING_OPEN) {
         c->abort_on_open = 1;
         c->cleanup_deadline_ms = 0;
-        detach_client_fd(epfd, c);
+        if (c->lifetime.worker_refs != 0U) {
+            if (c->fd >= 0 && c->in_epoll) {
+                (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
+                c->in_epoll = 0;
+                c->epoll_events = 0;
+            }
+        } else {
+            detach_client_fd(epfd, c);
+        }
         return;
     }
     if (c == g_pending_client && g_pending_op != PENDING_NONE) {
         c->abort_on_pending = 1;
         set_client_cleanup_deadline(c);
-        detach_client_fd(epfd, c);
+        if (c->lifetime.worker_refs != 0U) {
+            if (c->fd >= 0 && c->in_epoll) {
+                (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
+                c->in_epoll = 0;
+                c->epoll_events = 0;
+            }
+        } else {
+            detach_client_fd(epfd, c);
+        }
         return;
     }
     /* libssh2 channel_write may have built a packet before an SSL callback
@@ -2347,19 +2413,43 @@ static void start_closing_client(int epfd, client_conn_t *c) {
     if (c->channel && c->write_pending && !c->write_waiting_window) {
         c->abort_on_pending = 1;
         set_client_cleanup_deadline(c);
-        detach_client_fd(epfd, c);
+        if (c->lifetime.worker_refs != 0U) {
+            if (c->fd >= 0 && c->in_epoll) {
+                (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
+                c->in_epoll = 0;
+                c->epoll_events = 0;
+            }
+        } else {
+            detach_client_fd(epfd, c);
+        }
         return;
     }
     if (c == g_opening_client && !c->channel) {
         /* The channel-open hard timeout owns this lifetime (30 seconds). */
         c->abort_on_open = 1;
-        detach_client_fd(epfd, c);
+        if (c->lifetime.worker_refs != 0U) {
+            if (c->fd >= 0 && c->in_epoll) {
+                (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
+                c->in_epoll = 0;
+                c->epoll_events = 0;
+            }
+        } else {
+            detach_client_fd(epfd, c);
+        }
         return;
     }
     /* A channel read EAGAIN and a zero-window write wait do not retain an
      * application buffer in libssh2. Active writes are pinned by the guard
      * above even when their TLS callback is waiting for inbound readiness. */
-    detach_client_fd(epfd, c);
+    if (c->lifetime.worker_refs != 0U) {
+            if (c->fd >= 0 && c->in_epoll) {
+                (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
+                c->in_epoll = 0;
+                c->epoll_events = 0;
+            }
+        } else {
+            detach_client_fd(epfd, c);
+        }
     if (c->channel) {
         c->write_pending = 0;
         c->write_pending_head = 0;
@@ -2370,8 +2460,10 @@ static void start_closing_client(int epfd, client_conn_t *c) {
         log_channel_buffer_final(c);
         log_s2c_buffer_final(c);
     }
-    rb_free(&c->c2s);
-    rb_free(&c->s2c);
+    if (c->lifetime.worker_refs == 0U) {
+        rb_free(&c->c2s);
+        rb_free(&c->s2c);
+    }
     set_client_cleanup_deadline(c);
     c->state = ST_CLOSING;
 }
@@ -4678,6 +4770,7 @@ static int core_worker_run(int argc, char **argv) {
         }
 
         int upstream_readable = 0;
+        reap_retired_clients(epfd);
 
         for (int i = 0; i < nfds; i++) {
             uint64_t event_token = events[i].data.u64;
