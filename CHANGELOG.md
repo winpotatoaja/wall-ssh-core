@@ -1,3 +1,4 @@
+- Correct the MT7621 QEMU host-side half-close assertion: the 8 MiB post-EOF endpoint is exercised once by the TCP suite, while TLS has separate half-close and duplex coverage. Re-run against SDK artifact `44891359077`.
 - Dispatch MT7621 QEMU runtime validation for the client lifetime helper using successful SDK artifact run `44891359077`; verify the exact SDK artifact and execute the static `mipsel_24kc` lifetime regression in the guest before live relay integration.
 
 # Passwall SSH Core changelog
