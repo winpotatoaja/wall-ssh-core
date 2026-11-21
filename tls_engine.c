@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #define TLS_ENGINE_IO_CHUNK 16384U
+#define TLS_ENGINE_STACK_SIZE (512U * 1024U)
 #define TLS_ENGINE_DEFAULT_TIMEOUT_MS 15000
 #define TLS_ENGINE_DEFAULT_SHUTDOWN_MS 2500
 
@@ -201,10 +202,19 @@ static int tls_handshake(tls_engine_t *engine, SSL **ssl_out,
         else if (error == SSL_ERROR_WANT_WRITE) events = POLLOUT;
         else {
             int mapped = ssl_error_to_errno(error, saved_errno);
-            if (mapped == ECONNRESET || mapped == ETIMEDOUT ||
-                mapped == EHOSTUNREACH || mapped == ENETUNREACH ||
-                mapped == ECONNREFUSED || mapped == EPIPE)
+            if ((error == SSL_ERROR_SYSCALL ||
+                 error == SSL_ERROR_ZERO_RETURN) &&
+                saved_errno != EBADF && saved_errno != EINVAL) {
                 *retryable_out = 1;
+            }
+#ifdef SSL_R_UNEXPECTED_EOF_WHILE_READING
+            if (error == SSL_ERROR_SSL) {
+                unsigned long code = ERR_peek_last_error();
+                if (code && ERR_GET_LIB(code) == ERR_LIB_SSL &&
+                    ERR_GET_REASON(code) == SSL_R_UNEXPECTED_EOF_WHILE_READING)
+                    *retryable_out = 1;
+            }
+#endif
             SSL_free(ssl);
             return mapped ? mapped : ECONNRESET;
         }
@@ -212,7 +222,9 @@ static int tls_handshake(tls_engine_t *engine, SSL **ssl_out,
         int waited = wait_socket_until(engine->socket_fd, events, deadline);
         if (waited <= 0) {
             int saved = waited < 0 ? errno : ETIMEDOUT;
-            *retryable_out = 1;
+            if (waited == 0 ||
+                (saved != EBADF && saved != EINVAL))
+                *retryable_out = 1;
             SSL_free(ssl);
             return saved;
         }
@@ -439,6 +451,7 @@ static void *tls_engine_thread(void *opaque)
 
     int rx_closed = 0;
     int fatal_error = 0;
+    long long graceful_deadline_ms = 0;
 
     for (;;) {
         int stopping = __atomic_load_n(&engine->stop_requested,
@@ -450,10 +463,20 @@ static void *tls_engine_thread(void *opaque)
         if (timeout_ms <= 0) timeout_ms = TLS_ENGINE_DEFAULT_SHUTDOWN_MS;
 
         if (stopping && !graceful) break;
+        if (stopping && graceful && graceful_deadline_ms == 0)
+            graceful_deadline_ms = monotonic_ms() + timeout_ms;
+        if (stopping && graceful &&
+            monotonic_ms() >= graceful_deadline_ms) {
+            fatal_error = ETIMEDOUT;
+            break;
+        }
         if (stopping && graceful && !write_pending && !read_pending &&
             ring_used(&engine->ssh_to_tls) == 0) {
+            long long remaining = graceful_deadline_ms - monotonic_ms();
+            int remaining_ms = remaining > 0
+                ? (remaining > INT32_MAX ? INT32_MAX : (int)remaining) : 1;
             int shutdown_error = tls_shutdown_bounded(ssl, engine->socket_fd,
-                                                       timeout_ms);
+                                                       remaining_ms);
             if (shutdown_error != 0)
                 __atomic_store_n(&engine->tx_terminal_error, shutdown_error,
                                  __ATOMIC_RELEASE);
@@ -624,7 +647,23 @@ int tls_engine_start(tls_engine_t *engine, SSL_CTX *ctx, int fd,
         snprintf(engine->server_name, sizeof(engine->server_name), "%s",
                  server_name);
 
-    int rc = pthread_create(&engine->thread, NULL, tls_engine_thread, engine);
+    pthread_attr_t attr;
+    int rc = pthread_attr_init(&attr);
+    if (rc != 0) {
+        engine->socket_fd = -1; /* ownership did not transfer */
+        errno = rc;
+        return -1;
+    }
+
+    size_t stack_size = TLS_ENGINE_STACK_SIZE;
+#ifdef PTHREAD_STACK_MIN
+    if (stack_size < (size_t)PTHREAD_STACK_MIN)
+        stack_size = (size_t)PTHREAD_STACK_MIN;
+#endif
+    rc = pthread_attr_setstacksize(&attr, stack_size);
+    if (rc == 0)
+        rc = pthread_create(&engine->thread, &attr, tls_engine_thread, engine);
+    (void)pthread_attr_destroy(&attr);
     if (rc != 0) {
         engine->socket_fd = -1; /* ownership did not transfer */
         errno = rc;
@@ -644,7 +683,7 @@ int tls_engine_wait_ready(tls_engine_t *engine)
     while (!engine->startup_done)
         pthread_cond_wait(&engine->cond, &engine->mutex);
     int ok = engine->startup_ok;
-    int error = engine->startup_error;
+    int error = __atomic_load_n(&engine->startup_error, __ATOMIC_ACQUIRE);
     pthread_mutex_unlock(&engine->mutex);
     if (!ok) {
         errno = error ? error : EIO;
