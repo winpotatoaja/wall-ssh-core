@@ -5145,6 +5145,9 @@ static int core_worker_run(int argc, char **argv) {
 
     while (!stop_requested()) {
         int timeout_ms = upstream_epoll_timeout_ms(&uctx, force_next_tick, now_ms());
+        if (io_pool && io_worker_pool_outstanding(io_pool, 0U) > 0U &&
+            timeout_ms > 100)
+            timeout_ms = 100;
         long long epoll_started_ms = g_log_perf ? now_ms() : 0;
         int nfds = epoll_wait(epfd, events, MAX_EVENTS, timeout_ms);
         if (g_log_perf) {
@@ -5159,6 +5162,15 @@ static int core_worker_run(int argc, char **argv) {
         }
         if (nfds < 0) {
             if (errno == EINTR) continue;
+            exit_code = 1;
+            break;
+        }
+
+        /* Poll completions even if an eventfd notification was lost. */
+        drain_io_worker_completions(epfd, io_pool, io_tracker);
+        int worker_error = io_pool ? io_worker_pool_error(io_pool) : 0;
+        if (worker_error != 0) {
+            log_red("Local socket I/O worker pool failed: %s", strerror(worker_error));
             exit_code = 1;
             break;
         }
