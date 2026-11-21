@@ -175,7 +175,7 @@ jobs:
           PKG_DIR="$GITHUB_WORKSPACE/sdk/package/passwall-ssh-core"
           mkdir -p "$PKG_DIR"
           cp Makefile "$PKG_DIR/Makefile"
-          cp ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h "$PKG_DIR/"
+          cp ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h client_lifetime.c client_lifetime.h io_worker_completion_tracker.c io_worker_completion_tracker.h "$PKG_DIR/"
 
           cd "$GITHUB_WORKSPACE/sdk"
           echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
