@@ -359,11 +359,117 @@ static int test_shutdown(void)
     return 0;
 }
 
+
+static void make_socket_task(io_worker_task_t *task, uint64_t id, int fd,
+                             uint32_t opcode, const void *bytes,
+                             uint32_t length)
+{
+    memset(task, 0, sizeof(*task));
+    task->task_id = id;
+    task->client_id = 77;
+    task->generation = 9001;
+    task->opcode = opcode;
+    memcpy(task->payload, &fd, sizeof(int32_t));
+    memcpy(task->payload + 4U, &length, sizeof(length));
+    if (bytes && length && opcode == IO_WORKER_OP_SOCKET_WRITE)
+        memcpy(task->payload + 8U, bytes, length);
+    task->payload_len = opcode == IO_WORKER_OP_SOCKET_WRITE ?
+                        8U + length : 8U;
+}
+
+static int wait_socket_completion(io_worker_pool_t *pool,
+                                   io_worker_completion_t *out)
+{
+    struct pollfd pfd = {io_worker_pool_completion_fd(pool, 0), POLLIN, 0};
+    if (poll(&pfd, 1, 3000) <= 0 || !(pfd.revents & POLLIN)) return -1;
+    return io_worker_pool_drain_completions(pool, 0, out, 1) == 1 ? 0 : -1;
+}
+
+static int test_socket_io_primitives(void)
+{
+    int pair[2] = {-1, -1};
+    if (check(socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+                         0, pair) == 0, "create nonblocking socketpair"))
+        return -1;
+
+    io_worker_pool_t *pool = io_worker_pool_create(1, 8,
+                                                   io_worker_socket_execute,
+                                                   NULL);
+    if (check(pool != NULL, "create socket I/O worker")) {
+        close(pair[0]); close(pair[1]); return -1;
+    }
+
+    io_worker_task_t task;
+    io_worker_completion_t done;
+    const char outbound[] = "worker-send-partial-safe";
+    make_socket_task(&task, 1, pair[0], IO_WORKER_OP_SOCKET_WRITE,
+                     outbound, (uint32_t)(sizeof(outbound) - 1U));
+    if (check(io_worker_pool_submit(pool, &task, NULL) == 0 &&
+              wait_socket_completion(pool, &done) == 0 &&
+              done.status == 0 &&
+              done.result_len == sizeof(outbound) - 1U,
+              "worker nonblocking socket write completion")) {
+        (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]); return -1;
+    }
+    char received[64] = {0};
+    ssize_t nr = recv(pair[1], received, sizeof(received), MSG_DONTWAIT);
+    if (check(nr == (ssize_t)(sizeof(outbound) - 1U) &&
+              memcmp(received, outbound, sizeof(outbound) - 1U) == 0,
+              "worker write payload integrity")) {
+        (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]); return -1;
+    }
+
+    const char inbound[] = "owner-receive";
+    if (send(pair[1], inbound, sizeof(inbound) - 1U, MSG_NOSIGNAL) !=
+        (ssize_t)(sizeof(inbound) - 1U)) {
+        (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]);
+        return check(0, "seed socket read data");
+    }
+    make_socket_task(&task, 2, pair[0], IO_WORKER_OP_SOCKET_READ, NULL,
+                     IO_WORKER_POOL_PAYLOAD_SIZE);
+    if (check(io_worker_pool_submit(pool, &task, NULL) == 0 &&
+              wait_socket_completion(pool, &done) == 0 &&
+              done.status == 0 &&
+              done.result_len == sizeof(inbound) - 1U &&
+              memcmp(done.result, inbound, sizeof(inbound) - 1U) == 0,
+              "worker read copies bytes into completion")) {
+        (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]); return -1;
+    }
+
+    make_socket_task(&task, 3, pair[0], IO_WORKER_OP_SOCKET_READ, NULL, 32U);
+    if (check(io_worker_pool_submit(pool, &task, NULL) == 0 &&
+              wait_socket_completion(pool, &done) == 0 &&
+              done.status == EAGAIN && done.result_len == 0U,
+              "worker read reports EAGAIN without blocking")) {
+        (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]); return -1;
+    }
+
+    if (shutdown(pair[1], SHUT_WR) < 0) {
+        (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]);
+        return check(0, "shutdown peer write side");
+    }
+    make_socket_task(&task, 4, pair[0], IO_WORKER_OP_SOCKET_READ, NULL, 32U);
+    if (check(io_worker_pool_submit(pool, &task, NULL) == 0 &&
+              wait_socket_completion(pool, &done) == 0 &&
+              done.status == 0 && done.result_len == 0U,
+              "worker read reports orderly EOF")) {
+        (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]); return -1;
+    }
+
+    if (stop_destroy(pool, 1) < 0) {
+        close(pair[0]); close(pair[1]);
+        return check(0, "socket worker graceful shutdown");
+    }
+    close(pair[0]); close(pair[1]);
+    puts("PASS bounded nonblocking socket read/write, EAGAIN, EOF, copied completion");
+    return 0;
+}
+
 int main(void)
 {
     if (test_validation() < 0 || test_round_robin_generation() < 0 ||
         test_backpressure_and_stress() < 0 || test_eventfd_rearm() < 0 ||
-        test_shutdown() < 0) {
+        test_socket_io_primitives() < 0 || test_shutdown() < 0) {
         puts("IO worker pool regression FAILED");
         return 1;
     }
