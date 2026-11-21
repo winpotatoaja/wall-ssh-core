@@ -88,6 +88,19 @@ int io_worker_pool_join(io_worker_pool_t *pool, int timeout_ms);
 /* Destroy succeeds only after every started worker has been joined. */
 int io_worker_pool_destroy(io_worker_pool_t *pool);
 
+/* Bounded nonblocking local-socket operations for worker callbacks.
+ * Task payload: int32_t fd, uint32_t length, then optional write bytes.
+ * READ completion: result bytes (zero length means EOF).
+ * WRITE completion: result_len is bytes accepted by send().
+ */
+#define IO_WORKER_OP_SOCKET_READ  1U
+#define IO_WORKER_OP_SOCKET_WRITE 2U
+#define IO_WORKER_SOCKET_WRITE_MAX (IO_WORKER_POOL_PAYLOAD_SIZE - 8U)
+
+int io_worker_socket_execute(const io_worker_task_t *task,
+                             io_worker_completion_t *completion,
+                             const void *context);
+
 #ifdef __cplusplus
 }
 #endif
