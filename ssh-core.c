@@ -43,6 +43,8 @@
 #define C2S_RELAY_BUF_SIZE     32768
 #define S2C_RELAY_BUF_SIZE     131072
 #define MAX_EVENTS             128
+#define CLIENT_EVENT_TAG        (UINT64_C(1) << 63)
+#define CLIENT_EVENT_ID_MASK    (CLIENT_EVENT_TAG - UINT64_C(1))
 #define DEFAULT_MAX_CLIENTS    64
 #define MAX_CLIENTS_LIMIT      256
 #define DEFAULT_IDLE_TIMEOUT   600
@@ -208,6 +210,8 @@ typedef enum {
 } pending_op_t;
 
 typedef struct client_conn {
+    uint64_t       client_id;
+    uint64_t       generation;
     int            fd;
     int            in_epoll;
     client_state_t state;
@@ -269,6 +273,28 @@ typedef struct client_conn {
 } client_conn_t;
 
 static __thread client_conn_t *g_clients = NULL;
+static uint64_t g_next_client_id = 1;
+
+/* IDs are process-wide, monotonic, and never recycled. Reserve the top bit
+ * for client epoll cookies; exhaustion fails closed rather than wrapping. */
+static uint64_t allocate_client_id(void) {
+    uint64_t current = __atomic_load_n(&g_next_client_id, __ATOMIC_RELAXED);
+    for (;;) {
+        if (current == 0 || current > CLIENT_EVENT_ID_MASK) return 0;
+        uint64_t next = current + UINT64_C(1);
+        if (__atomic_compare_exchange_n(&g_next_client_id, &current, next, 0,
+                                        __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+            return current;
+    }
+}
+
+static client_conn_t *find_client_by_id(uint64_t client_id) {
+    if (client_id == 0) return NULL;
+    for (client_conn_t *c = g_clients; c; c = c->next) {
+        if (c->client_id == client_id) return c;
+    }
+    return NULL;
+}
 static __thread int            g_client_count = 0;
 static __thread client_conn_t *g_opening_client = NULL;
 static __thread client_conn_t *g_pending_client = NULL;
@@ -2231,7 +2257,8 @@ static void update_epoll(int epfd, int fd, void *ptr, uint32_t *cur_ev, uint32_t
 
 static void update_client_epoll(int epfd, client_conn_t *c, uint32_t want_ev) {
     if (c->fd < 0) return;
-    struct epoll_event ev = { .events = want_ev, .data.ptr = c };
+    struct epoll_event ev = { .events = want_ev,
+                               .data.u64 = CLIENT_EVENT_TAG | c->client_id };
     if (!c->in_epoll) {
         if (epoll_ctl(epfd, EPOLL_CTL_ADD, c->fd, &ev) == 0) {
             c->in_epoll = 1;
@@ -4652,8 +4679,16 @@ static int core_worker_run(int argc, char **argv) {
         int upstream_readable = 0;
 
         for (int i = 0; i < nfds; i++) {
-            void *ptr = events[i].data.ptr;
+            uint64_t event_token = events[i].data.u64;
+            void *ptr = (void *)(uintptr_t)event_token;
             uint32_t e = events[i].events;
+
+            if (event_token & CLIENT_EVENT_TAG) {
+                uint64_t client_id = event_token & CLIENT_EVENT_ID_MASK;
+                client_conn_t *c = find_client_by_id(client_id);
+                if (c) handle_client_io(epfd, c, e);
+                continue;
+            }
 
             if (ptr == &g_listen_tag) {
                 if (uctx.hup_seen || listen_fd < 0) continue;
@@ -4690,13 +4725,25 @@ static int core_worker_run(int argc, char **argv) {
                         close(cfd);
                         continue;
                     }
+                    nc->client_id = allocate_client_id();
+                    if (nc->client_id == 0) {
+                        release_client_slot();
+                        close(cfd);
+                        free(nc);
+                        log_red("Client ID space exhausted; rejecting new connection");
+                        continue;
+                    }
+                    nc->generation = 1;
                     nc->fd = cfd;
                     nc->state = ST_SOCKS_GREETING;
                     nc->epoll_events = EPOLLIN | EPOLLRDHUP;
                     nc->accepted_at = time(NULL);
                     nc->last_activity_ms = now_ms();
 
-                    struct epoll_event cev = { .events = nc->epoll_events, .data.ptr = nc };
+                    struct epoll_event cev = {
+                        .events = nc->epoll_events,
+                        .data.u64 = CLIENT_EVENT_TAG | nc->client_id
+                    };
                     if (epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &cev) < 0) {
                         release_client_slot();
                         close(cfd);
@@ -4749,9 +4796,6 @@ static int core_worker_run(int argc, char **argv) {
                     }
                     if (e & EPOLLIN) upstream_readable = 1;
                 }
-            } else {
-                client_conn_t *c = (client_conn_t *)ptr;
-                handle_client_io(epfd, c, e);
             }
         }
 
