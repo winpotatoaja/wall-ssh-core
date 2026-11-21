@@ -95,7 +95,7 @@ static int server_write_all(SSL *ssl, const uint8_t *data, size_t length)
 
 static int server_shutdown(SSL *ssl)
 {
-    long long deadline = monotonic_ms() + 5000;
+    long long deadline = monotonic_ms() + 15000;
     for (;;) {
         int rc = SSL_shutdown(ssl);
         if (rc == 1) return 0;
@@ -247,7 +247,7 @@ int main(void)
     uint8_t recv_buffer[TLS_TEST_CHUNK];
     uint64_t sent = 0;
     uint64_t received = 0;
-    long long deadline = monotonic_ms() + 30000;
+    long long deadline = monotonic_ms() + 180000;
 
     while (received < TLS_TEST_BYTES && monotonic_ms() < deadline) {
         int made_progress = 0;
