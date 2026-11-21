@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update native ssh-core regressions for R31: remove tests that inspected SSH Owner SSL*/WANT internals and instead verify TLS Engine eventfd readiness, queue EAGAIN behavior, retryable handshake EOF/timeout, clean RX half-close while TX remains usable, and final eventfd detach. Link tls_engine.c into the native parser test executable.
 - Complete Phase 2 live TLS Engine integration (R31): ssh-core.c no longer owns or calls SSL*. A dedicated TLS Engine pthread owns SSL* and the upstream TLS socket; the SSH Owner retains one LIBSSH2_SESSION and its channels. Integrate handshake retries, HTTP payload transport, libssh2 plaintext callbacks, eventfd waits and epoll, TLS RX terminal handling, clean RX half-close with TX preserved, and bounded close_notify teardown. TX-space notifications are not treated as inbound SSH data.
 - Run the RX-priority TLS Engine scheduling and diagnostic counters in the OpenWrt 24.10.7 MT7621 QEMU guest, using SDK artifact from run 44875434248. This is the required runtime regression gate before SSH callback integration.
 - Guard TLS Engine diagnostic-only queue occupancy snapshots with TLS_ENGINE_DIAGNOSTICS so the production package builds without unused-variable warnings while the strict native/MIPS test helper retains byte counters.

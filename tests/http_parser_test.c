@@ -821,99 +821,59 @@ static int run_pending_op_serialization_regression(void) {
 }
 
 static int run_tls_want_event_lifetime_regression(void) {
-    upstream_ctx_t u = {
-        .ssl = (SSL *)(uintptr_t)1,
-        .ssl_want_events = EPOLLIN
-    };
+    tls_engine_t *engine = tls_engine_create(4096U);
+    if (!engine) {
+        fprintf(stderr, "[FAIL] TLS Engine readiness regression: %s\n", strerror(errno));
+        return 1;
+    }
+
+    upstream_ctx_t u = {.tls = engine};
     int idle_rx_paused = 1;
+    int failed = 0;
+    clear_pending_operation();
+
+    /* A TLS eventfd must stay armed even while SSH Owner pauses idle RX.
+     * The Engine reports both RX bytes and TX queue-space through this fd. */
     uint32_t want = upstream_epoll_interest(
         &u, PENDING_NONE, 0, &idle_rx_paused, 0, 0, 0);
-    int failed = 0;
-
-    /* An idle SSL_read WANT_READ is stale readiness, not a pinned operation:
-     * it must not defeat the S2C backpressure pause or block keepalive. */
-    if ((want & EPOLLIN) != 0 || (want & EPOLLRDHUP) == 0 ||
-        !idle_rx_paused || !keepalive_can_start(&u, PENDING_NONE) ||
-        tls_write_retry_pending(&u) || shutdown_io_pending(&u)) {
+    if (want != EPOLLIN || !idle_rx_paused ||
+        !keepalive_can_start(&u, PENDING_NONE) ||
+        shutdown_io_pending(&u) ||
+        tls_want_requires_serial_retry(&u)) {
         failed = 1;
     }
 
-    /* The same WANT_READ is authoritative when it belongs to a serialized
-     * operation such as SSL_write; the pending retry must keep EPOLLIN armed
-     * and must protect both keepalive and shutdown from interleaving. */
+    /* Pending libssh2 work is still serialized by SSH Owner, but its wakeup
+     * source remains the same eventfd rather than SSL WANT state. */
+    set_pending_operation(NULL, PENDING_WRITE);
     idle_rx_paused = 1;
     want = upstream_epoll_interest(
         &u, PENDING_WRITE, LIBSSH2_SESSION_BLOCK_OUTBOUND,
         &idle_rx_paused, 0, 0, 0);
-    set_pending_operation(NULL, PENDING_WRITE);
-    u.ssl_want_from_write = 1;
-    if ((want & EPOLLIN) == 0 || (want & EPOLLOUT) != 0 ||
-        keepalive_can_start(&u, PENDING_WRITE) ||
+    if (want != EPOLLIN || keepalive_can_start(&u, PENDING_WRITE) ||
         !shutdown_io_pending(&u)) {
         failed = 1;
     }
     clear_pending_operation();
 
-    /* WANT_WRITE remains an active TLS retry even without a libssh2 pending
-     * marker and must block both keepalive and teardown I/O. */
-    u.ssl_want_events = EPOLLOUT;
-    u.ssl_want_from_write = 1;
+    /* A detached event source must not be re-armed. */
+    u.upstream_epoll_detached = 1;
     idle_rx_paused = 1;
     want = upstream_epoll_interest(
         &u, PENDING_NONE, 0, &idle_rx_paused, 0, 0, 0);
-    if ((want & EPOLLOUT) == 0 ||
-        keepalive_can_start(&u, PENDING_NONE) ||
-        !tls_write_retry_pending(&u) ||
-        !shutdown_io_pending(&u)) {
-        failed = 1;
-    }
+    if (want != 0 || tls_engine_notify_fd(engine) < 0) failed = 1;
 
-    /* Normal channel demand can re-arm EPOLLIN after the pause has been set. */
-    u.ssl_want_events = EPOLLIN;
-    u.ssl_want_from_write = 0;
-    idle_rx_paused = 1;
-    want = upstream_epoll_interest(
-        &u, PENDING_NONE, 0, &idle_rx_paused, 0, 1, 0);
-    if ((want & EPOLLIN) == 0 || idle_rx_paused) failed = 1;
-
-    /* A pending libssh2 operation with no TLS readiness flag still uses the
-     * libssh2 block directions instead of losing its wakeup source. */
-    u.ssl_want_events = 0;
-    idle_rx_paused = 1;
-    want = upstream_epoll_interest(
-        &u, PENDING_FREE,
-        LIBSSH2_SESSION_BLOCK_INBOUND | LIBSSH2_SESSION_BLOCK_OUTBOUND,
-        &idle_rx_paused, 0, 0, 0);
-    if ((want & (EPOLLIN | EPOLLOUT)) != (EPOLLIN | EPOLLOUT))
-        failed = 1;
-
-    u.ssl_want_events = EPOLLIN;
-    u.ssl_want_from_write = 1;
-    tls_begin_libssh2_call(&u);
-    if (u.ssl_want_events != 0 || u.ssl_want_from_write != 0) failed = 1;
-    u.ssl_want_events = EPOLLIN;
-    u.ssl_want_from_write = 1;
-    tls_finish_libssh2_call(&u, 1);
-    if (!tls_write_retry_pending(&u)) failed = 1;
-    tls_finish_libssh2_call(&u, 0);
-    if (u.ssl_want_events != 0 || u.ssl_want_from_write != 0) failed = 1;
-    u.ssl_want_events = EPOLLIN;
-    u.ssl_want_from_write = 0;
-    if (tls_want_requires_serial_retry(&u)) failed = 1;
-    u.ssl_want_events = EPOLLOUT;
-    if (!tls_want_requires_serial_retry(&u) || keepalive_can_start(&u, PENDING_NONE) ||
-        !shutdown_io_pending(&u)) failed = 1;
-
+    tls_engine_destroy(engine);
     if (failed) {
-        fprintf(stderr, "[FAIL] TLS WANT_READ lifetime, keepalive, shutdown and epoll backpressure state\n");
+        fprintf(stderr, "[FAIL] TLS Engine eventfd readiness, pending-op serialization and epoll lifetime\n");
         return 1;
     }
-    puts("[PASS] TLS WANT_READ lifetime, keepalive, shutdown and epoll backpressure state");
+    puts("[PASS] TLS Engine eventfd readiness, pending-op serialization and epoll lifetime");
     return 0;
 }
 
 static int run_upstream_rx_progress_regression(void) {
-    upstream_ctx_t u = {.rx_seq = 12, .ssl_want_events = EPOLLIN};
+    upstream_ctx_t u = {.rx_seq = 12};
     int did_ssh_read = 0;
     note_upstream_rx_progress(&u, 11, &did_ssh_read);
     int failed = !did_ssh_read;
@@ -1237,27 +1197,45 @@ static int run_upstream_rx_terminal_callback_regression(void) {
 }
 
 static int run_ssl_read_terminal_classification_regression(void) {
-    upstream_ctx_t unexpected_old = {.ssl_want_events = EPOLLOUT};
-    ssize_t old_rc = ssl_read_terminal_result(
-        &unexpected_old, SSL_ERROR_SYSCALL, 0);
-    upstream_ctx_t clean = {.ssl_want_events = EPOLLOUT};
-    ssize_t clean_rc = ssl_read_terminal_result(
-        &clean, SSL_ERROR_ZERO_RETURN, 0);
-    upstream_ctx_t unexpected_new = {.ssl_want_events = EPOLLIN};
-    ssize_t new_rc = ssl_read_terminal_result(
-        &unexpected_new, SSL_ERROR_SSL, 0);
-    int failed = old_rc != -ECONNRESET ||
-                 unexpected_old.rx_terminal_rc != -ECONNRESET ||
-                 clean_rc != 0 || clean.rx_terminal_rc != 0 ||
-                 new_rc != -EIO || unexpected_new.rx_terminal_rc != -EIO ||
-                 unexpected_old.ssl_want_events != 0 ||
-                 clean.ssl_want_events != 0 ||
-                 unexpected_new.ssl_want_events != 0;
-    if (failed) {
-        fprintf(stderr, "[FAIL] unexpected TLS EOF is distinct from close_notify\n");
+    tls_engine_t *clean_engine = tls_engine_create(4096U);
+    tls_engine_t *error_engine = tls_engine_create(4096U);
+    if (!clean_engine || !error_engine) {
+        fprintf(stderr, "[FAIL] TLS Engine terminal regression allocation: %s\n",
+                strerror(errno));
+        tls_engine_destroy(clean_engine);
+        tls_engine_destroy(error_engine);
         return 1;
     }
-    puts("[PASS] unexpected TLS EOF is a transport error; close_notify is clean EOF");
+
+    upstream_ctx_t clean = {.tls = clean_engine};
+    upstream_ctx_t unexpected = {.tls = error_engine};
+    ssize_t clean_rc = mark_upstream_rx_terminal(&clean, 0);
+    ssize_t error_rc = mark_upstream_rx_terminal(&unexpected, -ECONNRESET);
+
+    int failed = clean_rc != 0 || !clean.rx_terminal ||
+                 clean.rx_terminal_rc != 0 || !clean.hup_seen ||
+                 clean.upstream_epoll_detached ||
+                 !upstream_client_write_allowed(&clean) ||
+                 error_rc != -ECONNRESET || !unexpected.rx_terminal ||
+                 unexpected.rx_terminal_rc != -ECONNRESET ||
+                 unexpected.upstream_epoll_detached ||
+                 upstream_client_write_allowed(&unexpected);
+
+    /* Once TX is terminal as well, the eventfd is no longer needed by
+     * either half of the transport and the SSH Owner may detach it. */
+    clean.tx_terminal = 1;
+    (void)mark_upstream_rx_terminal(&clean, 0);
+    if (!clean.upstream_epoll_detached ||
+        upstream_client_write_allowed(&clean))
+        failed = 1;
+
+    tls_engine_destroy(clean_engine);
+    tls_engine_destroy(error_engine);
+    if (failed) {
+        fprintf(stderr, "[FAIL] TLS close_notify RX half-close, unexpected EOF and TX terminal classification\n");
+        return 1;
+    }
+    puts("[PASS] TLS close_notify preserves TX half-close; unexpected EOF stays an error");
     return 0;
 }
 
@@ -1437,61 +1415,56 @@ static int run_tls_message_callback_errno_regression(void) {
 static int run_tls_unexpected_eof_retryable_regression(void) {
     int sv[2] = {-1, -1};
     SSL_CTX *ctx = NULL;
-    SSL *ssl = NULL;
-    int retryable = 0;
-    int rc = 0;
+    tls_engine_t *engine = NULL;
+    int started = 0;
+    int wait_rc = 0;
     int failed = 0;
-    int saved_stop = g_stop;
-    unsigned int saved_message_count = g_tls_diag_message_count;
-    const char *saved_log_path = g_log_path;
+    int retryable = 0;
+    int start_error = 0;
 
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
-        set_nonblock(sv[0], 1) < 0) {
-        fprintf(stderr, "[FAIL] TLS unexpected-EOF retry regression setup: %s\n",
-                strerror(errno));
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        fprintf(stderr, "[FAIL] TLS Engine unexpected-EOF setup: %s\n", strerror(errno));
         failed = 1;
         goto done;
     }
-
     ctx = SSL_CTX_new(TLS_client_method());
-    if (!ctx) {
-        fprintf(stderr, "[FAIL] TLS unexpected-EOF retry regression: SSL_CTX_new failed\n");
-        failed = 1;
-        goto done;
-    }
-    SSL_CTX_set_msg_callback(ctx, tls_message_callback);
-    ssl = SSL_new(ctx);
-    if (!ssl || SSL_set_fd(ssl, sv[0]) != 1) {
-        fprintf(stderr, "[FAIL] TLS unexpected-EOF retry regression: SSL setup failed\n");
+    engine = tls_engine_create(4096U);
+    if (!ctx || !engine) {
+        fprintf(stderr, "[FAIL] TLS Engine unexpected-EOF allocation: %s\n", strerror(errno));
         failed = 1;
         goto done;
     }
 
-    /* The peer closes without sending a TLS close_notify or handshake reply. */
+    /* Peer closes without a TLS alert or handshake response. */
     close(sv[1]);
     sv[1] = -1;
-    upstream_ctx_t u = { .fd = sv[0], .ssl = ssl };
-    g_stop = 0;
-    g_tls_diag_message_count = 0;
-    g_log_path = "/dev/null/passwall-tls-eof-test.log";
-    rc = tls_connect_nb(&u, 1000, &retryable);
-    if (rc == 0 || !retryable) failed = 1;
+    if (tls_engine_start(engine, ctx, sv[0], "localhost", 0, 1000) != 0) {
+        fprintf(stderr, "[FAIL] TLS Engine unexpected-EOF start: %s\n", strerror(errno));
+        failed = 1;
+        goto done;
+    }
+    sv[0] = -1; /* descriptor ownership transferred to TLS Engine */
+    started = 1;
+    wait_rc = tls_engine_wait_ready(engine);
+    retryable = tls_engine_start_retryable(engine);
+    start_error = tls_engine_start_error(engine);
+    if (wait_rc == 0 || !retryable || start_error == 0)
+        failed = 1;
 
 done:
-    g_stop = saved_stop;
-    g_tls_diag_message_count = saved_message_count;
-    g_log_path = saved_log_path;
-    if (ssl) SSL_free(ssl);
-    if (ctx) SSL_CTX_free(ctx);
+    if (started) (void)tls_engine_join(engine);
+    tls_engine_destroy(engine);
     if (sv[0] >= 0) close(sv[0]);
     if (sv[1] >= 0) close(sv[1]);
+    SSL_CTX_free(ctx);
 
     if (failed) {
-        fprintf(stderr, "[FAIL] peer EOF during TLS handshake is classified as retryable (rc=%d retryable=%d)\n",
-                rc, retryable);
+        fprintf(stderr,
+                "[FAIL] peer EOF during TLS Engine handshake is retryable (rc=%d retryable=%d error=%d)\n",
+                wait_rc, retryable, start_error);
         return 1;
     }
-    puts("[PASS] peer EOF during TLS handshake is classified as retryable");
+    puts("[PASS] peer EOF during TLS Engine handshake is classified as retryable");
     return 0;
 }
 
@@ -1532,60 +1505,58 @@ static int run_tls_diag_config_regression(void) {
 static int run_tls_handshake_timeout_retryable_regression(void) {
     int sv[2] = {-1, -1};
     SSL_CTX *ctx = NULL;
-    SSL *ssl = NULL;
-    int retryable = 0;
-    int rc = 0;
+    tls_engine_t *engine = NULL;
+    int started = 0;
+    int wait_rc = 0;
     int failed = 0;
-    int saved_stop = g_stop;
-    const char *saved_log_path = g_log_path;
+    int retryable = 0;
+    int start_error = 0;
+    long long elapsed = 0;
 
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
-        set_nonblock(sv[0], 1) < 0) {
-        fprintf(stderr, "[FAIL] TLS handshake timeout regression setup: %s\n",
-                strerror(errno));
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
+        fprintf(stderr, "[FAIL] TLS Engine handshake timeout setup: %s\n", strerror(errno));
         failed = 1;
         goto done;
     }
-
     ctx = SSL_CTX_new(TLS_client_method());
-    if (!ctx) {
-        fprintf(stderr, "[FAIL] TLS handshake timeout regression: SSL_CTX_new failed\n");
-        failed = 1;
-        goto done;
-    }
-    ssl = SSL_new(ctx);
-    if (!ssl || SSL_set_fd(ssl, sv[0]) != 1) {
-        fprintf(stderr, "[FAIL] TLS handshake timeout regression: SSL setup failed\n");
+    engine = tls_engine_create(4096U);
+    if (!ctx || !engine) {
+        fprintf(stderr, "[FAIL] TLS Engine handshake timeout allocation: %s\n", strerror(errno));
         failed = 1;
         goto done;
     }
 
-    /* Keep the peer open but silent: ClientHello is sent and the read wait times out. */
-    upstream_ctx_t u = { .fd = sv[0], .ssl = ssl };
-    g_stop = 0;
-    g_log_path = "-";
-    long long started = now_ms();
-    rc = tls_connect_nb(&u, 60, &retryable);
-    long long elapsed = now_ms() - started;
-
-    if (rc == 0 || !retryable || elapsed < 40 || elapsed > 1000)
+    /* Keep peer open but silent: ClientHello is written and handshake deadline expires. */
+    long long started_at = now_ms();
+    if (tls_engine_start(engine, ctx, sv[0], "localhost", 0, 100) != 0) {
+        fprintf(stderr, "[FAIL] TLS Engine handshake timeout start: %s\n", strerror(errno));
+        failed = 1;
+        goto done;
+    }
+    sv[0] = -1;
+    started = 1;
+    wait_rc = tls_engine_wait_ready(engine);
+    elapsed = now_ms() - started_at;
+    retryable = tls_engine_start_retryable(engine);
+    start_error = tls_engine_start_error(engine);
+    if (wait_rc == 0 || !retryable || start_error != ETIMEDOUT ||
+        elapsed < 70 || elapsed > 1500)
         failed = 1;
 
 done:
-    g_stop = saved_stop;
-    g_log_path = saved_log_path;
-    if (ssl) SSL_free(ssl);
-    if (ctx) SSL_CTX_free(ctx);
+    if (started) (void)tls_engine_join(engine);
+    tls_engine_destroy(engine);
     if (sv[0] >= 0) close(sv[0]);
     if (sv[1] >= 0) close(sv[1]);
+    SSL_CTX_free(ctx);
 
     if (failed) {
         fprintf(stderr,
-                "[FAIL] silent TLS peer timeout is classified as retryable (rc=%d retryable=%d)\n",
-                rc, retryable);
+                "[FAIL] silent TLS peer timeout is bounded and retryable (rc=%d retryable=%d error=%d elapsed=%lld ms)\n",
+                wait_rc, retryable, start_error, elapsed);
         return 1;
     }
-    puts("[PASS] silent TLS peer timeout is classified as retryable");
+    puts("[PASS] silent TLS peer timeout is bounded and retryable");
     return 0;
 }
 
@@ -1712,48 +1683,62 @@ static int run_pending_keepalive_terminal_cleanup_regression(void) {
 
 
 static int run_tls_buffered_input_probe_gate_regression(void) {
-    upstream_ctx_t u = {.ssl = (SSL *)(uintptr_t)1};
-    int failed = 0;
-
-    u.ssl_want_events = EPOLLIN;
-    if (tls_buffered_input_probe_allowed(&u)) failed = 1;
-    u.ssl_want_events = EPOLLOUT;
-    if (tls_buffered_input_probe_allowed(&u)) failed = 1;
-    u.ssl_want_events = 0;
-    if (!tls_buffered_input_probe_allowed(&u)) failed = 1;
-    u.ssl = NULL;
-    if (tls_buffered_input_probe_allowed(&u)) failed = 1;
-
-    if (failed) {
-        fprintf(stderr, "[FAIL] SSL_has_pending probe waits for active TLS WANT direction\\n");
+    tls_engine_t *engine = tls_engine_create(4096U);
+    if (!engine) {
+        fprintf(stderr, "[FAIL] TLS Engine queue readiness setup: %s\n", strerror(errno));
         return 1;
     }
-    puts("[PASS] SSL_has_pending probe is gated by active TLS WANT direction");
+    upstream_ctx_t u = {.tls = engine};
+    char byte = 0;
+    int failed = 0;
+    errno = 0;
+    ssize_t rc = tls_engine_recv(engine, &byte, sizeof(byte));
+    if (rc != -1 || (errno != EAGAIN && errno != EWOULDBLOCK) ||
+        tls_buffered_input_pending(&u) ||
+        tls_engine_rx_pending(engine) != 0 ||
+        tls_engine_tx_pending(engine) != 0 ||
+        tls_engine_notify_fd(engine) < 0)
+        failed = 1;
+    tls_engine_destroy(engine);
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] empty TLS RX queue reports EAGAIN and no buffered input\n");
+        return 1;
+    }
+    puts("[PASS] empty TLS RX queue reports EAGAIN and no buffered input");
     return 0;
 }
 
 static int run_tls_callback_terminal_result_clears_want_event_regression(void) {
-    upstream_ctx_t u = {.ssl_want_events = EPOLLOUT};
-    int failed = 0;
-
-    ssize_t rc = tls_callback_error_result(&u, SSL_ERROR_ZERO_RETURN, 1);
-    if (rc != 0 || u.ssl_want_events != 0) failed = 1;
-
-    u.ssl_want_events = EPOLLOUT;
-    rc = tls_callback_error_result(&u, SSL_ERROR_SSL, 0);
-    if (rc != -EIO || u.ssl_want_events != 0) failed = 1;
-
-    rc = tls_callback_error_result(&u, SSL_ERROR_WANT_READ, 1);
-    if (rc != -EAGAIN || u.ssl_want_events != EPOLLIN) failed = 1;
-
-    rc = tls_callback_error_result(&u, SSL_ERROR_WANT_WRITE, 0);
-    if (rc != -EAGAIN || u.ssl_want_events != EPOLLOUT) failed = 1;
-
-    if (failed) {
-        fprintf(stderr, "[FAIL] terminal TLS callback results clear stale WANT_WRITE state\n");
+    tls_engine_t *engine = tls_engine_create(4096U);
+    if (!engine) {
+        fprintf(stderr, "[FAIL] TLS terminal eventfd setup: %s\n", strerror(errno));
         return 1;
     }
-    puts("[PASS] terminal TLS callback results clear stale WANT_WRITE state");
+    upstream_ctx_t u = {.tls = engine, .rx_flush_eagain = 1};
+    int failed = 0;
+
+    ssize_t first = mark_upstream_rx_terminal(&u, 0);
+    if (first != -EAGAIN || !u.rx_terminal || u.rx_terminal_rc != 0 ||
+        u.upstream_epoll_detached || !upstream_client_write_allowed(&u))
+        failed = 1;
+
+    u.rx_flush_eagain = 0;
+    ssize_t drained = mark_upstream_rx_terminal(&u, 0);
+    if (drained != 0 || u.rx_terminal_rc != 0 || u.upstream_epoll_detached)
+        failed = 1;
+
+    u.tx_terminal = 1;
+    (void)mark_upstream_rx_terminal(&u, 0);
+    if (!u.upstream_epoll_detached || upstream_client_write_allowed(&u))
+        failed = 1;
+
+    tls_engine_destroy(engine);
+    if (failed) {
+        fprintf(stderr, "[FAIL] receive terminal flush and TLS RX/TX eventfd lifetime\n");
+        return 1;
+    }
+    puts("[PASS] receive terminal flush and TLS RX/TX eventfd lifetime");
     return 0;
 }
 
