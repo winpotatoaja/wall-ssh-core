@@ -1,7 +1,7 @@
 name: Passwall SSH core - OpenWrt 24.10.7 mipsel_24kc
 on:
   push:
-    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner]
+    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration]
 permissions:
   contents: read
   actions: read
@@ -39,7 +39,7 @@ jobs:
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror -pthread \
             tests/spsc_rb_test.c -o /tmp/spsc-rb-test
           timeout 90s /tmp/spsc-rb-test | tee test-results/spsc-rb-test-native.log
-          gcc -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread \
+          gcc -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread -DTLS_ENGINE_DIAGNOSTICS \
             -I. tests/tls_engine_test.c tls_engine.c \
             -o /tmp/tls-engine-test -lssl -lcrypto
           timeout 60s /tmp/tls-engine-test | tee test-results/tls-engine-test-native.log
@@ -126,7 +126,7 @@ jobs:
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum socks-halfclose > halfclose.sha256)
           STAGING="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -maxdepth 1 -type d -name 'target-*' -print -quit)"
           test -n "$STAGING"
-          "$CROSS_CC" -std=gnu11 -Os -Wall -Wextra -Werror -pthread \
+          "$CROSS_CC" -std=gnu11 -Os -Wall -Wextra -Werror -pthread -DTLS_ENGINE_DIAGNOSTICS \
             -I"$STAGING/usr/include" "$GITHUB_WORKSPACE/tests/socks_mt_download.c" \
             -L"$STAGING/usr/lib" -Wl,-rpath-link,"$STAGING/usr/lib" \
             -o "$GITHUB_WORKSPACE/test-results/socks-mt-download" -lcrypto

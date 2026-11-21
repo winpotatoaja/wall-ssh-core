@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Rework TLS Engine readiness scheduling: a pinned SSL_write/SSL_read is retried exclusively with its original arguments; otherwise SSL_pending/readable RX is serviced before the next TX write. Prefer POLLIN when both directions are ready. Add test-only MIPS/native worker counters and queue/terminal snapshots so another emulated failure is diagnosable rather than guessed.
 - Re-run the MIPS TLS Engine owner-thread QEMU regression with full-duplex RX/TX scheduling fix from SDK run 44873978405; require the guest transfer, SHA-256, close_notify and graceful shutdown checks before Stage 2 callback integration.
 - Fix a TLS Engine full-duplex starvation path: successful SSL_write progress no longer causes the worker to continue draining outbound data without polling inbound readiness. The MIPS QEMU regression exposed the deadlock when the socket send buffer filled while the peer was writing its echo response. Extend the emulated transfer deadline so slow MIPS crypto is not misclassified as a functional timeout.
 - Add MT7621 QEMU guest execution of the standalone TLS Engine regression binary and validate the R30 artifact checksum, MIPS ELF metadata and package release before installing it.

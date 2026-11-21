@@ -452,6 +452,19 @@ static void *tls_engine_thread(void *opaque)
     int rx_closed = 0;
     int fatal_error = 0;
     long long graceful_deadline_ms = 0;
+#ifdef TLS_ENGINE_DIAGNOSTICS
+    uint64_t stat_write_calls = 0;
+    uint64_t stat_read_calls = 0;
+    uint64_t stat_write_bytes = 0;
+    uint64_t stat_read_bytes = 0;
+    uint64_t stat_write_want_read = 0;
+    uint64_t stat_write_want_write = 0;
+    uint64_t stat_read_want_write = 0;
+    uint64_t stat_poll_calls = 0;
+    uint64_t stat_poll_socket_in = 0;
+    uint64_t stat_poll_socket_out = 0;
+    uint64_t stat_poll_owner_event = 0;
+#endif
 
     for (;;) {
         int stopping = __atomic_load_n(&engine->stop_requested,
@@ -485,42 +498,39 @@ static void *tls_engine_thread(void *opaque)
 
         drain_eventfd(engine->worker_event_fd);
 
-        int did_work = 0;
-        if (!read_pending && (write_pending ||
-                              ring_used(&engine->ssh_to_tls) > 0)) {
-            int rc = engine_try_write(engine, ssl, &write_pending,
-                                      &write_ticket, &write_length,
-                                      &write_want, &fatal_error);
-            if (rc < 0) break;
-            if (rc > 0) did_work = 1;
-        }
-
+        /*
+         * OpenSSL operation ownership:
+         * - A WANT_READ/WANT_WRITE operation is pinned and must be retried
+         *   with the same arguments before any other SSL operation.
+         * - With no pinned operation, decrypted RX data is serviced before
+         *   starting another TX write.
+         */
         if (!write_pending && !read_pending && !rx_closed &&
             SSL_pending(ssl) > 0 && ring_free(&engine->tls_to_ssh) > 0) {
+            int before = ring_used(&engine->tls_to_ssh);
             int rc = engine_try_read(engine, ssl, &read_pending,
                                      &read_buffer, &read_ticket, &read_length,
                                      &read_want, &fatal_error);
+#ifdef TLS_ENGINE_DIAGNOSTICS
+            stat_read_calls++;
+            if (rc > 0)
+                stat_read_bytes += (uint64_t)(ring_used(&engine->tls_to_ssh) - before);
+            if (read_pending && read_want == POLLOUT)
+                stat_read_want_write++;
+#endif
             if (rc < 0) break;
-            if (rc > 0) did_work = 1;
             if (rc == 2) rx_closed = 1;
+            if (rc > 0 || rc == 2) continue;
         }
-        /*
-         * Do not drain the entire SSH->TLS queue before servicing TLS RX.
-         * A successful SSL_write may generate an echo/response immediately;
-         * polling both directions here lets the next iteration read it before
-         * a large TX burst fills the socket send buffer. SSL_pending() is the
-         * only reason to spin without polling, because those bytes are already
-         * decrypted inside OpenSSL and may not make the fd readable again.
-         */
-        if (did_work && !write_pending && !read_pending &&
-            SSL_pending(ssl) > 0 && ring_free(&engine->tls_to_ssh) > 0)
-            continue;
 
         short socket_events = 0;
-        if (write_pending) socket_events |= (short)write_want;
-        else if (read_pending) socket_events |= (short)read_want;
-        else {
-            if (ring_used(&engine->ssh_to_tls) > 0) socket_events |= POLLOUT;
+        if (write_pending) {
+            socket_events = (short)write_want;
+        } else if (read_pending) {
+            socket_events = (short)read_want;
+        } else {
+            if (ring_used(&engine->ssh_to_tls) > 0)
+                socket_events |= POLLOUT;
             if (!rx_closed && ring_free(&engine->tls_to_ssh) > 0)
                 socket_events |= POLLIN;
         }
@@ -529,6 +539,9 @@ static void *tls_engine_thread(void *opaque)
             { .fd = engine->socket_fd, .events = socket_events },
             { .fd = engine->worker_event_fd, .events = POLLIN }
         };
+#ifdef TLS_ENGINE_DIAGNOSTICS
+        stat_poll_calls++;
+#endif
         int pr;
         do {
             pr = poll(pfds, 2, stopping ? 100 : 1000);
@@ -537,58 +550,140 @@ static void *tls_engine_thread(void *opaque)
             fatal_error = errno ? errno : EIO;
             break;
         }
-        if (pfds[1].revents & POLLIN)
+        if (pfds[1].revents & POLLIN) {
             drain_eventfd(engine->worker_event_fd);
+#ifdef TLS_ENGINE_DIAGNOSTICS
+            stat_poll_owner_event++;
+#endif
+        }
+#ifdef TLS_ENGINE_DIAGNOSTICS
+        if (pfds[0].revents & POLLIN) stat_poll_socket_in++;
+        if (pfds[0].revents & POLLOUT) stat_poll_socket_out++;
+#endif
 
-        if (pfds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-            if (pfds[0].revents & POLLIN) {
-                /* Allow SSL_read to classify close_notify / unexpected EOF. */
-            } else {
+        if (pfds[0].revents & POLLNVAL) {
+            fatal_error = EBADF;
+            break;
+        }
+        if (pfds[0].revents & POLLERR) {
+            if (!(pfds[0].revents & (POLLIN | POLLHUP))) {
                 int socket_error = 0;
                 socklen_t error_length = sizeof(socket_error);
                 if (getsockopt(engine->socket_fd, SOL_SOCKET, SO_ERROR,
                                &socket_error, &error_length) < 0)
                     socket_error = errno;
-                fatal_error = socket_error ? socket_error : ECONNRESET;
+                fatal_error = socket_error ? socket_error : EIO;
                 break;
             }
         }
 
-        if (write_pending && (pfds[0].revents & write_want)) {
-            int rc = engine_try_write(engine, ssl, &write_pending,
-                                      &write_ticket, &write_length,
-                                      &write_want, &fatal_error);
-            if (rc < 0) break;
-        } else if (!write_pending && !read_pending &&
-                   ring_used(&engine->ssh_to_tls) > 0 &&
-                   (pfds[0].revents & POLLOUT)) {
-            int rc = engine_try_write(engine, ssl, &write_pending,
-                                      &write_ticket, &write_length,
-                                      &write_want, &fatal_error);
-            if (rc < 0) break;
+        /* Pinned SSL_write must complete before another SSL operation. */
+        if (write_pending) {
+            if (pfds[0].revents & write_want) {
+                int before = ring_used(&engine->ssh_to_tls);
+                int rc = engine_try_write(engine, ssl, &write_pending,
+                                          &write_ticket, &write_length,
+                                          &write_want, &fatal_error);
+#ifdef TLS_ENGINE_DIAGNOSTICS
+                stat_write_calls++;
+                if (rc > 0)
+                    stat_write_bytes += (uint64_t)(before - ring_used(&engine->ssh_to_tls));
+                if (write_pending && write_want == POLLIN)
+                    stat_write_want_read++;
+                if (write_pending && write_want == POLLOUT)
+                    stat_write_want_write++;
+#endif
+                if (rc < 0) break;
+            }
+            continue;
         }
 
-        if (read_pending && (pfds[0].revents & read_want)) {
+        /* Pinned SSL_read must likewise complete before another SSL operation. */
+        if (read_pending) {
+            if (pfds[0].revents & read_want) {
+                int before = ring_used(&engine->tls_to_ssh);
+                int rc = engine_try_read(engine, ssl, &read_pending,
+                                         &read_buffer, &read_ticket, &read_length,
+                                         &read_want, &fatal_error);
+#ifdef TLS_ENGINE_DIAGNOSTICS
+                stat_read_calls++;
+                if (rc > 0)
+                    stat_read_bytes += (uint64_t)(ring_used(&engine->tls_to_ssh) - before);
+                if (read_pending && read_want == POLLOUT)
+                    stat_read_want_write++;
+#endif
+                if (rc < 0) break;
+                if (rc == 2) rx_closed = 1;
+            }
+            continue;
+        }
+
+        /*
+         * No operation is pinned. Prefer inbound data when both socket
+         * directions are ready; service one read before starting another write.
+         */
+        if (!rx_closed && ring_free(&engine->tls_to_ssh) > 0 &&
+            (pfds[0].revents & (POLLIN | POLLHUP))) {
+            int before = ring_used(&engine->tls_to_ssh);
             int rc = engine_try_read(engine, ssl, &read_pending,
                                      &read_buffer, &read_ticket, &read_length,
                                      &read_want, &fatal_error);
+#ifdef TLS_ENGINE_DIAGNOSTICS
+            stat_read_calls++;
+            if (rc > 0)
+                stat_read_bytes += (uint64_t)(ring_used(&engine->tls_to_ssh) - before);
+            if (read_pending && read_want == POLLOUT)
+                stat_read_want_write++;
+#endif
             if (rc < 0) break;
             if (rc == 2) rx_closed = 1;
-        } else if (!read_pending && !write_pending && !rx_closed &&
-                   ring_free(&engine->tls_to_ssh) > 0 &&
-                   (pfds[0].revents & POLLIN)) {
-            int rc = engine_try_read(engine, ssl, &read_pending,
-                                     &read_buffer, &read_ticket, &read_length,
-                                     &read_want, &fatal_error);
+            if (rc > 0 || rc == 2 || read_pending) continue;
+        }
+
+        if (ring_used(&engine->ssh_to_tls) > 0 &&
+            (pfds[0].revents & POLLOUT)) {
+            int before = ring_used(&engine->ssh_to_tls);
+            int rc = engine_try_write(engine, ssl, &write_pending,
+                                      &write_ticket, &write_length,
+                                      &write_want, &fatal_error);
+#ifdef TLS_ENGINE_DIAGNOSTICS
+            stat_write_calls++;
+            if (rc > 0)
+                stat_write_bytes += (uint64_t)(before - ring_used(&engine->ssh_to_tls));
+            if (write_pending && write_want == POLLIN)
+                stat_write_want_read++;
+            if (write_pending && write_want == POLLOUT)
+                stat_write_want_write++;
+#endif
             if (rc < 0) break;
-            if (rc == 2) rx_closed = 1;
         }
     }
 
     if (fatal_error)
         publish_terminal(engine, fatal_error);
-    /* A clean receive close_notify leaves tx_terminal_error at zero unless
-     * bounded graceful shutdown above published a distinct TX-side failure. */
+#ifdef TLS_ENGINE_DIAGNOSTICS
+    fprintf(stderr,
+            "[TLS_ENGINE_STATS] write_calls=%llu write_bytes=%llu "
+            "read_calls=%llu read_bytes=%llu write_want_read=%llu "
+            "write_want_write=%llu read_want_write=%llu polls=%llu "
+            "poll_in=%llu poll_out=%llu owner_wake=%llu tx_pending=%d "
+            "rx_pending=%d rx_closed=%d fatal=%d\\n",
+            (unsigned long long)stat_write_calls,
+            (unsigned long long)stat_write_bytes,
+            (unsigned long long)stat_read_calls,
+            (unsigned long long)stat_read_bytes,
+            (unsigned long long)stat_write_want_read,
+            (unsigned long long)stat_write_want_write,
+            (unsigned long long)stat_read_want_write,
+            (unsigned long long)stat_poll_calls,
+            (unsigned long long)stat_poll_socket_in,
+            (unsigned long long)stat_poll_socket_out,
+            (unsigned long long)stat_poll_owner_event,
+            ring_used(&engine->ssh_to_tls),
+            ring_used(&engine->tls_to_ssh),
+            __atomic_load_n(&engine->rx_closed, __ATOMIC_ACQUIRE),
+            fatal_error);
+#endif
     signal_eventfd(engine->owner_event_fd);
     SSL_free(ssl);
     if (engine->socket_fd >= 0) close(engine->socket_fd);

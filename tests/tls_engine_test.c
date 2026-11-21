@@ -294,11 +294,18 @@ int main(void)
     }
 
     if (sent != TLS_TEST_BYTES || received != TLS_TEST_BYTES) {
-        fprintf(stderr, "FAIL: transfer timeout sent=%llu received=%llu\n",
-                (unsigned long long)sent, (unsigned long long)received);
+        int rx_error = 0;
+        int tx_error = 0;
+        int rx_terminal = tls_engine_rx_terminal(engine, &rx_error);
+        int tx_terminal = tls_engine_tx_terminal(engine, &tx_error);
+        fprintf(stderr, "FAIL: transfer timeout sent=%llu received=%llu "
+                        "tx_pending=%d rx_pending=%d rx_terminal=%d rx_error=%d "
+                        "tx_terminal=%d tx_error=%d\\n",
+                (unsigned long long)sent, (unsigned long long)received,
+                tls_engine_tx_pending(engine), tls_engine_rx_pending(engine),
+                rx_terminal, rx_error, tx_terminal, tx_error);
         goto done;
     }
-
     deadline = monotonic_ms() + 5000;
     for (;;) {
         int terminal_error = 0;
