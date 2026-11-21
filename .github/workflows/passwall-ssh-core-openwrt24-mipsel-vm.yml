@@ -150,9 +150,7 @@ jobs:
           chmod 0755 "$GITHUB_WORKSPACE/test-results/tls-engine-test"
           file "$GITHUB_WORKSPACE/test-results/tls-engine-test" | tee "$GITHUB_WORKSPACE/test-results/tls-engine-test-file.txt"
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum tls-engine-test > tls-engine-test.sha256)
-          "$CROSS_CC" -std=gnu11 -Os -static -Wall -Wextra -Werror -pthread \\
-            "$GITHUB_WORKSPACE/tests/io_worker_pool_test.c" "$GITHUB_WORKSPACE/io_worker_pool.c" \\
-            -o "$GITHUB_WORKSPACE/test-results/io-worker-pool-test"
+          "$CROSS_CC" -std=gnu11 -Os -static -Wall -Wextra -Werror -pthread "$GITHUB_WORKSPACE/tests/io_worker_pool_test.c" "$GITHUB_WORKSPACE/io_worker_pool.c" -o "$GITHUB_WORKSPACE/test-results/io-worker-pool-test"
           chmod 0755 "$GITHUB_WORKSPACE/test-results/io-worker-pool-test"
           file "$GITHUB_WORKSPACE/test-results/io-worker-pool-test" | tee "$GITHUB_WORKSPACE/test-results/io-worker-pool-file.txt"
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum io-worker-pool-test > io-worker-pool.sha256)
