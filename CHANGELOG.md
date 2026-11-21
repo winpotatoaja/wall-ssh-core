@@ -4,6 +4,7 @@
   operations requiring `__atomic_load_8`: link the relay with `-latomic`
   only for the MIPS ABI, and link the statically cross-compiled I/O worker
   pool regression with the same runtime. Bump the package release to r33.
+- [mips-stage=sdk] Re-run the MIPS SDK build with the ABI-specific atomic link fix.
 - MIPS SDK run #44893762192 reached the relay link stage; OpenSSL, zlib,
   libssh2, source staging, and compilation succeeded before the missing
   libatomic link dependency stopped the build.
