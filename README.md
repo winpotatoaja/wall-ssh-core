@@ -26,11 +26,13 @@ and consumer-owned head are separated by a 64-byte stride. A pinned read-span
 API preserves the same byte pointer while libssh2 channel_write is pending on
 EAGAIN; the SSH Owner will be the only consumer allowed to commit head.
 
-Native and mipsel_24kc tests cover full/empty states, physical wrap, pinned
-span stability during producer appends, irregular chunk sizes, byte integrity,
-and uint32_t counter rollover. This validates the queue primitive only;
-eventfd, TLS ownership, I/O workers, and live relay integration remain future
-stages.
+Native regression tests pass, and the OpenWrt 24.10.7 SDK successfully
+cross-compiled the standalone static SPSC test for MIPS32 Release 2. The
+MT7621 QEMU execution is the next validation gate. Tests cover full/empty
+states, physical wrap, pinned-span stability during producer appends, irregular
+chunk sizes, byte integrity, and uint32_t counter rollover. This validates
+the queue primitive only; eventfd, TLS ownership, I/O workers, and live relay
+integration remain future stages.
 
 ## Package and executable names
 
