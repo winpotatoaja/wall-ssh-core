@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=34
+PKG_RELEASE:=35
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1
@@ -37,7 +37,7 @@ define Build/Prepare
 	test -s ./tls_engine.h
 	test -s ./client_event_token.h
 	test -s ./client_lifetime.h
-	test -s ./client_lifetime.c
+	test -s ./client_lifetime.c\n\ttest -s ./io_worker_completion_tracker.h\n\ttest -s ./io_worker_completion_tracker.c
 	test -s ./spsc_rb.h
 	test -s ./io_worker_pool.c
 	test -s ./io_worker_pool.h
@@ -47,7 +47,7 @@ define Build/Prepare
 	$(CP) ./tls_engine.h $(PKG_BUILD_DIR)/tls_engine.h
 	$(CP) ./client_event_token.h $(PKG_BUILD_DIR)/client_event_token.h
 	$(CP) ./client_lifetime.h $(PKG_BUILD_DIR)/client_lifetime.h
-	$(CP) ./client_lifetime.c $(PKG_BUILD_DIR)/client_lifetime.c
+	$(CP) ./client_lifetime.c $(PKG_BUILD_DIR)/client_lifetime.c\n\t$(CP) ./io_worker_completion_tracker.h $(PKG_BUILD_DIR)/io_worker_completion_tracker.h\n\t$(CP) ./io_worker_completion_tracker.c $(PKG_BUILD_DIR)/io_worker_completion_tracker.c
 	$(CP) ./spsc_rb.h $(PKG_BUILD_DIR)/spsc_rb.h
 	$(CP) ./io_worker_pool.c $(PKG_BUILD_DIR)/io_worker_pool.c
 	$(CP) ./io_worker_pool.h $(PKG_BUILD_DIR)/io_worker_pool.h
