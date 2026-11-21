@@ -7,6 +7,7 @@ on:
     branches:
       - fix/pending-cleanup-bounded-shutdown
       - perf/4core-ssh-relay-benchmark
+      - phase3/io-worker-pool-foundation
   workflow_dispatch:
     inputs:
       stage:
@@ -92,6 +93,9 @@ jobs:
             -Wl,--gc-sections -o /tmp/http-parser-test \
             -lssh2 -lssl -lcrypto
           /tmp/http-parser-test | tee test-results/http-parser-test.log
+          gcc -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread \\
+            tests/io_worker_pool_test.c io_worker_pool.c -o /tmp/io-worker-pool-test
+          timeout 120s /tmp/io-worker-pool-test | tee test-results/io-worker-pool-test-native.log
 
       - name: Download and configure OpenWrt 25.12.5 x86_64 SDK
         if: env.TEST_STAGE == 'sdk'
@@ -170,7 +174,7 @@ jobs:
           PKG_DIR="$GITHUB_WORKSPACE/sdk/package/passwall-ssh-core"
           mkdir -p "$PKG_DIR"
           cp Makefile "$PKG_DIR/Makefile"
-          cp ssh-core.c "$PKG_DIR/ssh-core.c"
+          cp ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h "$PKG_DIR/"
 
           cd "$GITHUB_WORKSPACE/sdk"
           echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
@@ -194,6 +198,12 @@ jobs:
           chmod 0755 "$GITHUB_WORKSPACE/test-results/socks-halfclose"
           file "$GITHUB_WORKSPACE/test-results/socks-halfclose"
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum socks-halfclose > halfclose.sha256)
+          "$CROSS_CC" -std=gnu11 -Os -static -Wall -Wextra -Werror -pthread \\
+            "$GITHUB_WORKSPACE/tests/io_worker_pool_test.c" "$GITHUB_WORKSPACE/io_worker_pool.c" \\
+            -o "$GITHUB_WORKSPACE/test-results/io-worker-pool-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/io-worker-pool-test"
+          file "$GITHUB_WORKSPACE/test-results/io-worker-pool-test"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum io-worker-pool-test > io-worker-pool.sha256)
 
           find staging_dir/target-* -name 'libssh2.so*' -o -name 'libssl.so*' -o -name 'libcrypto.so*' | head -30
 
@@ -208,6 +218,8 @@ jobs:
             test-results/apk.sha256
             test-results/socks-halfclose
             test-results/halfclose.sha256
+            test-results/io-worker-pool-test
+            test-results/io-worker-pool.sha256
           if-no-files-found: error
           retention-days: 7
 
@@ -266,12 +278,12 @@ jobs:
           fi
           # Permit workflow/docs-only commits, but reject changes to compiled inputs.
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/socks_halfclose.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/socks_halfclose.c tests/io_worker_pool_test.c; then
             echo "The APK or half-close helper was built from different source inputs."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/socks_halfclose.c
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/socks_halfclose.c tests/io_worker_pool_test.c
             false
           fi
-          (cd test-results && sha256sum -c apk.sha256 halfclose.sha256)
+          (cd test-results && sha256sum -c apk.sha256 halfclose.sha256 io-worker-pool.sha256)
       - name: Record four-core CI and QEMU test topology
         if: env.TEST_STAGE == 'vm'
         shell: bash
