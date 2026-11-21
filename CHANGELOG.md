@@ -5,6 +5,9 @@
 
 ## Unreleased
 
+- Introduce process-wide monotonic client IDs and generation fields, and encode client IDs in epoll event cookies. SSH Owner resolves client cookies through its active-client list, ignoring stale events instead of dereferencing freed `client_conn_t` pointers. This remains synchronous; no worker tasks or deferred client destruction are enabled. Native and MT7621 QEMU validation required. [mips-stage=sdk]
+- Complete MT7621 OpenWrt 24.10.7 QEMU validation for the standalone client lifetime helper using SDK artifact run `44891359077` (QEMU run `44892754687`); the full VM workflow succeeded.
+
 - Extend the MT7621 gate to compile and execute the client lifetime regression as a static `mipsel_24kc` helper; include the lifetime header/source in SDK-to-VM source provenance and artifact checksum validation.
 - Add SSH-Owner-only client lifetime accounting primitives and native/MIPS regression coverage: immutable client identity plus generation token, task-reference acquisition/release, stale-completion rejection, close deferral until the final reference drains, and guarded finalization. This is a tested foundation only; it is not yet wired into `client_conn_t`, epoll dispatch, or live worker submissions.
 - Complete the Phase 3 MIPS MT7621/mipsel_24kc QEMU runtime gate using SDK artifact run `44889307446` (QEMU run `44890438771`). OpenWrt 24.10.7 booted, package r32 installed, `MIPS TEST STATUS: 0`; worker-pool stress, TCP/TLS SSH authentication, four-client single-session transfers, half-close, full-duplex, 8–32 MiB integrity checks, TLS 1.3 preference, keepalive, and graceful shutdown passed. This validates the worker-pool foundation on MIPS, not live asynchronous relay integration.
