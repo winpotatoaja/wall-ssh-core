@@ -43,8 +43,7 @@ jobs:
             -I. tests/tls_engine_test.c tls_engine.c \
             -o /tmp/tls-engine-test -lssl -lcrypto
           timeout 60s /tmp/tls-engine-test | tee test-results/tls-engine-test-native.log
-          gcc -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread \\
-            tests/io_worker_pool_test.c io_worker_pool.c -o /tmp/io-worker-pool-test
+          gcc -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread tests/io_worker_pool_test.c io_worker_pool.c -o /tmp/io-worker-pool-test
           timeout 120s /tmp/io-worker-pool-test | tee test-results/io-worker-pool-test-native.log
       - name: Download OpenWrt 24.10.7 SDK
         shell: bash
