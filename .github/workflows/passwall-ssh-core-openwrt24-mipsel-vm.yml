@@ -757,7 +757,7 @@ jobs:
           fi
 
           if [ "$STATUS" -eq 0 ]; then
-            "$BIN" -env "$LOG/tcp.env" -log "$LOG/tcp-ssh-core.log" \\
+            "$BIN" -env "$LOG/tcp.env" -log "$LOG/tcp-ssh-core.log" \
               -log-backpressure 1 -log-perf 1 >"$LOG/tcp-stdout.log" 2>&1 &
             APP_PID=$!
             READY=0
