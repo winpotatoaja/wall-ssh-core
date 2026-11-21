@@ -306,7 +306,7 @@ jobs:
           install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/root/.ssh/authorized_keys"
 
           cd "$IB_DIR"
-          make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl" FILES="$FILES_DIR"
+          make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2" FILES="$FILES_DIR"
           SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*zbtlink_zbt-wg3526-16m*squashfs-sysupgrade.bin' -print -quit)"
           test -n "$SYSUP"
           SYSUP="$(readlink -f "$SYSUP")"
@@ -707,32 +707,45 @@ jobs:
             fail "guest opkg architecture is not mipsel_24kc"
           fi
 
-          echo "========== INSTALL R29 MIPS IPK =========="
-          opkg update
-          OPKG_RC=$?
-          if [ "$OPKG_RC" -eq 0 ]; then
+          echo "========== VERIFY OFFLINE RUNTIME DEPENDENCIES =========="
+          if opkg status libopenssl | grep -q 'Status:.*installed' &&
+             opkg status libssh2 | grep -q 'Status:.*installed'; then
+            pass "libopenssl and libssh2 are preinstalled in the MT7621 firmware"
+          else
+            fail "ImageBuilder firmware is missing libopenssl or libssh2"
+          fi
+
+          echo "========== INSTALL R29 MIPS IPK (OFFLINE) =========="
+          if [ "$STATUS" -eq 0 ]; then
             opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
+          else
+            OPKG_RC=1
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
-            fail "opkg could not install MIPS package or runtime dependencies"
+            fail "opkg could not install the local MIPS package"
           elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r29'; then
             pass "opkg installed passwall-ssh-core r29 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
 
-          if [ -x "$LOG/spsc-rb-test" ] && cp "$LOG/spsc-rb-test" /usr/bin/spsc-rb-test; then
-            chmod 0755 /usr/bin/spsc-rb-test
-            if /usr/bin/spsc-rb-test >"$LOG/spsc-rb-test.log" 2>&1; then
-              cat "$LOG/spsc-rb-test.log"
-              pass "MIPS SPSC ring stress, pinned-span and uint32_t wraparound tests"
+          if [ -f "$LOG/spsc-rb-test" ]; then
+            chmod 0755 "$LOG/spsc-rb-test"
+            if cp "$LOG/spsc-rb-test" /usr/bin/spsc-rb-test; then
+              chmod 0755 /usr/bin/spsc-rb-test
+              if /usr/bin/spsc-rb-test >"$LOG/spsc-rb-test.log" 2>&1; then
+                cat "$LOG/spsc-rb-test.log"
+                pass "MIPS SPSC ring stress, pinned-span and uint32_t wraparound tests"
+              else
+                cat "$LOG/spsc-rb-test.log"
+                fail "MIPS SPSC ring test failed"
+              fi
             else
-              cat "$LOG/spsc-rb-test.log"
-              fail "MIPS SPSC ring test failed"
+              fail "could not copy static MIPS SPSC test binary to executable overlay"
             fi
           else
-            fail "could not stage static MIPS SPSC test binary"
+            fail "static MIPS SPSC test binary is missing from /tmp/mips-test"
           fi
           if [ "$STATUS" -eq 0 ]; then
             "$BIN" -h
@@ -768,7 +781,10 @@ jobs:
               -log-backpressure 1 -log-perf 1 >"$LOG/tcp-bad-auth-stdout.log" 2>&1; then
               fail "invalid SSH password was unexpectedly accepted"
             else
-              if grep -qF '[AUTH-DIAG] server methods: password' "$LOG/tcp-bad-auth.log" && \
+              BAD_AUTH_COUNT="$(grep -cF '[AUTH-DIAG] password method rejected: rc=' "$LOG/tcp-bad-auth.log" 2>/dev/null || true)"
+              if grep -qF 'legacy requested workers=2 (ignored to prevent multiple SSH logins)' "$LOG/tcp-bad-auth-stdout.log" && \
+                 [ "$BAD_AUTH_COUNT" -eq 1 ] && \
+                 grep -qF '[AUTH-DIAG] server methods: password' "$LOG/tcp-bad-auth.log" && \
                  grep -qF '[AUTH-DIAG] password method rejected: rc=' "$LOG/tcp-bad-auth.log" && \
                  grep -qE 'Authentication Failed:.*methods=.*username_len=10 password_len=' "$LOG/tcp-bad-auth.log" && \
                  ! grep -qF 'R25-INTENTIONAL-BAD-SECRET' "$LOG/tcp-bad-auth.log" "$LOG/tcp-bad-auth-stdout.log"; then
@@ -796,9 +812,9 @@ jobs:
               pass "MIPS TCP SSH authentication and SOCKS listener"
               LISTENER_COUNT="$(grep -c "SOCKS5 Listening" "$LOG/tcp-ssh-core.log" 2>/dev/null || true)"
               LOGIN_COUNT="$(grep -cF '[AUTH-DIAG] authentication accepted via password' "$LOG/tcp-ssh-core.log" 2>/dev/null || true)"
-              if grep -qF 'SSH_sessions=1 mode=single-session; legacy requested workers=4 (ignored to prevent multiple SSH logins)' "$LOG/tcp-ssh-core.log" &&
+              if grep -qF 'SSH_sessions=1 mode=single-session; legacy requested workers=4 (ignored to prevent multiple SSH logins)' "$LOG/tcp-stdout.log" &&
                  [ "$LISTENER_COUNT" -eq 1 ] && [ "$LOGIN_COUNT" -eq 1 ]; then
-                pass "WORKERS=2 and -workers=4 still produce one listener and one SSH login"
+                pass "-workers=4 still produces one listener and one SSH login"
               else
                 fail "legacy worker options violated the one-session/one-login invariant"
               fi

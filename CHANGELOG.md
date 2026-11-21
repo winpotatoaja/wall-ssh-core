@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The first MT7621 QEMU attempt booted successfully but could not run package/SPSC checks because guest `opkg update` was blocked by the isolated VM network. The VM harness now preinstalls `libopenssl` and `libssh2` into the ImageBuilder firmware, installs the local IPK offline, normalizes the staged SPSC binary mode before copying it out of `/tmp`, and checks startup CPU diagnostics in stderr capture.
 - Native SPSC stress tests pass on the GitHub runner; the OpenWrt 24.10.7 SDK cross-compiled the standalone static MIPS32 Release 2 SPSC test binary and built the r29 IPK (SDK run 44866732425). MT7621 QEMU execution remains the next validation step.
 - Add a standalone SPSC byte-ring primitive for the planned single-session I/O pipeline. Use monotonically increasing uint32_t head/tail counters, power-of-two capacity <= 2^30, acquire/release publication, no shared used field, and 64-byte separation between producer and consumer indices.
 - Add native tests for capacity validation, full/empty and physical wrap behavior, pinned read-span stability during producer appends, irregular chunk sizes, byte integrity, and uint32_t counter rollover.
