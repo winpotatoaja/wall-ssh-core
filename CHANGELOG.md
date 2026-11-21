@@ -1,3 +1,5 @@
+- Treat duplicate/stale worker completions (`ENOENT`) as already-consumed records, but fail the relay closed on malformed/mismatched completion identity, missing retained client-generation, lifetime-release failure, or a completion with no matching C2S/S2C in-flight task. Completion drain now propagates invariant failures to the SSH Owner so it exits with failure instead of continuing with inconsistent lifetime/task state. Native/MIPS/QEMU validation pending.
+
 ## Unreleased
 - Correct the MIPS QEMU C2S upload assertion: validate exact cumulative received/committed byte accounting and absence of retained channel data, rather than requiring optional zero-window log transitions that did not occur in this run.
 - Re-run MT7621 QEMU using the verified MIPS IPK from SDK run `44957061334` after correcting workflow artifact selection.
