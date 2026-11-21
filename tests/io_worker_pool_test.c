@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #define STRESS_TASKS 50000U
 #define PAYLOAD_LEN 32U
