@@ -2683,7 +2683,8 @@ static int recv_to_rb(int fd, rb_t *r, int *eof_out, int *would_block_out) {
 
 /* Kuras sisa socket untuk koneksi yang sebelumnya mengalami HUP/RDHUP saat c2s penuh */
 static int drain_pending_eof_to_c2s(int epfd, client_conn_t *c) {
-    if (!(c->hup_pending || c->rdhup_pending) || c->client_eof || c->fd < 0) return 0;
+    if (!(c->hup_pending || c->rdhup_pending) || c->client_eof || c->fd < 0 ||
+        c->c2s_worker_inflight) return 0;
     if (rb_free_space(&c->c2s) == 0) return 0;
     size_t before = c->c2s.used;
     int eof_hit = 0, would_block = 0;
@@ -3140,6 +3141,10 @@ static void drain_io_worker_completions(int epfd,
                     } else {
                         c->client_eof = 1;
                         c->need_send_eof = 1;
+                        if (c->hup_pending) {
+                            c->client_dead = 1;
+                            detach_client_fd(epfd, c);
+                        }
                         c->hup_pending = 0;
                         c->rdhup_pending = 0;
                     }
