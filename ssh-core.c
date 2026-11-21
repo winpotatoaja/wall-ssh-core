@@ -47,6 +47,8 @@
 #define C2S_RELAY_BUF_SIZE     32768
 #define S2C_RELAY_BUF_SIZE     131072
 #define MAX_EVENTS             128
+#define SSH_CORE_IO_WORKER_COUNT 1U
+#define SSH_CORE_IO_QUEUE_CAPACITY 64U
 #define DEFAULT_MAX_CLIENTS    64
 #define MAX_CLIENTS_LIMIT      256
 #define DEFAULT_IDLE_TIMEOUT   600
@@ -5086,12 +5088,16 @@ static int core_worker_run(int argc, char **argv) {
         goto fail_cleanup;
     }
 
-    io_pool = io_worker_pool_create(1U, 64U, io_worker_socket_execute, NULL);
+    /* One SSH Owner, one conservative I/O worker; Stage 4 will tune this. */
+    io_pool = io_worker_pool_create(SSH_CORE_IO_WORKER_COUNT,
+                                   SSH_CORE_IO_QUEUE_CAPACITY,
+                                   io_worker_socket_execute, NULL);
     if (!io_pool) {
         log_red("Unable to create local socket I/O worker pool: %s", strerror(errno));
         goto fail_cleanup;
     }
-    io_tracker = io_worker_completion_tracker_create(1U, 64U);
+    io_tracker = io_worker_completion_tracker_create(
+        SSH_CORE_IO_WORKER_COUNT, SSH_CORE_IO_QUEUE_CAPACITY);
     if (!io_tracker) {
         log_red("Unable to create I/O completion tracker: %s", strerror(errno));
         goto fail_cleanup;
