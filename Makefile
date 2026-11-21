@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=32
+PKG_RELEASE:=33
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1
@@ -10,10 +10,13 @@ PKG_BUILD_PARALLEL:=1
 include $(INCLUDE_DIR)/package.mk
 
 # OpenWrt package architectures expose mipsel_24kc through ARCH_PACKAGES.
-# Keep the ChaCha-first TLS policy scoped to that exact ABI/target only.
+# Keep the ChaCha-first TLS policy and MIPS libatomic dependency scoped to
+# that exact ABI/target only.
 CORE_ARCH_CPPFLAGS:=
+CORE_ARCH_LDLIBS:=
 ifneq ($(filter mipsel_24kc,$(ARCH_PACKAGES) $(CONFIG_ARCH) $(ARCH)),)
   CORE_ARCH_CPPFLAGS+=-DSSH_CORE_MIPSEL_24KC=1
+  CORE_ARCH_LDLIBS+=-latomic
 endif
 
 define Package/passwall-ssh-core
@@ -52,7 +55,7 @@ define Build/Compile
 	$(TARGET_CC) $(TARGET_CPPFLAGS) $(CORE_ARCH_CPPFLAGS) $(TARGET_CFLAGS) -std=gnu11 -pthread \
 		-Wall -Wextra \
 		-o $(PKG_BUILD_DIR)/passwall-ssh-core $(PKG_BUILD_DIR)/ssh-core.c $(PKG_BUILD_DIR)/tls_engine.c $(PKG_BUILD_DIR)/io_worker_pool.c \
-		$(TARGET_LDFLAGS) -pthread -Wl,--as-needed -lssh2 -lssl -lcrypto
+		$(TARGET_LDFLAGS) -pthread -Wl,--as-needed -lssh2 -lssl -lcrypto $(CORE_ARCH_LDLIBS)
 	test -x $(PKG_BUILD_DIR)/passwall-ssh-core
 endef
 
