@@ -1,4 +1,5 @@
 ## Unreleased
+- Harden client teardown: lifetime finalization must succeed before the FD, ring buffers, or client object are freed; retired clients remain queued if finalization cannot be confirmed. This is a safety prerequisite for live worker integration; validation is pending.
 - MIPS OpenWrt 24.10.7 SDK build r36 succeeded in GitHub Actions run 44900327596; the MIPS IPK and worker-pool/completion-tracker helpers are ready for MT7621 QEMU validation. [sdk_run_id=44900327596] [mips-stage=vm]
 - Implement `io_worker_pool_select_worker()` and `io_worker_pool_submit_to_worker()` so the SSH Owner selects a worker, registers the full task/client/generation/worker identity with the completion tracker, and only then publishes the copied task. This closes the race where a fast worker could complete before the Owner had registered its lifetime reference.
 - Add an end-to-end native and MIPS regression that waits on the worker completion eventfd, drains the completion, and consumes it against the pre-registered tracker identity.
