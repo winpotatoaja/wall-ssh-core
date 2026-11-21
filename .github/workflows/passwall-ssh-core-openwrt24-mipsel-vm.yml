@@ -47,6 +47,8 @@ jobs:
           timeout 120s /tmp/io-worker-pool-test | tee test-results/io-worker-pool-test-native.log
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror -I. tests/client_lifetime_test.c client_lifetime.c -o /tmp/client-lifetime-test
           timeout 10s /tmp/client-lifetime-test | tee test-results/client-lifetime-test-native.log
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/client_event_token_test.c -o /tmp/client-event-token-test
+          timeout 10s /tmp/client-event-token-test | tee test-results/client-event-token-test-native.log
       - name: Download OpenWrt 24.10.7 SDK
         shell: bash
         run: |
@@ -260,13 +262,13 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h tests/socks_halfclose.c tests/socks_mt_download.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
             echo "SDK artifact was built from different package or test sources."
             git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c
             false
           fi
-          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256)
-          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256)
+          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           grep -q 'Version: 1.0.0-r32' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
@@ -275,6 +277,7 @@ jobs:
           readelf -h test-results/tls-engine-test | grep -q 'MIPS'
           readelf -h test-results/io-worker-pool-test | grep -q 'MIPS'
           readelf -h test-results/client-lifetime-test | grep -q 'MIPS'
+          readelf -h test-results/client-event-token-test | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
         shell: bash
