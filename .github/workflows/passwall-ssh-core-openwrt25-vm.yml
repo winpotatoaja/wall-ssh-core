@@ -89,12 +89,11 @@ jobs:
           gcc -std=gnu11 -O1 -g -Wall -Wextra \
             -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
             -ffunction-sections -fdata-sections \
-            tests/http_parser_test.c \
+            tests/http_parser_test.c tls_engine.c \
             -Wl,--gc-sections -o /tmp/http-parser-test \
             -lssh2 -lssl -lcrypto
           /tmp/http-parser-test | tee test-results/http-parser-test.log
-          gcc -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread \\
-            tests/io_worker_pool_test.c io_worker_pool.c -o /tmp/io-worker-pool-test
+          gcc -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread tests/io_worker_pool_test.c io_worker_pool.c -o /tmp/io-worker-pool-test
           timeout 120s /tmp/io-worker-pool-test | tee test-results/io-worker-pool-test-native.log
 
       - name: Download and configure OpenWrt 25.12.5 x86_64 SDK
