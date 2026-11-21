@@ -105,9 +105,9 @@ jobs:
           echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
           make defconfig
           make package/passwall-ssh-core/compile -j"$(nproc)" V=s
-          if grep -Eq 'SSL_(new|connect|read|write|shutdown|free|get_error|has_pending)[[:space:]]*\\(' ssh-core.c; then
+          if grep -Eq 'SSL_(new|connect|read|write|shutdown|free|get_error|has_pending)[[:space:]]*\(' ssh-core.c; then
             echo "ssh-core.c still contains direct SSL I/O; TLS Engine ownership is incomplete."
-            grep -nE 'SSL_(new|connect|read|write|shutdown|free|get_error|has_pending)[[:space:]]*\\(' ssh-core.c
+            grep -nE 'SSL_(new|connect|read|write|shutdown|free|get_error|has_pending)[[:space:]]*\(' ssh-core.c
             false
           fi
           echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
