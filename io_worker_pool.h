@@ -57,6 +57,17 @@ io_worker_pool_t *io_worker_pool_create(uint32_t worker_count,
  * Returns 0 on acceptance, -1 with errno=EAGAIN when all worker credits are
  * occupied, or -1 for invalid/shutdown state. No client pointer is accepted.
  */
+/*
+ * Select a worker without publishing a task. The SSH Owner may register the
+ * task identity with its completion tracker, then call submit_to_worker().
+ * There must be no intervening submit by another producer (single producer).
+ */
+int io_worker_pool_select_worker(const io_worker_pool_t *pool,
+                                 uint32_t *worker_id_out);
+int io_worker_pool_submit_to_worker(io_worker_pool_t *pool,
+                                    const io_worker_task_t *task,
+                                    uint32_t worker_id);
+/* Convenience wrapper for callers that do not need pre-publication tracking. */
 int io_worker_pool_submit(io_worker_pool_t *pool,
                           const io_worker_task_t *task,
                           uint32_t *worker_id_out);
