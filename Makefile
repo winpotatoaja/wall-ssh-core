@@ -45,7 +45,7 @@ endef
 define Build/Compile
 	$(TARGET_CC) $(TARGET_CPPFLAGS) $(CORE_ARCH_CPPFLAGS) $(TARGET_CFLAGS) -std=gnu11 -pthread \
 		-Wall -Wextra \
-		-o $(PKG_BUILD_DIR)/passwall-ssh-core $(PKG_BUILD_DIR)/ssh-core.c \
+		-o $(PKG_BUILD_DIR)/passwall-ssh-core $(PKG_BUILD_DIR)/ssh-core.c $(PKG_BUILD_DIR)/tls_engine.c \
 		$(TARGET_LDFLAGS) -pthread -Wl,--as-needed -lssh2 -lssl -lcrypto
 	test -x $(PKG_BUILD_DIR)/passwall-ssh-core
 endef
