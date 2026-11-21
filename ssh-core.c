@@ -229,6 +229,7 @@ typedef struct client_conn {
     size_t         s2c_worker_len;
     uint64_t       s2c_worker_generation;
     int            fd;
+    int            fd_close_pending;
     int            in_epoll;
     client_state_t state;
     uint32_t       epoll_events;
@@ -2317,9 +2318,15 @@ static void detach_client_fd(int epfd, client_conn_t *c) {
             epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
             c->in_epoll = 0;
         }
-        close(c->fd);
-        c->fd = -1;
         c->epoll_events = 0;
+        /* Both directions may hold tasks against this same descriptor. */
+        if (c->lifetime.worker_refs != 0U) {
+            c->fd_close_pending = 1;
+        } else {
+            close(c->fd);
+            c->fd = -1;
+            c->fd_close_pending = 0;
+        }
     }
     c->close_after_ctrl = 0;
     c->ctrl_len = 0;
@@ -3199,6 +3206,8 @@ static void drain_io_worker_completions(int epfd,
                             (unsigned long long)ref.task_id, strerror(errno));
                     continue;
                 }
+                if (c->lifetime.worker_refs == 0U && c->fd_close_pending)
+                    detach_client_fd(epfd, c);
 
                 if (c->s2c_worker_task_id == ref.task_id) {
                     c->s2c_worker_task_id = 0U;
