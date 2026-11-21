@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Run the R31 TLS Engine SSH integration suite on MT7621 QEMU using the exact SDK artifact from run 44878511673. Validate package install, TLS handshake, libssh2 authentication callbacks, SOCKS relay throughput, close_notify half-close, graceful teardown, and ensure the TLS Engine eventfd/socket ownership changes work on the emulated MIPS target.
 - Preserve the original upstream socket number as libssh2's callback cookie after TLS Engine takes descriptor ownership; the SSH Owner continues using only the engine eventfd for polling/epoll and never closes or performs socket I/O on that descriptor.
 - Re-signal the SSH Owner eventfd when the final queued TLS plaintext is consumed after RX close_notify/error was already published. Add a deterministic native/MIPS regression proving the terminal wake is not lost when queued plaintext drains after the original terminal event was observed.
 - Update native ssh-core regressions for R31: remove tests that inspected SSH Owner SSL*/WANT internals and instead verify TLS Engine eventfd readiness, queue EAGAIN behavior, retryable handshake EOF/timeout, clean RX half-close while TX remains usable, and final eventfd detach. Link tls_engine.c into the native parser test executable.
