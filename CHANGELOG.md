@@ -1,5 +1,7 @@
 ## Unreleased
 
+- [mips-stage=sdk] Build and validate r34 with embedded client lifetime state.
+- Embed an SSH-Owner-only `client_lifetime_t` in each accepted client and initialize it from the monotonic client ID/generation. Compile `client_lifetime.c` into the OpenWrt package; bump package to r34. This is bookkeeping only: no worker tasks are submitted and no worker accesses client state yet.
 - [sdk_run_id=44894163316] [mips-stage=vm] Re-run MT7621 QEMU after correcting the stale r32 assertion and adding guest execution of the client event-token helper.
 - Fix the MT7621 QEMU guest gate to assert the actual r33 package version (the previous r32 check falsely failed after a successful install), and execute the statically cross-compiled client epoll event-token regression in the MIPS guest. Re-run using SDK artifact `44894163316`. [mips-stage=vm]
 - [mips-stage=vm] Run the MT7621 QEMU integration against successful SDK artifact run 44894163316; package release r33 and VM version assertion are aligned.
