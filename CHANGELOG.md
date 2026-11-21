@@ -1,5 +1,6 @@
 ## Unreleased
 
+- [mips-stage=vm] Run the MT7621 QEMU integration against successful SDK artifact run 44894163316; package release r33 and VM version assertion are aligned.
 - Fix the OpenWrt 24.10.7 mipsel_24kc link failure caused by 64-bit atomic
   operations requiring `__atomic_load_8`: link the relay with `-latomic`
   only for the MIPS ABI, and link the statically cross-compiled I/O worker
