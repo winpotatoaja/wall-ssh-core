@@ -3181,9 +3181,58 @@ static void drain_io_worker_completions(int epfd,
                     continue;
                 }
 
-                if (c->c2s_worker_task_id != ref.task_id)
-                    continue;
-                c->c2s_worker_task_id = 0U;
+                if (c->s2c_worker_task_id == ref.task_id) {
+                    c->s2c_worker_task_id = 0U;
+                    c->s2c_worker_inflight = 0;
+                    if (!current || c->state != ST_RELAY || c->fd < 0)
+                        continue;
+
+                    if (completion->status == 0) {
+                        if (completion->result_len == 0U ||
+                            completion->result_len > c->s2c_worker_len ||
+                            c->s2c.head != c->s2c_worker_head ||
+                            c->s2c.generation != c->s2c_worker_generation ||
+                            rb_commit_read(&c->s2c, completion->result_len, 0) < 0) {
+                            c->client_dead = 1;
+                            c->client_reset = 1;
+                            c->client_eof = 1;
+                            c->need_send_eof = 1;
+                            detach_client_fd(epfd, c);
+                        } else {
+                            c->last_activity_ms = now_ms();
+                            if (g_log_perf) {
+                                g_perf_stats.socks_tx_bytes += completion->result_len;
+                                if (completion->result_len < c->s2c_worker_len)
+                                    g_perf_stats.socks_tx_partial++;
+                            }
+                            if (c->s2c.used == 0U && c->ssh_eof)
+                                (void)shutdown(c->fd, SHUT_WR);
+                        }
+                    } else if (completion->status != EAGAIN &&
+                               completion->status != EWOULDBLOCK) {
+                        c->client_dead = 1;
+                        c->client_reset = 1;
+                        c->client_eof = 1;
+                        c->need_send_eof = 1;
+                        detach_client_fd(epfd, c);
+                    }
+
+                    if (c->fd >= 0 && c->state == ST_RELAY) {
+                        if (completion->status == 0 && c->s2c.used > 0U)
+                            handle_client_io(epfd, c, EPOLLOUT);
+                        else {
+                            uint32_t want = client_rdhup_flag(c);
+                            if (!c->client_eof && !c->c2s_worker_inflight &&
+                                rb_free_space(&c->c2s) > 0U)
+                                want |= EPOLLIN;
+                            if ((c->s2c.used > 0U && !c->s2c_worker_inflight) ||
+                                c->ctrl_len > 0U)
+                                want |= EPOLLOUT;
+                            update_client_epoll(epfd, c, want);
+                        }
+                    }
+                } else if (c->c2s_worker_task_id == ref.task_id) {
+                    c->c2s_worker_task_id = 0U;
                 c->c2s_worker_inflight = 0;
                 if (!current || c->state != ST_RELAY || c->fd < 0)
                     continue;
@@ -3241,6 +3290,10 @@ static void drain_io_worker_completions(int epfd,
                             want |= EPOLLOUT;
                         update_client_epoll(epfd, c, want);
                     }
+                }
+                } else {
+                    log_red("[IO worker] completion task has no matching direction task=%llu",
+                            (unsigned long long)ref.task_id);
                 }
             }
         }
