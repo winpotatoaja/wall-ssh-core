@@ -221,6 +221,11 @@ typedef struct client_conn {
     client_lifetime_t lifetime;
     uint64_t       c2s_worker_task_id;
     int            c2s_worker_inflight;
+    uint64_t       s2c_worker_task_id;
+    int            s2c_worker_inflight;
+    size_t         s2c_worker_head;
+    size_t         s2c_worker_len;
+    uint64_t       s2c_worker_generation;
     int            fd;
     int            in_epoll;
     client_state_t state;
@@ -2778,6 +2783,69 @@ static int submit_c2s_worker_read(io_worker_pool_t *pool,
     }
     c->c2s_worker_task_id = task.task_id;
     c->c2s_worker_inflight = 1;
+    return 0;
+}
+
+/* Snapshot a bounded S2C prefix into task-owned storage. The Owner keeps
+ * the ring head pinned until the matching completion commits the sent bytes. */
+static int submit_s2c_worker_write(io_worker_pool_t *pool,
+                                   io_worker_completion_tracker_t *tracker,
+                                   client_conn_t *c) {
+    if (!pool || !tracker || !c || c->fd < 0 || c->s2c_worker_inflight ||
+        c->s2c.used == 0U) {
+        errno = EINVAL;
+        return -1;
+    }
+    uint32_t worker_id = 0U;
+    if (io_worker_pool_select_worker(pool, &worker_id) < 0)
+        return errno == EAGAIN ? 1 : -1;
+
+    size_t contiguous = 0U;
+    const uint8_t *src = rb_read_slice(&c->s2c, &contiguous);
+    if (!src || contiguous == 0U) return 1;
+    if (contiguous > IO_WORKER_SOCKET_WRITE_MAX)
+        contiguous = IO_WORKER_SOCKET_WRITE_MAX;
+
+    io_worker_task_t task;
+    memset(&task, 0, sizeof(task));
+    task.task_id = allocate_io_task_id();
+    task.client_id = c->client_id;
+    task.generation = c->generation;
+    task.opcode = IO_WORKER_OP_SOCKET_WRITE;
+    task.payload_len = (uint32_t)(8U + contiguous);
+    int32_t fd_value = (int32_t)c->fd;
+    uint32_t length = (uint32_t)contiguous;
+    memcpy(task.payload, &fd_value, sizeof(fd_value));
+    memcpy(task.payload + sizeof(fd_value), &length, sizeof(length));
+    const uint8_t *pinned = rb_read_slice_pinned(
+        &c->s2c, c->s2c.head, c->s2c.generation, contiguous);
+    if (!pinned) return -1;
+    memcpy(task.payload + 8U, pinned, contiguous);
+
+    io_worker_task_ref_t ref = {
+        .task_id = task.task_id,
+        .client_id = task.client_id,
+        .generation = task.generation,
+        .worker_id = worker_id
+    };
+    if (client_lifetime_acquire(&c->lifetime, c->client_id, c->generation) < 0)
+        return -1;
+    if (io_worker_completion_tracker_register(tracker, &ref) < 0) {
+        (void)client_lifetime_release(&c->lifetime, c->client_id, c->generation);
+        return -1;
+    }
+    if (io_worker_pool_submit_to_worker(pool, &task, worker_id) < 0) {
+        int saved_errno = errno;
+        (void)io_worker_completion_tracker_cancel(tracker, &ref);
+        (void)client_lifetime_release(&c->lifetime, c->client_id, c->generation);
+        errno = saved_errno;
+        return saved_errno == EAGAIN ? 1 : -1;
+    }
+    c->s2c_worker_task_id = task.task_id;
+    c->s2c_worker_inflight = 1;
+    c->s2c_worker_head = c->s2c.head;
+    c->s2c_worker_generation = c->s2c.generation;
+    c->s2c_worker_len = contiguous;
     return 0;
 }
 
