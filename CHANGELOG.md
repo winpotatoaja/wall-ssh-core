@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Fix the MT7621 QEMU guest gate to assert the actual r33 package version (the previous r32 check falsely failed after a successful install), and execute the statically cross-compiled client epoll event-token regression in the MIPS guest. Re-run using SDK artifact `44894163316`. [mips-stage=vm]
 - [mips-stage=vm] Run the MT7621 QEMU integration against successful SDK artifact run 44894163316; package release r33 and VM version assertion are aligned.
 - Fix the OpenWrt 24.10.7 mipsel_24kc link failure caused by 64-bit atomic
   operations requiring `__atomic_load_8`: link the relay with `-latomic`
