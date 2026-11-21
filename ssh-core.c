@@ -222,6 +222,7 @@ typedef struct client_conn {
     int            write_window_log_seen;
     int            write_window_eagain_logged;
     int            write_window_final_logged;
+    int            c2s_post_eof_window_logged;
     size_t         c2s_peak_used;
     size_t         s2c_peak_used;
     int            s2c_saturated;
@@ -247,6 +248,10 @@ typedef struct {
     uint64_t ssh_rx_bytes, ssh_rx_eagain;
     uint64_t s2c_read_calls, s2c_read_bytes, s2c_read_eagain;
     uint64_t socks_tx_calls, socks_tx_bytes, socks_tx_eagain, socks_tx_partial;
+    uint64_t c2s_rx_bytes, c2s_ssh_write_bytes;
+    uint64_t c2s_post_eof_rx_bytes, c2s_post_eof_ssh_write_bytes;
+    uint64_t c2s_post_eof_window_blocked;
+    uint64_t window_waiter_retry_count, window_waiter_upstream_events;
     uint64_t epoll_ctl_add_fail, epoll_ctl_mod_fail;
     int epoll_ctl_last_errno;
     uint64_t s2c_full, libssh2_eagain, pending_blocks;
@@ -587,8 +592,14 @@ static void note_channel_window_blocked(client_conn_t *c, int eagain_zero) {
     c->write_window_log_active = 1;
     c->write_window_log_seen = 1;
     if (eagain_zero) {
-        log_yellow("SSH channel window penuh (EAGAIN; write_window=0); menunggu window-adjust (%s:%u)",
-                   c->target_host, (unsigned)c->target_port);
+        if (c->ssh_eof) {
+            log_yellow("SSH C2S window=0 after remote EOF; waiting for WINDOW_ADJUST (%s:%u; c2s_pending=%zu; write_window=%lu)",
+                       c->target_host, (unsigned)c->target_port, c->c2s.used,
+                       c->channel ? libssh2_channel_window_write_ex(c->channel, NULL) : 0UL);
+        } else {
+            log_yellow("SSH channel window penuh (EAGAIN; write_window=0); menunggu window-adjust (%s:%u)",
+                       c->target_host, (unsigned)c->target_port);
+        }
     } else {
         log_yellow("SSH channel window penuh; menunggu window-adjust (%s:%u)",
                    c->target_host, (unsigned)c->target_port);
@@ -597,8 +608,13 @@ static void note_channel_window_blocked(client_conn_t *c, int eagain_zero) {
 
 static void note_channel_window_recovered(client_conn_t *c) {
     if (!g_log_backpressure || !c || !c->write_window_log_active) return;
-    log_blue("SSH channel window recovered; write resumed (%s:%u; c2s_pending=%zu/%zu)",
-             c->target_host, (unsigned)c->target_port, c->c2s.used, c->c2s.cap);
+    if (c->ssh_eof) {
+        log_blue("SSH C2S window recovered after remote EOF; write resumed (%s:%u; c2s_pending=%zu/%zu)",
+                 c->target_host, (unsigned)c->target_port, c->c2s.used, c->c2s.cap);
+    } else {
+        log_blue("SSH channel window recovered; write resumed (%s:%u; c2s_pending=%zu/%zu)",
+                 c->target_host, (unsigned)c->target_port, c->c2s.used, c->c2s.cap);
+    }
     c->write_window_log_active = 0;
 }
 
@@ -1230,11 +1246,23 @@ static void perf_log_interval(long long now) {
     unsigned int s2c_nonempty_clients = 0;
     unsigned int epollout_armed_clients = 0;
     unsigned int s2c_epollout_missing = 0;
-    size_t s2c_used_sum = 0;
-    size_t s2c_used_max = 0;
+    unsigned int c2s_nonempty_clients = 0;
+    unsigned int c2s_window_waiters = 0;
+    unsigned int ssh_eof_clients = 0;
+    unsigned int ssh_eof_c2s_pending = 0;
+    size_t s2c_used_sum = 0, s2c_used_max = 0;
+    size_t c2s_used_sum = 0, c2s_used_max = 0;
     for (const client_conn_t *c = g_clients; c; c = c->next) {
         if (c->state != ST_RELAY) continue;
         relay_clients++;
+        c2s_used_sum += c->c2s.used;
+        if (c->c2s.used > c2s_used_max) c2s_used_max = c->c2s.used;
+        if (c->c2s.used > 0) c2s_nonempty_clients++;
+        if (c->write_waiting_window) c2s_window_waiters++;
+        if (c->ssh_eof) {
+            ssh_eof_clients++;
+            if (c->c2s.used > 0 || c->write_pending) ssh_eof_c2s_pending++;
+        }
         s2c_used_sum += c->s2c.used;
         if (c->s2c.used > s2c_used_max) s2c_used_max = c->s2c.used;
         if (c->s2c.used > 0) {
@@ -1251,7 +1279,10 @@ static void perf_log_interval(long long now) {
             "tls_rx_calls=%llu tls_rx_bytes=%llu tls_rx_eagain=%llu ssh_rx_bytes=%llu ssh_rx_eagain=%llu "
             "s2c_read_calls=%llu s2c_read_bytes=%llu s2c_read_eagain=%llu "
             "socks_tx_calls=%llu socks_tx_bytes=%llu socks_tx_eagain=%llu socks_tx_partial=%llu "
+            "c2s_rx_bytes=%llu c2s_ssh_write_bytes=%llu c2s_post_eof_rx_bytes=%llu c2s_post_eof_ssh_write_bytes=%llu "
+            "c2s_post_eof_window_blocked=%llu window_waiter_retries=%llu window_waiter_upstream_events=%llu "
             "epoll_ctl_add_fail=%llu epoll_ctl_mod_fail=%llu epoll_ctl_errno=%d "
+            "c2s_used_sum=%zu c2s_used_max=%zu c2s_nonempty=%u c2s_window_waiters=%u ssh_eof_clients=%u ssh_eof_c2s_pending=%u "
             "s2c_used_sum=%zu s2c_used_max=%zu s2c_nonempty=%u epollout_armed=%u s2c_epollout_missing=%u "
             "s2c_full=%llu libssh2_eagain=%llu pend_blk=%llu",
             span_ms, g_client_count, relay_clients,
@@ -1272,9 +1303,18 @@ static void perf_log_interval(long long now) {
             (unsigned long long)g_perf_stats.socks_tx_bytes,
             (unsigned long long)g_perf_stats.socks_tx_eagain,
             (unsigned long long)g_perf_stats.socks_tx_partial,
+            (unsigned long long)g_perf_stats.c2s_rx_bytes,
+            (unsigned long long)g_perf_stats.c2s_ssh_write_bytes,
+            (unsigned long long)g_perf_stats.c2s_post_eof_rx_bytes,
+            (unsigned long long)g_perf_stats.c2s_post_eof_ssh_write_bytes,
+            (unsigned long long)g_perf_stats.c2s_post_eof_window_blocked,
+            (unsigned long long)g_perf_stats.window_waiter_retry_count,
+            (unsigned long long)g_perf_stats.window_waiter_upstream_events,
             (unsigned long long)g_perf_stats.epoll_ctl_add_fail,
             (unsigned long long)g_perf_stats.epoll_ctl_mod_fail,
             g_perf_stats.epoll_ctl_last_errno,
+            c2s_used_sum, c2s_used_max, c2s_nonempty_clients, c2s_window_waiters,
+            ssh_eof_clients, ssh_eof_c2s_pending,
             s2c_used_sum, s2c_used_max, s2c_nonempty_clients,
             epollout_armed_clients, s2c_epollout_missing,
             (unsigned long long)g_perf_stats.s2c_full,
@@ -2666,7 +2706,18 @@ static int drain_pending_eof_to_c2s(int epfd, client_conn_t *c) {
     int eof_hit = 0, would_block = 0;
     int rc = recv_to_rb(c->fd, &c->c2s, &eof_hit, &would_block);
     note_c2s_buffer_peak(c);
-    if (c->c2s.used > before) c->last_activity_ms = now_ms();
+    if (c->c2s.used > before) {
+        size_t received = c->c2s.used - before;
+        c->last_activity_ms = now_ms();
+        if (g_log_perf) {
+            g_perf_stats.c2s_rx_bytes += received;
+            if (c->ssh_eof) g_perf_stats.c2s_post_eof_rx_bytes += received;
+        }
+        if (c->ssh_eof && g_log_backpressure)
+            log_blue("C2S bytes received after remote EOF (%s:%u; added=%zu queued=%zu; client_eof=%d)",
+                     c->target_host, (unsigned)c->target_port, received,
+                     c->c2s.used, c->client_eof);
+    }
     if (rc < 0) {
         c->client_eof = 1; c->need_send_eof = 1; c->client_dead = 1;
         c->client_reset = 1;
@@ -2900,7 +2951,18 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
                 c->hup_pending = 0;
                 c->rdhup_pending = 0;
             }
-            if(c->c2s.used>c2s_before)c->last_activity_ms=now_ms();
+            if (c->c2s.used > c2s_before) {
+                size_t received = c->c2s.used - c2s_before;
+                c->last_activity_ms = now_ms();
+                if (g_log_perf) {
+                    g_perf_stats.c2s_rx_bytes += received;
+                    if (c->ssh_eof) g_perf_stats.c2s_post_eof_rx_bytes += received;
+                }
+                if (c->ssh_eof && g_log_backpressure)
+                    log_blue("C2S bytes received after remote EOF (%s:%u; added=%zu queued=%zu; client_eof=%d)",
+                             c->target_host, (unsigned)c->target_port, received,
+                             c->c2s.used, c->client_eof);
+            }
         }
 
         if (c->fd >= 0 && (events & EPOLLOUT) && c->ctrl_len == 0 && c->s2c.used > 0) {
@@ -3162,6 +3224,12 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
  * keepalive as an operation that still needs a retry. */
 static void mark_channel_upstream_drained(client_conn_t *c) {
     if (!c) return;
+    if (!c->ssh_eof && g_log_backpressure) {
+        log_blue("SSH remote EOF received; keep local C2S half open (%s:%u; c2s_pending=%zu; write_window=%lu; client_eof=%d)",
+                 c->target_host, (unsigned)c->target_port, c->c2s.used,
+                 c->channel ? libssh2_channel_window_write_ex(c->channel, NULL) : 0UL,
+                 c->client_eof);
+    }
     c->upstream_read_drained = 1;
     c->upstream_read_stalled = 0;
     c->ssh_eof = 1;
@@ -3306,6 +3374,13 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 clear_pending_operation();
                 return -1;
             }
+            if (g_log_perf) {
+                g_perf_stats.c2s_ssh_write_bytes += (uint64_t)w;
+                if (c->ssh_eof) g_perf_stats.c2s_post_eof_ssh_write_bytes += (uint64_t)w;
+            }
+            if (c->ssh_eof && g_log_backpressure)
+                log_blue("C2S write progressed after remote EOF (%s:%u; bytes=%lld; buffer_before_commit=%zu)",
+                         c->target_host, (unsigned)c->target_port, (long long)w, c->c2s.used);
             note_channel_window_recovered(c);
             c->last_activity_ms=now_ms();
             c->write_pending = 0;
@@ -3671,6 +3746,13 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                             *did_ssh_read_out = did_ssh_read;
                             return -1;
                         }
+                        if (g_log_perf) {
+                            g_perf_stats.c2s_ssh_write_bytes += (uint64_t)w;
+                            if (c->ssh_eof) g_perf_stats.c2s_post_eof_ssh_write_bytes += (uint64_t)w;
+                        }
+                        if (c->ssh_eof && g_log_backpressure)
+                            log_blue("C2S write progressed after remote EOF (%s:%u; bytes=%lld; buffer_before_commit=%zu)",
+                                     c->target_host, (unsigned)c->target_port, (long long)w, c->c2s.used);
                         note_channel_window_recovered(c);
                         any_progress = 1;
                         if (c->abort_on_pending) {
@@ -3705,6 +3787,13 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                              */
                             c->write_waiting_window = 1;
                             c->write_wait_rx_seq = u->rx_seq;
+                            if (c->ssh_eof && g_log_perf) g_perf_stats.c2s_post_eof_window_blocked++;
+                            if (c->ssh_eof && g_log_backpressure && !c->c2s_post_eof_window_logged) {
+                                c->c2s_post_eof_window_logged = 1;
+                                log_yellow("C2S zero-window wait after remote EOF (%s:%u; c2s_pending=%zu; rx_seq=%llu)",
+                                           c->target_host, (unsigned)c->target_port, c->c2s.used,
+                                           (unsigned long long)u->rx_seq);
+                            }
                             note_channel_window_blocked(c, 1);
                         } else {
                             c->write_waiting_window = 0;
@@ -3963,6 +4052,10 @@ static void retry_window_waiters(void) {
     for (client_conn_t *c = g_clients; c; c = c->next) {
         if (c->state == ST_RELAY && c->c2s.used > 0 && c->write_waiting_window) {
             c->write_waiting_window = 0;
+            if (g_log_perf) g_perf_stats.window_waiter_retry_count++;
+            if (c->ssh_eof && g_log_backpressure)
+                log_blue("WINDOW_ADJUST/input activity woke C2S waiter after remote EOF (%s:%u; c2s_pending=%zu)",
+                         c->target_host, (unsigned)c->target_port, c->c2s.used);
         }
     }
 }
@@ -4912,6 +5005,8 @@ static int core_worker_run(int argc, char **argv) {
          * socket may already be half-closed, so its events cannot wake this path.
          */
         if (uctx.hup_seen || upstream_readable || tls_buffered_input_pending(&uctx)) {
+            if (upstream_readable && has_window_waiter() && g_log_perf)
+                g_perf_stats.window_waiter_upstream_events++;
             retry_window_waiters();
         }
 
