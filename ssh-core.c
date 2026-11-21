@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include "tls_engine.h"
 #include "client_event_token.h"
+#include "client_lifetime.h"
 
 #define DEFAULT_LOG_PATH       "/tmp/etc/passwall-ssh.log"
 #define AUTH_FAILED_FILE       "/tmp/etc/passwall-ssh.auth_failed"
@@ -211,6 +212,7 @@ typedef enum {
 typedef struct client_conn {
     uint64_t       client_id;
     uint64_t       generation;
+    client_lifetime_t lifetime;
     int            fd;
     int            in_epoll;
     client_state_t state;
@@ -4733,6 +4735,13 @@ static int core_worker_run(int argc, char **argv) {
                         continue;
                     }
                     nc->generation = 1;
+                    if (client_lifetime_init(&nc->lifetime, nc->client_id, nc->generation) < 0) {
+                        release_client_slot();
+                        close(cfd);
+                        free(nc);
+                        log_red("Unable to initialize client lifetime token; rejecting connection");
+                        continue;
+                    }
                     nc->fd = cfd;
                     nc->state = ST_SOCKS_GREETING;
                     nc->epoll_events = EPOLLIN | EPOLLRDHUP;
