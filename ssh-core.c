@@ -31,6 +31,8 @@
 #include "tls_engine.h"
 #include "client_event_token.h"
 #include "client_lifetime.h"
+#include "io_worker_pool.h"
+#include "io_worker_completion_tracker.h"
 
 #define DEFAULT_LOG_PATH       "/tmp/etc/passwall-ssh.log"
 #define AUTH_FAILED_FILE       "/tmp/etc/passwall-ssh.auth_failed"
@@ -144,6 +146,8 @@ static __thread const char *g_kbd_password = "";
 /* Sentinel tag untuk O(1) epoll dispatch */
 static __thread int g_listen_tag = 0;
 static __thread int g_upstream_tag = 0;
+static __thread int g_worker_completion_tag = 0;
+static __thread uint64_t g_next_io_task_id = 1U;
 
 typedef struct {
     uint8_t *data;
@@ -213,6 +217,8 @@ typedef struct client_conn {
     uint64_t       client_id;
     uint64_t       generation;
     client_lifetime_t lifetime;
+    uint64_t       c2s_worker_task_id;
+    int            c2s_worker_inflight;
     int            fd;
     int            in_epoll;
     client_state_t state;
@@ -297,6 +303,13 @@ static client_conn_t *find_client_by_id(uint64_t client_id) {
     for (client_conn_t *c = g_clients; c; c = c->next) {
         if (c->client_id == client_id) return c;
     }
+    return NULL;
+}
+static client_conn_t *find_client_any_by_id(uint64_t client_id) {
+    client_conn_t *c = find_client_by_id(client_id);
+    if (c) return c;
+    for (c = g_retired_clients; c; c = c->retired_next)
+        if (c->client_id == client_id) return c;
     return NULL;
 }
 static __thread int            g_client_count = 0;
