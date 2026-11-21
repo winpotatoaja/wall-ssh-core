@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a TLS 1.3 cipher preference scoped exclusively to the OpenWrt `mipsel_24kc` package build: prefer `TLS_CHACHA20_POLY1305_SHA256`, while retaining AES-256-GCM and AES-128-GCM fallbacks. This changes the outer TLS transport only; SSH transport cipher negotiation remains independent.
+- Extend `[PERF]` with actual S2C ring occupancy (sum/max/nonempty clients), EPOLLOUT armed/missing counts, partial SOCKS sends, and epoll ADD/MOD failure counts plus the last errno.
+- Add redacted `[AUTH-DIAG]` records for credential byte lengths, server-advertised authentication methods, method return codes, and final libssh2 error code. Password values are never logged. Reject overlong username/password values rather than silently truncating them.
+- Add an MT7621 QEMU assertion that forces the test TLS server to offer only ChaCha20-Poly1305 and verifies the negotiated TLS 1.3 suite.
+- Bump the OpenWrt package release to r25.
+
+
 - Add opt-in in-process pthread workers (R24, 1–4 workers). Each worker owns an independent upstream transport, TLS state, `LIBSSH2_SESSION`, epoll loop, pending-operation state, client list, and relay buffers; a single process runs all workers.
 - Bind worker SOCKS listeners in one `SO_REUSEPORT` group. Preserve the process-wide `MAX_CLIENTS` cap with atomic admission accounting, serialize shared payload-rotation and marker-file writes, and coordinate shutdown with a shared atomic stop flag.
 - Initialize libssh2 once before worker creation and call `libssh2_exit()` only after worker joins. Add worker identity/accepted-client diagnostics and OpenWrt 24 MIPS VM tests for one-PID thread counts plus TCP and TLS/SNI downloads.
