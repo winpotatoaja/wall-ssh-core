@@ -48,6 +48,8 @@ jobs:
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror -I. tests/client_lifetime_test.c client_lifetime.c -o /tmp/client-lifetime-test
           timeout 10s /tmp/client-lifetime-test | tee test-results/client-lifetime-test-native.log
           gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/client_event_token_test.c -o /tmp/client-event-token-test
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/io_worker_completion_tracker_test.c io_worker_completion_tracker.c -o /tmp/io-worker-completion-tracker-test
+          timeout 10s /tmp/io-worker-completion-tracker-test | tee test-results/io-worker-completion-tracker-test-native.log
           timeout 10s /tmp/client-event-token-test | tee test-results/client-event-token-test-native.log
       - name: Download OpenWrt 24.10.7 SDK
         shell: bash
@@ -96,7 +98,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r34 single-session MIPS IPK and I/O worker pool helper
+      - name: Build r35 single-session MIPS IPK and I/O worker pool helper
         shell: bash
         run: |
           set -euo pipefail
@@ -104,7 +106,7 @@ jobs:
           mkdir -p "$PKG_DIR"
           cp Makefile "$PKG_DIR/Makefile"
           cp ssh-core.c "$PKG_DIR/ssh-core.c"
-          cp tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h client_lifetime.c client_lifetime.h "$PKG_DIR/"
+          cp tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h client_lifetime.c client_lifetime.h io_worker_completion_tracker.c io_worker_completion_tracker.h "$PKG_DIR/"
           cd "$GITHUB_WORKSPACE/sdk"
           echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
           make defconfig
@@ -192,9 +194,12 @@ jobs:
             test-results/client-lifetime-test
             test-results/client-lifetime.sha256
             test-results/client-lifetime-file.txt
-            test-results/client-event-token-test
+            test-results/client-event-token-test test-results/io-worker-completion-tracker-test
             test-results/client-event-token.sha256
             test-results/client-event-token-file.txt
+            test-results/io-worker-completion-tracker-test
+            test-results/io-worker-completion-tracker.sha256
+            test-results/io-worker-completion-tracker-file.txt
           if-no-files-found: error
           retention-days: 14
       - name: SDK summary
@@ -262,22 +267,23 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
             echo "SDK artifact was built from different package or test sources."
             git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c
             false
           fi
-          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256)
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256)
           file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r34' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r35' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
           readelf -h test-results/socks-mt-download | grep -q 'MIPS'
           readelf -h test-results/tls-engine-test | grep -q 'MIPS'
           readelf -h test-results/io-worker-pool-test | grep -q 'MIPS'
           readelf -h test-results/client-lifetime-test | grep -q 'MIPS'
           readelf -h test-results/client-event-token-test | grep -q 'MIPS'
+          readelf -h test-results/io-worker-completion-tracker-test | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
         shell: bash
@@ -738,6 +744,7 @@ jobs:
             "$GITHUB_WORKSPACE/test-results/io-worker-pool-test" \
             "$GITHUB_WORKSPACE/test-results/client-lifetime-test" \
             "$GITHUB_WORKSPACE/test-results/client-event-token-test" \
+            "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
@@ -836,6 +843,19 @@ jobs:
             fi
           else
             fail "MIPS client event-token test helper missing"
+          fi
+
+          if [ -f "$LOG/io-worker-completion-tracker-test" ] && cp "$LOG/io-worker-completion-tracker-test" /usr/bin/io-worker-completion-tracker-test; then
+            chmod 0755 /usr/bin/io-worker-completion-tracker-test
+            if /usr/bin/io-worker-completion-tracker-test >"$LOG/io-worker-completion-tracker-test.log" 2>&1; then
+              cat "$LOG/io-worker-completion-tracker-test.log"
+              pass "MIPS completion identity, exactly-once consumption, bounded registry and rollback"
+            else
+              cat "$LOG/io-worker-completion-tracker-test.log"
+              fail "MIPS completion tracker regression failed"
+            fi
+          else
+            fail "MIPS completion tracker test helper missing"
           fi
 
           if [ "$STATUS" -eq 0 ]; then
