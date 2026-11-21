@@ -112,14 +112,14 @@ static int test_capacity_duplicate_and_cancel(void)
               errno == EAGAIN, "tracker capacity is bounded"))
         goto fail;
 
-    errno = 0;
-    if (check(io_worker_completion_tracker_register(tracker, &refs[0]) < 0 &&
-              errno == EAGAIN, "full tracker rejects before duplicate scan"))
-        goto fail;
-
     if (check(io_worker_completion_tracker_cancel(tracker, &refs[1]) == 0 &&
               io_worker_completion_tracker_outstanding(tracker) == 3,
               "failed-submit rollback removes registration"))
+        goto fail;
+
+    errno = 0;
+    if (check(io_worker_completion_tracker_register(tracker, &refs[0]) < 0 &&
+              errno == EEXIST, "duplicate task ID is rejected"))
         goto fail;
 
     errno = 0;
