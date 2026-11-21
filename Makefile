@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=29
+PKG_RELEASE:=30
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1
@@ -30,9 +30,16 @@ endef
 
 define Build/Prepare
 	test -s ./ssh-core.c
+	test -s ./tls_engine.c
+	test -s ./tls_engine.h
+	test -s ./spsc_rb.h
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) ./ssh-core.c $(PKG_BUILD_DIR)/ssh-core.c
+	$(CP) ./tls_engine.c $(PKG_BUILD_DIR)/tls_engine.c
+	$(CP) ./tls_engine.h $(PKG_BUILD_DIR)/tls_engine.h
+	$(CP) ./spsc_rb.h $(PKG_BUILD_DIR)/spsc_rb.h
 	test -s $(PKG_BUILD_DIR)/ssh-core.c
+	test -s $(PKG_BUILD_DIR)/tls_engine.c
 endef
 
 define Build/Compile
