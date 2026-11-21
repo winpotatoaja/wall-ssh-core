@@ -801,7 +801,7 @@ jobs:
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
           elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r35'; then
-            pass "opkg installed passwall-ssh-core r34 on mipsel_24kc"
+            pass "opkg installed passwall-ssh-core r35 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
