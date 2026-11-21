@@ -58,7 +58,7 @@ io_worker_completion_tracker_t *io_worker_completion_tracker_create(
     uint32_t worker_count, uint32_t per_worker_capacity)
 {
     if (worker_count == 0U || worker_count > IO_WORKER_POOL_MAX_WORKERS ||
-        per_worker_capacity < 2U ||
+        per_worker_capacity < 2U || per_worker_capacity > (1U << 20) ||
         (per_worker_capacity & (per_worker_capacity - 1U)) != 0U ||
         (size_t)worker_count > SIZE_MAX / (size_t)per_worker_capacity) {
         errno = EINVAL;
@@ -208,11 +208,18 @@ size_t io_worker_completion_tracker_capacity(
     return tracker ? tracker->max_outstanding : 0U;
 }
 
-void io_worker_completion_tracker_destroy(
+int io_worker_completion_tracker_destroy(
     io_worker_completion_tracker_t *tracker)
 {
-    if (!tracker)
-        return;
+    if (!tracker) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (tracker->count != 0U) {
+        errno = EBUSY;
+        return -1;
+    }
     free(tracker->slots);
     free(tracker);
+    return 0;
 }
