@@ -1,4 +1,8 @@
 ## Unreleased
+- Add a two-phase worker submission API: the SSH Owner selects a worker, registers the full task/client/generation/worker identity with the completion tracker, and only then publishes the copied task. This closes the race where a fast worker could complete before the Owner had registered its lifetime reference.
+- Add an end-to-end native and MIPS regression that waits on the worker completion eventfd, drains the completion, and consumes it against the pre-registered tracker identity.
+- Bump the OpenWrt package release to r36.
+
 - Add an SSH-Owner-only bounded completion tracker keyed by task ID. A completion must match task ID, client ID, generation, and worker assignment before it can consume a task reference; duplicate and malformed completions cannot decrement another task's lifetime reference.
 - Add rollback for task registrations when worker submission fails, plus native regressions for exact-once completion, stale/mismatched identity, bounded capacity, and rollback.
 - Refuse to destroy the completion tracker while accepted tasks remain outstanding. The tracker is currently a tested Owner-side primitive; eventfd registration/draining and worker submission are not yet wired into `ssh-core.c`.
