@@ -1,4 +1,9 @@
 ## Unreleased
+- Add an SSH-Owner-only bounded completion tracker keyed by task ID. A completion must match task ID, client ID, generation, and worker assignment before it can consume a task reference; duplicate and malformed completions cannot decrement another task's lifetime reference.
+- Add rollback for task registrations when worker submission fails, plus native regressions for exact-once completion, stale/mismatched identity, bounded capacity, and rollback.
+- Bump OpenWrt package release to r35.
+
+## Unreleased
 - Defer client FD, ring-buffer, and object destruction while worker references remain; retire detached clients and reap them only from the SSH Owner after references drain.
 - Make shutdown use the same deferred-destruction path instead of closing client FDs before lifetime accounting.
 
