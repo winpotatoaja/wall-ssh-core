@@ -1,4 +1,5 @@
 ## Unreleased
+- Wire one bounded I/O worker pool into the live SSH Owner epoll loop for asynchronous C2S socket reads. Completion identity is validated by the Owner before C2S ring-buffer commit; client lifetime references defer teardown, and pending HUP/RDHUP drains are serialized with worker reads. S2C remains synchronous; consolidated native/MIPS/QEMU validation is pending.
 - Detach client FDs from epoll on failed lifetime finalization to prevent stale retired-client events.
 - Harden client teardown: lifetime finalization must succeed before the FD, ring buffers, or client object are freed; retired clients remain queued if finalization cannot be confirmed. This is a safety prerequisite for live worker integration; validation is pending.
 - MIPS OpenWrt 24.10.7 SDK build r36 succeeded in GitHub Actions run 44900327596; the MIPS IPK and worker-pool/completion-tracker helpers are ready for MT7621 QEMU validation. [sdk_run_id=44900327596] [mips-stage=vm]
