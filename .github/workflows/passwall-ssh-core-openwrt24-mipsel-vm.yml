@@ -749,7 +749,6 @@ jobs:
             "$GITHUB_WORKSPACE/test-results/client-lifetime-test" \
             "$GITHUB_WORKSPACE/test-results/client-event-token-test" \
              "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" \
-            "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
