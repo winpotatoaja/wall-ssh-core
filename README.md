@@ -34,6 +34,21 @@ chunk sizes, byte integrity, and uint32_t counter rollover. This validates
 the queue primitive only; eventfd, TLS ownership, I/O workers, and live relay
 integration remain future stages.
 
+## TLS Engine foundation (Phase 2, R30)
+
+The new tls_engine.c module is the transport-owner building block for the
+single-session refactor. It creates SSL* inside one dedicated pthread and keeps
+SSL_connect, SSL_read, SSL_write, SSL_shutdown, and SSL_free on that thread.
+The SSH-side API sees two SPSC byte queues and an eventfd notification pair.
+The engine preserves the exact queued pointer and length across SSL_write
+WANT_READ/WANT_WRITE retries and publishes receive EOF/error after buffered
+plaintext has been drained.
+
+The module is compiled into the package for native and OpenWrt SDK coverage,
+but ssh-core.c has not yet switched its transport callbacks to it. The live
+relay remains on its R29 path until the module stress tests and callback
+integration are both validated. R30 is not the completed Phase 2 integration.
+
 ## Package and executable names
 
 The OpenWrt package is named `passwall-ssh-core`, and the runtime executable
