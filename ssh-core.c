@@ -2320,16 +2320,27 @@ static void unlink_client_from_active_list(client_conn_t *c) {
     release_client_slot();
 }
 
-static void free_client_storage(client_conn_t *c) {
-    if (!c) return;
+static int free_client_storage(client_conn_t *c) {
+    if (!c) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* Never release the FD, ring buffers, or object unless lifetime
+     * finalization has positively confirmed that close was requested and
+     * every asynchronous task reference has drained. */
+    if (client_lifetime_finalize(&c->lifetime) < 0)
+        return -1;
+
     rb_free(&c->c2s);
     rb_free(&c->s2c);
-    (void)client_lifetime_finalize(&c->lifetime);
     free(c);
+    return 0;
 }
 
 /* Retired clients are reaped only by the SSH Owner after all task references
- * have been released by their completion records. */
+ * have been released by their completion records. A failed finalization
+ * leaves the complete object (including its FD and rings) on the retired list. */
 static void reap_retired_clients(int epfd) {
     client_conn_t **link = &g_retired_clients;
     while (*link) {
@@ -2338,10 +2349,17 @@ static void reap_retired_clients(int epfd) {
             link = &c->retired_next;
             continue;
         }
+        if (client_lifetime_finalize(&c->lifetime) < 0) {
+            link = &c->retired_next;
+            continue;
+        }
+
         *link = c->retired_next;
         c->retired_next = NULL;
         detach_client_fd(epfd, c);
-        free_client_storage(c);
+        rb_free(&c->c2s);
+        rb_free(&c->s2c);
+        free(c);
     }
 }
 
