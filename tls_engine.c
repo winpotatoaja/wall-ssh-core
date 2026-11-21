@@ -575,9 +575,10 @@ static void *tls_engine_thread(void *opaque)
         }
     }
 
-    if (fatal_error) publish_terminal(engine, fatal_error);
-    else if (rx_closed)
-        __atomic_store_n(&engine->tx_terminal_error, 0, __ATOMIC_RELEASE);
+    if (fatal_error)
+        publish_terminal(engine, fatal_error);
+    /* A clean receive close_notify leaves tx_terminal_error at zero unless
+     * bounded graceful shutdown above published a distinct TX-side failure. */
     signal_eventfd(engine->owner_event_fd);
     SSL_free(ssl);
     if (engine->socket_fd >= 0) close(engine->socket_fd);
