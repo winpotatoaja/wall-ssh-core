@@ -3212,7 +3212,8 @@ static void drain_io_worker_completions(int epfd,
                 if (c->s2c_worker_task_id == ref.task_id) {
                     c->s2c_worker_task_id = 0U;
                     c->s2c_worker_inflight = 0;
-                    if (!current || c->state != ST_RELAY || c->fd < 0)
+                    if (!current || c->state != ST_RELAY || c->fd < 0 ||
+                        c->fd_close_pending || c->client_dead)
                         continue;
 
                     if (completion->status == 0) {
@@ -3262,7 +3263,8 @@ static void drain_io_worker_completions(int epfd,
                 } else if (c->c2s_worker_task_id == ref.task_id) {
                     c->c2s_worker_task_id = 0U;
                 c->c2s_worker_inflight = 0;
-                if (!current || c->state != ST_RELAY || c->fd < 0)
+                if (!current || c->state != ST_RELAY || c->fd < 0 ||
+                    c->fd_close_pending || c->client_dead)
                     continue;
 
                 if (completion->status == 0) {
