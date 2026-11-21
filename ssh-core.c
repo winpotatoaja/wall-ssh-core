@@ -3429,6 +3429,20 @@ static void record_eagain(LIBSSH2_SESSION *session, upstream_ctx_t *u,
     if (pending_op_requires_serial_retry(op, c, d,
                                          tls_want_requires_serial_retry(u))) {
         if (g_log_perf) g_perf_stats.pending_blocks++;
+        if (g_log_backpressure) {
+            unsigned long write_window = (c && c->channel)
+                ? libssh2_channel_window_write_ex(c->channel, NULL) : 0UL;
+            log_yellow("[SSH pending] serial retry op=%d dirs=%d client=%llu "
+                       "c2s=%zu s2c=%zu write_window=%lu write_pending=%d "
+                       "window_wait=%d workers=%d/%d",
+                       (int)op, d,
+                       (unsigned long long)(c ? c->client_id : 0U),
+                       c ? c->c2s.used : 0U, c ? c->s2c.used : 0U,
+                       write_window, c ? c->write_pending : 0,
+                       c ? c->write_waiting_window : 0,
+                       c ? c->c2s_worker_inflight : 0,
+                       c ? c->s2c_worker_inflight : 0);
+        }
         set_pending_operation(c, op);
         *stop_loop_out = 1;
     }

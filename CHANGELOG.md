@@ -1,4 +1,5 @@
 ## Unreleased
+- Add SSH serialized-pending diagnostics (operation, libssh2 block directions, C2S/S2C occupancy, channel write window, and worker in-flight state); enable backpressure/performance counters in the x86 QEMU relay run to identify the full-duplex stall without changing relay behavior.
 - Start MT7621 mipsel_24kc QEMU runtime validation using the successful SDK artifact from run 44908474616; source changes remain documentation-only.
 - Start OpenWrt 25.12.5 x86_64 QEMU runtime validation using the successful SDK artifact from run 44908474679; source changes remain limited to documentation.
 - Defer client FD closure whenever either relay direction still owns a worker reference; the final completion performs the pending close, preventing one direction from closing a descriptor still used by the other.
