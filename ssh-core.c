@@ -2326,11 +2326,11 @@ static int free_client_storage(client_conn_t *c) {
         return -1;
     }
 
-    /* Never release the FD, ring buffers, or object unless lifetime
-     * finalization has positively confirmed that close was requested and
-     * every asynchronous task reference has drained. */
-    if (client_lifetime_finalize(&c->lifetime) < 0)
+    /* Callers must finalize before detaching the FD or releasing storage. */
+    if (!c->lifetime.finalized) {
+        errno = EBUSY;
         return -1;
+    }
 
     rb_free(&c->c2s);
     rb_free(&c->s2c);
@@ -2385,8 +2385,15 @@ static void remove_client(int epfd, client_conn_t *c) {
         return;
     }
 
+    if (client_lifetime_finalize(&c->lifetime) < 0) {
+        /* Keep the client allocated and attached to the Owner's retired list
+         * rather than freeing resources after an unexpected lifetime error. */
+        c->retired_next = g_retired_clients;
+        g_retired_clients = c;
+        return;
+    }
     detach_client_fd(epfd, c);
-    free_client_storage(c);
+    (void)free_client_storage(c);
 }
 
 static void start_closing_client(int epfd, client_conn_t *c) {
