@@ -2386,8 +2386,13 @@ static void remove_client(int epfd, client_conn_t *c) {
     }
 
     if (client_lifetime_finalize(&c->lifetime) < 0) {
-        /* Keep the client allocated and attached to the Owner's retired list
-         * rather than freeing resources after an unexpected lifetime error. */
+        /* Retired objects must never remain registered in epoll: their
+         * identity is no longer active, and a stale FD event must not spin. */
+        if (c->fd >= 0 && c->in_epoll) {
+            (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
+            c->in_epoll = 0;
+            c->epoll_events = 0;
+        }
         c->retired_next = g_retired_clients;
         g_retired_clients = c;
         return;
