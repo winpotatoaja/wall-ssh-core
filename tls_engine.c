@@ -2,6 +2,8 @@
 #include "tls_engine.h"
 #include "spsc_rb.h"
 
+#include <openssl/err.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -241,9 +243,9 @@ static void publish_startup(tls_engine_t *engine, int ok, int error,
 
 static void publish_terminal(tls_engine_t *engine, int error)
 {
+    __atomic_store_n(&engine->rx_terminal_error, error, __ATOMIC_RELAXED);
+    __atomic_store_n(&engine->tx_terminal_error, error, __ATOMIC_RELAXED);
     __atomic_store_n(&engine->rx_closed, 1, __ATOMIC_RELEASE);
-    __atomic_store_n(&engine->rx_terminal_error, error, __ATOMIC_RELEASE);
-    __atomic_store_n(&engine->tx_terminal_error, error, __ATOMIC_RELEASE);
     signal_eventfd(engine->owner_event_fd);
 }
 
@@ -372,8 +374,8 @@ static int engine_try_read(tls_engine_t *engine, SSL *ssl,
         return 0;
     }
     if (error == SSL_ERROR_ZERO_RETURN) {
+        __atomic_store_n(&engine->rx_terminal_error, 0, __ATOMIC_RELAXED);
         __atomic_store_n(&engine->rx_closed, 1, __ATOMIC_RELEASE);
-        __atomic_store_n(&engine->rx_terminal_error, 0, __ATOMIC_RELEASE);
         signal_eventfd(engine->owner_event_fd);
         *pending = 0;
         *pinned_buffer = NULL;
