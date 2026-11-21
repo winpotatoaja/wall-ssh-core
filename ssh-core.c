@@ -2851,6 +2851,7 @@ static int submit_s2c_worker_write(io_worker_pool_t *pool,
 }
 
 static int flush_s2c_to_client(int epfd, client_conn_t *c) {
+    (void)epfd;
     if (!c || c->fd < 0 || c->ctrl_len > 0U || c->s2c.used == 0U)
         return 0;
     if (c->s2c_worker_inflight) return 0;
@@ -4245,7 +4246,8 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
                 uint32_t want = client_rdhup_flag(c);
                 if (upstream_client_write_allowed(u) && !c->client_eof && rb_free_space(&c->c2s) > 0) want |= EPOLLIN;
-                if (c->s2c.used > 0 || c->ctrl_len > 0) want |= EPOLLOUT;
+                if ((c->s2c.used > 0 && !c->s2c_worker_inflight) ||
+                    c->ctrl_len > 0) want |= EPOLLOUT;
                 update_client_epoll(epfd, c, want);
             }
         } else if (c->state == ST_CLOSING) {
