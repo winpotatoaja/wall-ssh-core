@@ -1,3 +1,5 @@
+- Dispatch MT7621 QEMU runtime validation for the client lifetime helper using successful SDK artifact run `44891359077`; verify the exact SDK artifact and execute the static `mipsel_24kc` lifetime regression in the guest before live relay integration.
+
 # Passwall SSH Core changelog
 
 ## Unreleased
