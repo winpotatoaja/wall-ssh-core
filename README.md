@@ -328,3 +328,35 @@ it is expected under backpressure while the destination is not reading.
 A wait that is never followed by an input wakeup or write recovery is the
 condition this instrumentation is designed to expose.
 
+## I/O worker pool foundation (Phase 3)
+
+The Phase 3 foundation introduces a bounded, standalone I/O worker pool. Each
+worker has separate single-producer/single-consumer control, task, and
+completion queues, plus eventfds for task wakeup, completion readiness, and
+bounded shutdown observation. Queue indices use lock-free 32-bit acquire/release
+publication; the pool's over-aligned queue state is allocated at cache-line
+alignment.
+
+Tasks and completions carry fixed-size copied payloads and the tuple
+`task_id`, `client_id`, and `generation`. No client pointer, mutable SSH
+state, `LIBSSH2_SESSION`, or TLS Engine pointer crosses the worker boundary.
+The callback contract requires bounded work over the copied task and
+read-only or independently synchronized context. The SSH Owner remains
+responsible for validating a completion's client-generation token before
+applying a result; stale generations must be discarded.
+
+Per-worker outstanding credits bound both queued work and undrained
+completions. Submissions return `EAGAIN` when all worker credits are occupied.
+Completion eventfds are re-armed when a bounded drain leaves records queued.
+Shutdown supports draining queued tasks or completing them with
+`ECANCELED`; an already-running callback must finish. The join API has a
+caller-supplied timeout and can be retried after `ETIMEDOUT`. Worker stacks
+remain fixed at 512 KiB.
+
+This commit is a **foundation and regression-tested module, not live relay
+integration**. The pool is compiled into the package but the SSH Owner does
+not yet dispatch relay work to it. All `LIBSSH2_SESSION` and channel calls
+remain serialized by the SSH Owner, and the TLS Engine remains the sole owner
+of `SSL*` and the upstream TLS socket. The process still has exactly one
+upstream SSH login/session. Automatic worker-count selection is reserved for
+Phase 4 and must never change the number of SSH sessions.
