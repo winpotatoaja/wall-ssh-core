@@ -49,8 +49,6 @@ struct tls_engine {
     int rx_terminal_error;
     int tx_terminal_error;
     int stop_requested;
-    int graceful_stop;
-    int stop_timeout_ms;
 };
 
 /* All state exchanged across threads uses compiler atomics. */
@@ -96,9 +94,8 @@ static void ssl_prepare_io(void)
     errno = 0;
 }
 
-static int ssl_error_to_errno(SSL *ssl, int rc, int saved_errno)
+static int ssl_error_to_errno(int error, int saved_errno)
 {
-    int error = SSL_get_error(ssl, rc);
     if (error == SSL_ERROR_ZERO_RETURN) return 0;
     if (error == SSL_ERROR_SYSCALL)
         return saved_errno > 0 ? saved_errno : ECONNRESET;
@@ -201,7 +198,7 @@ static int tls_handshake(tls_engine_t *engine, SSL **ssl_out,
         if (error == SSL_ERROR_WANT_READ) events = POLLIN;
         else if (error == SSL_ERROR_WANT_WRITE) events = POLLOUT;
         else {
-            int mapped = ssl_error_to_errno(ssl, rc, saved_errno);
+            int mapped = ssl_error_to_errno(error, saved_errno);
             if (mapped == ECONNRESET || mapped == ETIMEDOUT ||
                 mapped == EHOSTUNREACH || mapped == ENETUNREACH ||
                 mapped == ECONNREFUSED || mapped == EPIPE)
@@ -406,7 +403,7 @@ static int tls_shutdown_bounded(SSL *ssl, int fd, int timeout_ms)
         int error = SSL_get_error(ssl, rc);
         short events = error == SSL_ERROR_WANT_READ ? POLLIN :
                        error == SSL_ERROR_WANT_WRITE ? POLLOUT : 0;
-        if (!events) return ssl_error_to_errno(ssl, rc, errno);
+        if (!events) return ssl_error_to_errno(error, errno);
         int waited = wait_socket_until(fd, events, deadline);
         if (waited <= 0) return waited == 0 ? ETIMEDOUT : errno;
     }
@@ -451,7 +448,7 @@ static void *tls_engine_thread(void *opaque)
         if (timeout_ms <= 0) timeout_ms = TLS_ENGINE_DEFAULT_SHUTDOWN_MS;
 
         if (stopping && !graceful) break;
-        if (stopping && graceful && !write_pending &&
+        if (stopping && graceful && !write_pending && !read_pending &&
             ring_used(&engine->ssh_to_tls) == 0) {
             int shutdown_error = tls_shutdown_bounded(ssl, engine->socket_fd,
                                                        timeout_ms);
@@ -725,6 +722,7 @@ ssize_t tls_engine_recv(tls_engine_t *engine, void *data, size_t length)
         errno = EINVAL;
         return -1;
     }
+    if (length == 0) return 0;
 
     size_t copied = 0;
     while (copied < length) {
