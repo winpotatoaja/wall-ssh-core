@@ -29,6 +29,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "tls_engine.h"
+#include "client_event_token.h"
 
 #define DEFAULT_LOG_PATH       "/tmp/etc/passwall-ssh.log"
 #define AUTH_FAILED_FILE       "/tmp/etc/passwall-ssh.auth_failed"
@@ -43,8 +44,6 @@
 #define C2S_RELAY_BUF_SIZE     32768
 #define S2C_RELAY_BUF_SIZE     131072
 #define MAX_EVENTS             128
-#define CLIENT_EVENT_TAG        (UINT64_C(1) << 63)
-#define CLIENT_EVENT_ID_MASK    (CLIENT_EVENT_TAG - UINT64_C(1))
 #define DEFAULT_MAX_CLIENTS    64
 #define MAX_CLIENTS_LIMIT      256
 #define DEFAULT_IDLE_TIMEOUT   600
@@ -2258,7 +2257,7 @@ static void update_epoll(int epfd, int fd, void *ptr, uint32_t *cur_ev, uint32_t
 static void update_client_epoll(int epfd, client_conn_t *c, uint32_t want_ev) {
     if (c->fd < 0) return;
     struct epoll_event ev = { .events = want_ev,
-                               .data.u64 = CLIENT_EVENT_TAG | c->client_id };
+                               .data.u64 = client_event_token_encode(c->client_id) };
     if (!c->in_epoll) {
         if (epoll_ctl(epfd, EPOLL_CTL_ADD, c->fd, &ev) == 0) {
             c->in_epoll = 1;
@@ -4683,8 +4682,8 @@ static int core_worker_run(int argc, char **argv) {
             void *ptr = (void *)(uintptr_t)event_token;
             uint32_t e = events[i].events;
 
-            if (event_token & CLIENT_EVENT_TAG) {
-                uint64_t client_id = event_token & CLIENT_EVENT_ID_MASK;
+            uint64_t client_id = 0;
+            if (client_event_token_decode(event_token, &client_id)) {
                 client_conn_t *c = find_client_by_id(client_id);
                 if (c) handle_client_io(epfd, c, e);
                 continue;
@@ -4742,7 +4741,7 @@ static int core_worker_run(int argc, char **argv) {
 
                     struct epoll_event cev = {
                         .events = nc->epoll_events,
-                        .data.u64 = CLIENT_EVENT_TAG | nc->client_id
+                        .data.u64 = client_event_token_encode(nc->client_id)
                     };
                     if (epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &cev) < 0) {
                         release_client_slot();
