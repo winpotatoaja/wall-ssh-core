@@ -3170,10 +3170,10 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
     }
 }
 
-static void drain_io_worker_completions(int epfd,
-                                           io_worker_pool_t *pool,
-                                           io_worker_completion_tracker_t *tracker) {
-    if (!pool || !tracker) return;
+static int drain_io_worker_completions(int epfd,
+                                          io_worker_pool_t *pool,
+                                          io_worker_completion_tracker_t *tracker) {
+    if (!pool || !tracker) return 0;
     uint32_t workers = io_worker_pool_worker_count(pool);
     io_worker_completion_t completions[32];
     for (uint32_t worker_id = 0U; worker_id < workers; worker_id++) {
@@ -3186,15 +3186,25 @@ static void drain_io_worker_completions(int epfd,
                 io_worker_completion_t *completion = &completions[i];
                 io_worker_task_ref_t ref;
                 if (io_worker_completion_tracker_take(tracker, completion, &ref) < 0) {
-                    log_red("[IO worker] rejected completion identity task=%llu",
-                            (unsigned long long)completion->task_id);
-                    continue;
+                    int tracker_error = errno;
+                    if (tracker_error == ENOENT) {
+                        /* A duplicate completion was already consumed. */
+                        log_yellow("[IO worker] ignored duplicate/stale completion task=%llu",
+                                   (unsigned long long)completion->task_id);
+                        continue;
+                    }
+                    log_red("[IO worker] completion identity invariant failed task=%llu: %s",
+                            (unsigned long long)completion->task_id,
+                            strerror(tracker_error));
+                    return -1;
                 }
                 client_conn_t *c = find_client_any_by_id(ref.client_id);
                 if (!c || c->generation != ref.generation) {
-                    log_red("[IO worker] accepted task has no retained client: %llu",
-                            (unsigned long long)ref.task_id);
-                    continue;
+                    log_red("[IO worker] accepted task has no retained client: task=%llu client=%llu generation=%llu; stopping",
+                            (unsigned long long)ref.task_id,
+                            (unsigned long long)ref.client_id,
+                            (unsigned long long)ref.generation);
+                    return -1;
                 }
 
                 int current = client_lifetime_completion_current(
@@ -3202,9 +3212,10 @@ static void drain_io_worker_completions(int epfd,
                 int release_rc = client_lifetime_release(
                     &c->lifetime, ref.client_id, ref.generation);
                 if (release_rc < 0) {
-                    log_red("[IO worker] lifetime release failed task=%llu: %s",
-                            (unsigned long long)ref.task_id, strerror(errno));
-                    continue;
+                    int release_error = errno;
+                    log_red("[IO worker] lifetime release invariant failed task=%llu: %s",
+                            (unsigned long long)ref.task_id, strerror(release_error));
+                    return -1;
                 }
                 if (c->lifetime.worker_refs == 0U && c->fd_close_pending)
                     detach_client_fd(epfd, c);
@@ -3325,13 +3336,15 @@ static void drain_io_worker_completions(int epfd,
                     }
                 }
                 } else {
-                    log_red("[IO worker] completion task has no matching direction task=%llu",
+                    log_red("[IO worker] completion task has no matching direction task=%llu; stopping",
                             (unsigned long long)ref.task_id);
+                    return -1;
                 }
             }
         }
     }
     reap_retired_clients(epfd);
+    return 0;
 }
 
 static int is_libssh2_socket_fatal(int err) {
@@ -5192,7 +5205,12 @@ static int core_worker_run(int argc, char **argv) {
         }
 
         /* Poll completions even if an eventfd notification was lost. */
-        drain_io_worker_completions(epfd, io_pool, io_tracker);
+        if (drain_io_worker_completions(epfd, io_pool, io_tracker) < 0) {
+            log_red("[IO worker] fatal completion/lifetime invariant; stopping relay");
+            exit_code = 1;
+            request_stop();
+            break;
+        }
         int worker_error = io_pool ? io_worker_pool_error(io_pool) : 0;
         if (worker_error != 0) {
             log_red("Local socket I/O worker pool failed: %s", strerror(worker_error));
@@ -5209,7 +5227,12 @@ static int core_worker_run(int argc, char **argv) {
             uint32_t e = events[i].events;
 
             if (ptr == &g_worker_completion_tag) {
-                drain_io_worker_completions(epfd, io_pool, io_tracker);
+                if (drain_io_worker_completions(epfd, io_pool, io_tracker) < 0) {
+                    log_red("[IO worker] fatal completion/lifetime invariant; stopping relay");
+                    exit_code = 1;
+                    request_stop();
+                    break;
+                }
                 continue;
             }
 
@@ -5535,7 +5558,8 @@ static int core_worker_run(int argc, char **argv) {
         (void)io_worker_pool_request_stop(io_pool, 1);
         if (io_worker_pool_join(io_pool, SHUTDOWN_IO_TIMEOUT_MS) != 0)
             log_yellow("I/O worker pool join timed out; retaining referenced client storage");
-        drain_io_worker_completions(epfd, io_pool, io_tracker);
+        if (drain_io_worker_completions(epfd, io_pool, io_tracker) < 0)
+            exit_code = 1;
     }
     while (g_clients) {
         client_conn_t *c = g_clients;
@@ -5612,7 +5636,8 @@ fail_cleanup:
     if (io_pool) {
         (void)io_worker_pool_request_stop(io_pool, 1);
         if (io_worker_pool_join(io_pool, SHUTDOWN_IO_TIMEOUT_MS) == 0) {
-            if (io_tracker) drain_io_worker_completions(epfd, io_pool, io_tracker);
+            if (io_tracker && drain_io_worker_completions(epfd, io_pool, io_tracker) < 0)
+                log_red("[IO worker] startup cleanup found a completion invariant failure");
             if (io_tracker && io_worker_completion_tracker_outstanding(io_tracker) == 0U)
                 (void)io_worker_completion_tracker_destroy(io_tracker);
             if (io_worker_pool_destroy(io_pool) == 0) io_pool = NULL;
