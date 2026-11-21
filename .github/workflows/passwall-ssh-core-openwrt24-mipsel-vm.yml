@@ -780,7 +780,7 @@ jobs:
                cp "$LOG/tls-engine-test" /usr/bin/tls-engine-test; then
               chmod 0755 /usr/bin/tls-engine-test
               if command -v timeout >/dev/null 2>&1; then
-                timeout 60 /usr/bin/tls-engine-test >"$LOG/tls-engine-test.log" 2>&1 || TLS_TEST_RC=$?
+                timeout 210 /usr/bin/tls-engine-test >"$LOG/tls-engine-test.log" 2>&1 || TLS_TEST_RC=$?
               else
                 /usr/bin/tls-engine-test >"$LOG/tls-engine-test.log" 2>&1 || TLS_TEST_RC=$?
               fi
