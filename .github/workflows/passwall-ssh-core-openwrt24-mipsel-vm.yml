@@ -614,7 +614,18 @@ jobs:
               threading.Thread(target=handle, args=(connection, address), daemon=True).start()
           PY_TLS
           python3 -m py_compile /tmp/mips-tls-relay.py
-          python3 /tmp/mips-tls-relay.py >/tmp/mips-tls-relay.log 2>&1 &
+          # Restrict this test-only TLS server to ChaCha20-Poly1305 so the
+          # MIPS VM test proves actual negotiation, not just local preference setup.
+          cat > /tmp/mips-tls-chacha.cnf <<'OPENSSL_CONF'
+          openssl_conf = openssl_init
+          [openssl_init]
+          ssl_conf = ssl_sect
+          [ssl_sect]
+          system_default = system_default_sect
+          [system_default_sect]
+          Ciphersuites = TLS_CHACHA20_POLY1305_SHA256
+          OPENSSL_CONF
+          OPENSSL_CONF=/tmp/mips-tls-chacha.cnf python3 /tmp/mips-tls-relay.py >/tmp/mips-tls-relay.log 2>&1 &
           echo "$!" >/tmp/mips-tls-relay.pid
 
       - name: Boot the MT7621 OpenWrt 24.10.7 VM
@@ -694,7 +705,7 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install MIPS package or runtime dependencies"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r24'; then
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r25'; then
             pass "opkg installed passwall-ssh-core r25 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
