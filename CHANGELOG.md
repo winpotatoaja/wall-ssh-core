@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Preserve a nonzero TX-side TLS shutdown timeout/error after a graceful RX close_notify; do not clear a terminal shutdown result during TLS thread exit.
 - Provision the TLS Engine pthread with a 512 KiB stack for musl targets. Bound graceful queue flushing and TLS close_notify shutdown to one deadline; retain the legacy endpoint retry policy for transport EOF/syscall failures while keeping non-EOF TLS protocol errors non-retryable.
 - Harden the TLS Engine test cleanup so it never shuts down a stale/reused server descriptor after the peer thread may already have closed it.
 - Fix two stale TLS Engine error-mapping call sites found by the first native -Werror CI build; retain the single SSL_get_error classification result instead of invoking the mapper with obsolete arguments.
