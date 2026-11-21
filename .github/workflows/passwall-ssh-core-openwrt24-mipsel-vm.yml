@@ -727,6 +727,7 @@ jobs:
             "$GITHUB_WORKSPACE/test-results/tls-engine-test" \
             "$GITHUB_WORKSPACE/test-results/io-worker-pool-test" \
             "$GITHUB_WORKSPACE/test-results/client-lifetime-test" \
+            "$GITHUB_WORKSPACE/test-results/client-lifetime-test" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
@@ -799,6 +800,19 @@ jobs:
             fi
           else
             fail "static MIPS SPSC test binary is missing from /tmp/mips-test"
+          fi
+
+          if [ -f "$LOG/client-lifetime-test" ] && cp "$LOG/client-lifetime-test" /usr/bin/client-lifetime-test; then
+            chmod 0755 /usr/bin/client-lifetime-test
+            if /usr/bin/client-lifetime-test >"$LOG/client-lifetime-test.log" 2>&1; then
+              cat "$LOG/client-lifetime-test.log"
+              pass "MIPS client lifetime tokens, stale completion and deferred close"
+            else
+              cat "$LOG/client-lifetime-test.log"
+              fail "MIPS client lifetime regression failed"
+            fi
+          else
+            fail "MIPS client lifetime test helper missing"
           fi
 
           if [ "$STATUS" -eq 0 ]; then
