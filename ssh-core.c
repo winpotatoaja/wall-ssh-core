@@ -3081,19 +3081,24 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
             }
         }
 
-        if (c->fd >= 0 && (events & EPOLLOUT) && c->ctrl_len == 0 && c->s2c.used > 0) {
-            size_t s2c_before=c->s2c.used;
-            if (send_from_rb(c->fd, &c->s2c, 0) < 0) {
-                c->client_dead = 1;
-                c->client_reset = 1;
-                c->client_eof = 1;
-                c->need_send_eof = 1;
-                c->hup_pending = 0;
-                c->rdhup_pending = 0;
-                detach_client_fd(epfd, c);
-            } else {
-                if(c->s2c.used<s2c_before)c->last_activity_ms=now_ms();
-                if(c->s2c.used==0&&c->ssh_eof)shutdown(c->fd,SHUT_WR);
+        if (c->fd >= 0 && (events & EPOLLOUT) && c->ctrl_len == 0 &&
+            c->s2c.used > 0 && !c->s2c_worker_inflight) {
+            int submit_rc = submit_s2c_worker_write(g_io_pool, g_io_tracker, c);
+            if (submit_rc != 0) {
+                /* Keep the original Owner send as a bounded backpressure fallback. */
+                size_t s2c_before = c->s2c.used;
+                if (send_from_rb(c->fd, &c->s2c, 0) < 0) {
+                    c->client_dead = 1;
+                    c->client_reset = 1;
+                    c->client_eof = 1;
+                    c->need_send_eof = 1;
+                    c->hup_pending = 0;
+                    c->rdhup_pending = 0;
+                    detach_client_fd(epfd, c);
+                } else {
+                    if (c->s2c.used < s2c_before) c->last_activity_ms = now_ms();
+                    if (c->s2c.used == 0U && c->ssh_eof) (void)shutdown(c->fd, SHUT_WR);
+                }
             }
         }
 
@@ -3127,7 +3132,8 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
             uint32_t want = client_rdhup_flag(c);
             if (!c->client_eof && !c->c2s_worker_inflight &&
                 rb_free_space(&c->c2s) > 0) want |= EPOLLIN;
-            if (c->s2c.used > 0 || c->ctrl_len > 0) want |= EPOLLOUT;
+            if ((c->s2c.used > 0 && !c->s2c_worker_inflight) ||
+                c->ctrl_len > 0) want |= EPOLLOUT;
             update_client_epoll(epfd, c, want);
         }
 
