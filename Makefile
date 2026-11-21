@@ -2,12 +2,19 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=24
+PKG_RELEASE:=25
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1
 
 include $(INCLUDE_DIR)/package.mk
+
+# OpenWrt package architectures expose mipsel_24kc through ARCH_PACKAGES.
+# Keep the ChaCha-first TLS policy scoped to that exact ABI/target only.
+CORE_ARCH_CPPFLAGS:=
+ifneq ($(filter mipsel_24kc,$(ARCH_PACKAGES) $(CONFIG_ARCH) $(ARCH)),)
+  CORE_ARCH_CPPFLAGS+=-DSSH_CORE_MIPSEL_24KC=1
+endif
 
 define Package/passwall-ssh-core
   SECTION:=net
@@ -29,7 +36,7 @@ define Build/Prepare
 endef
 
 define Build/Compile
-	$(TARGET_CC) $(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -std=gnu11 -pthread \
+	$(TARGET_CC) $(TARGET_CPPFLAGS) $(CORE_ARCH_CPPFLAGS) $(TARGET_CFLAGS) -std=gnu11 -pthread \
 		-Wall -Wextra \
 		-o $(PKG_BUILD_DIR)/passwall-ssh-core $(PKG_BUILD_DIR)/ssh-core.c \
 		$(TARGET_LDFLAGS) -pthread -Wl,--as-needed -lssh2 -lssl -lcrypto
