@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Extend `[PERF]` with C2S bytes received from local clients, bytes accepted by libssh2, C2S occupancy, remote-EOF relay counts, zero-window waits after remote EOF, and WINDOW_ADJUST/input wakeup counts.
+- Add opt-in `[LOG_BACKPRESSURE]` diagnostics for C2S data arriving after remote SSH EOF, writes progressing after EOF, and window-zero waits while the opposite direction remains open. This specifically traces full-duplex/half-close behavior without logging payload contents.
+- Bump the OpenWrt package release to r26 for the additional C2S/SSH-window observability.
+
+
 - Add a TLS 1.3 cipher preference scoped exclusively to the OpenWrt `mipsel_24kc` package build: prefer `TLS_CHACHA20_POLY1305_SHA256`, while retaining AES-256-GCM and AES-128-GCM fallbacks. This changes the outer TLS transport only; SSH transport cipher negotiation remains independent.
 - Extend `[PERF]` with actual S2C ring occupancy (sum/max/nonempty clients), EPOLLOUT armed/missing counts, partial SOCKS sends, and epoll ADD/MOD failure counts plus the last errno.
 - Add redacted `[AUTH-DIAG]` records for credential byte lengths, server-advertised authentication methods, method return codes, and final libssh2 error code. Password values are never logged. Reject overlong username/password values rather than silently truncating them.
