@@ -83,7 +83,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r26 MIPS ChaCha pthread-worker IPK, half-close helper and download benchmark
+      - name: Build r27 MIPS ChaCha pthread-worker IPK, half-close helper and download benchmark
         shell: bash
         run: |
           set -euo pipefail
@@ -212,7 +212,7 @@ jobs:
           file test-results/passwall-ssh-core*.ipk test-results/socks-halfclose test-results/socks-mt-download
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r26' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r27' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
           readelf -h test-results/socks-mt-download | grep -q 'MIPS'
 
@@ -705,8 +705,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install MIPS package or runtime dependencies"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r26'; then
-            pass "opkg installed passwall-ssh-core r26 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r27'; then
+            pass "opkg installed passwall-ssh-core r27 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
