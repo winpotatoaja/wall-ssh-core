@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=30
+PKG_RELEASE:=31
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1

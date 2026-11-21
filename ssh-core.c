@@ -28,6 +28,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include "tls_engine.h"
 
 #define DEFAULT_LOG_PATH       "/tmp/etc/passwall-ssh.log"
 #define AUTH_FAILED_FILE       "/tmp/etc/passwall-ssh.auth_failed"
@@ -153,9 +154,10 @@ typedef struct {
 
 typedef struct {
     int      fd;
-    SSL     *ssl;
-    uint32_t ssl_want_events; /* readiness requested by an active TLS I/O callback */
-    int      ssl_want_from_write;
+    tls_engine_t *tls;
+    const char *log_path;
+    int      log_worker_id;
+    int      log_worker_count;
     uint64_t rx_seq;
     size_t   skip_ssh_banner_bytes;
     int      expect_connect_resp;
@@ -184,11 +186,8 @@ typedef struct {
 } upstream_ctx_t;
 
 /* Used by the early TLS delay/drain helper and defined with relay state helpers. */
-static int tls_write_retry_pending(const upstream_ctx_t *u);
 static int tls_want_requires_serial_retry(const upstream_ctx_t *u);
 static int upstream_client_write_allowed(const upstream_ctx_t *u);
-static ssize_t tls_callback_error_result(upstream_ctx_t *u, int ssl_error,
-                                         int read_operation);
 
 typedef enum {
     ST_SOCKS_GREETING = 0,
@@ -1359,13 +1358,6 @@ static void perf_log_interval(long long now) {
     g_perf_window_start_ms = now;
 }
 
-/* OpenSSL requires a clean per-thread error queue before SSL I/O so that
- * SSL_get_error() can classify WANT_READ/WANT_WRITE and syscall failures. */
-static void ssl_prepare_io(void) {
-    ERR_clear_error();
-    errno = 0;
-}
-
 static int poll_fd_until(int fd, short events, long long deadline_ms) {
     while (!stop_requested()) {
         long long rem = deadline_ms - now_ms();
@@ -1425,6 +1417,21 @@ static int poll_fd_until_shutdown(int fd, short events, long long deadline_ms) {
     }
 }
 
+static int wait_upstream_event(upstream_ctx_t *u, short socket_events,
+                               long long deadline_ms, int shutdown_mode) {
+    int fd = u ? u->fd : -1;
+    short events = socket_events;
+    if (u && u->tls) {
+        fd = tls_engine_notify_fd(u->tls);
+        events = POLLIN;
+    }
+    if (fd < 0) { errno = EBADF; return -1; }
+    int rc = shutdown_mode ? poll_fd_until_shutdown(fd, events, deadline_ms)
+                           : poll_fd_until(fd, events, deadline_ms);
+    if (rc > 0 && u && u->tls) tls_engine_drain_notify(u->tls);
+    return rc;
+}
+
 static __thread unsigned int g_tls_diag_message_count = 0;
 
 static const char *tls_handshake_message_name(unsigned int type) {
@@ -1446,186 +1453,81 @@ static const char *tls_handshake_message_name(unsigned int type) {
     }
 }
 
+static void tls_diag_log(upstream_ctx_t *u, int warning,
+                           const char *fmt, ...) {
+    char msg[1536], timestamp[32], line[2200], colored[1900];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    fmt_now(timestamp, sizeof(timestamp));
+    snprintf(colored, sizeof(colored), warning
+        ? "<font color=\"#FFFF00\">[%s] %s</font>"
+        : "<span color=\"#3C86AB\">[%s] %s</span>", timestamp, msg);
+    if (u && u->log_worker_count > 1)
+        snprintf(line, sizeof(line), "[worker %d/%d] %s",
+                 u->log_worker_id + 1, u->log_worker_count, colored);
+    else
+        snprintf(line, sizeof(line), "%s", colored);
+    const char *path = (u && u->log_path) ? u->log_path : DEFAULT_LOG_PATH;
+    pthread_mutex_lock(&g_log_mutex);
+    if (strcmp(path, "-") == 0) {
+        printf("%s\n", line);
+        fflush(stdout);
+    } else {
+        FILE *f = fopen(path, "a");
+        if (f) { fprintf(f, "%s\n", line); fclose(f); }
+    }
+    pthread_mutex_unlock(&g_log_mutex);
+}
+
 static void tls_message_callback(int write_p, int version, int content_type,
                                  const void *buf, size_t len,
                                  SSL *ssl, void *arg) {
-    /* The callback runs inside OpenSSL I/O. Logger stdio calls may modify
-     * errno, which SSL_get_error() inspects immediately after the I/O returns. */
     int saved_errno = errno;
+    upstream_ctx_t *u = (upstream_ctx_t *)arg;
     (void)ssl;
-    (void)arg;
     if (!buf || len == 0 || g_tls_diag_message_count >= 32) {
         errno = saved_errno;
         return;
     }
-
     const unsigned char *bytes = (const unsigned char *)buf;
     if (content_type == SSL3_RT_HANDSHAKE) {
-        log_blue("[TLS-DIAG] %s %s version=0x%04x message_len=%zu",
-                 write_p ? "TX" : "RX",
-                 tls_handshake_message_name(bytes[0]),
-                 version, len);
+        tls_diag_log(u, 0, "[TLS-DIAG] %s %s version=0x%04x message_len=%zu",
+                     write_p ? "TX" : "RX",
+                     tls_handshake_message_name(bytes[0]), version, len);
         g_tls_diag_message_count++;
     } else if (content_type == SSL3_RT_ALERT && len >= 2) {
-        log_yellow("[TLS-DIAG] %s alert level=%s description=%s version=0x%04x",
-                   write_p ? "TX" : "RX",
-                   SSL_alert_type_string_long(bytes[0]),
-                   SSL_alert_desc_string_long(bytes[1]), version);
+        tls_diag_log(u, 1, "[TLS-DIAG] %s alert level=%s description=%s version=0x%04x",
+                     write_p ? "TX" : "RX",
+                     SSL_alert_type_string_long(bytes[0]),
+                     SSL_alert_desc_string_long(bytes[1]), version);
         g_tls_diag_message_count++;
     }
     errno = saved_errno;
 }
 
-static const char *tls_ssl_error_name(int err) {
-    switch (err) {
-        case SSL_ERROR_NONE: return "NONE";
-        case SSL_ERROR_SSL: return "SSL";
-        case SSL_ERROR_WANT_READ: return "WANT_READ";
-        case SSL_ERROR_WANT_WRITE: return "WANT_WRITE";
-        case SSL_ERROR_WANT_X509_LOOKUP: return "WANT_X509_LOOKUP";
-        case SSL_ERROR_SYSCALL: return "SYSCALL";
-        case SSL_ERROR_ZERO_RETURN: return "ZERO_RETURN";
-#ifdef SSL_ERROR_WANT_CONNECT
-        case SSL_ERROR_WANT_CONNECT: return "WANT_CONNECT";
-#endif
-#ifdef SSL_ERROR_WANT_ACCEPT
-        case SSL_ERROR_WANT_ACCEPT: return "WANT_ACCEPT";
-#endif
-#ifdef SSL_ERROR_WANT_ASYNC
-        case SSL_ERROR_WANT_ASYNC: return "WANT_ASYNC";
-#endif
-#ifdef SSL_ERROR_WANT_ASYNC_JOB
-        case SSL_ERROR_WANT_ASYNC_JOB: return "WANT_ASYNC_JOB";
-#endif
-#ifdef SSL_ERROR_WANT_CLIENT_HELLO_CB
-        case SSL_ERROR_WANT_CLIENT_HELLO_CB: return "WANT_CLIENT_HELLO_CB";
-#endif
-        default: return "UNKNOWN";
-    }
-}
-
-static int tls_connect_nb(upstream_ctx_t *u, int timeout_ms,
-                           int *retryable_out) {
-    if (retryable_out) *retryable_out = 0;
-    long long started = now_ms();
-    long long deadline = started + timeout_ms;
-    char last_state[128] = "";
-    int last_error = -1;
-    unsigned int attempts = 0;
-
-    while (!stop_requested()) {
-        attempts++;
-        ssl_prepare_io();
-        int rc = SSL_connect(u->ssl);
-        int call_errno = errno;
-        if (rc == 1) {
-            u->ssl_want_events = 0;
-            u->ssl_want_from_write = 0;
-            log_blue("[TLS-DIAG] handshake completed attempts=%u elapsed=%lld ms state=%s",
-                     attempts, now_ms() - started, SSL_state_string_long(u->ssl));
-            return 0;
-        }
-
-        int err = SSL_get_error(u->ssl, rc);
-        const char *state = SSL_state_string_long(u->ssl);
-        if (!state) state = "unknown";
-        if (err != last_error || strcmp(state, last_state) != 0) {
-            log_blue("[TLS-DIAG] SSL_connect rc=%d error=%s state=%s errno=%d (%s)",
-                     rc, tls_ssl_error_name(err), state,
-                     call_errno, call_errno ? strerror(call_errno) : "none");
-            snprintf(last_state, sizeof(last_state), "%s", state);
-            last_error = err;
-        }
-
-        short ev = 0;
-        if (err == SSL_ERROR_WANT_READ) { ev = POLLIN; u->ssl_want_events = EPOLLIN; u->ssl_want_from_write = 0; }
-        else if (err == SSL_ERROR_WANT_WRITE) { ev = POLLOUT; u->ssl_want_events = EPOLLOUT; u->ssl_want_from_write = 0; }
-        else {
-            /* Protocol/certificate errors are configuration failures, not
-             * reasons to silently try another endpoint. Retry transport EOF. */
-            if (retryable_out &&
-                (err == SSL_ERROR_SYSCALL || err == SSL_ERROR_ZERO_RETURN) &&
-                call_errno != EBADF && call_errno != EINVAL) {
-                *retryable_out = 1;
-            }
-            unsigned long ecode = ERR_get_error();
-#ifdef SSL_R_UNEXPECTED_EOF_WHILE_READING
-            if (retryable_out && ecode &&
-                ERR_GET_LIB(ecode) == ERR_LIB_SSL &&
-                ERR_GET_REASON(ecode) == SSL_R_UNEXPECTED_EOF_WHILE_READING) {
-                *retryable_out = 1;
-            }
-#endif
-            const char *reason = ecode ? ERR_reason_error_string(ecode) : NULL;
-            log_red("[TLS-DIAG] handshake stopped error=%s state=%s openssl_reason=%s errno=%d (%s)",
-                    tls_ssl_error_name(err), state,
-                    reason ? reason : "none",
-                    call_errno, call_errno ? strerror(call_errno) : "none");
-            return -1;
-        }
-
-        int pr = poll_fd_until(u->fd, ev, deadline);
-        if (pr <= 0) {
-            int poll_errno = pr < 0 ? errno : 0;
-            int socket_error = 0;
-            socklen_t socket_error_len = sizeof(socket_error);
-            if (getsockopt(u->fd, SOL_SOCKET, SO_ERROR,
-                           &socket_error, &socket_error_len) < 0) {
-                socket_error = errno;
-            }
-            log_red("[TLS-DIAG] wait ended result=%s wanted=%s elapsed=%lld/%d ms state=%s poll_errno=%d socket_error=%d (%s)",
-                    pr == 0 ? "timeout" : "poll_error",
-                    ev == POLLIN ? "POLLIN" : "POLLOUT",
-                    now_ms() - started, timeout_ms, last_state,
-                    poll_errno, socket_error,
-                    socket_error ? strerror(socket_error) : "none");
-            if (retryable_out &&
-                (pr == 0 ||
-                 (pr < 0 && poll_errno != 0 &&
-                  poll_errno != EBADF && poll_errno != EINVAL) ||
-                 (socket_error != 0 &&
-                  socket_error != EBADF && socket_error != EINVAL))) {
-                *retryable_out = 1;
-            }
-            log_red("TLS handshake %s after %lld ms",
-                    pr == 0 ? "timeout" : "error", now_ms() - started);
-            return -1;
-        }
-    }
-    log_yellow("[TLS-DIAG] handshake loop stopped by signal after %lld ms",
-               now_ms() - started);
-    return -1;
-}
-
-static int raw_write_all_nb(upstream_ctx_t *u, const void *data, size_t len, int timeout_ms) {
+static int raw_write_all_nb(upstream_ctx_t *u, const void *data,
+                            size_t len, int timeout_ms) {
     const uint8_t *p = (const uint8_t *)data;
     size_t left = len;
     long long deadline = now_ms() + timeout_ms;
-
     while (left > 0 && !stop_requested()) {
-        if (u->ssl) {
-            int chunk = (int)(left > 16384U ? 16384U : left);
-            ssl_prepare_io();
-            int n = SSL_write(u->ssl, p, chunk);
+        if (u->tls) {
+            ssize_t n = tls_engine_send(u->tls, p, left);
             if (n > 0) {
-                u->ssl_want_events = 0;
-                u->ssl_want_from_write = 0;
                 u->last_activity = time(NULL);
-                p += n;
+                p += (size_t)n;
                 left -= (size_t)n;
                 continue;
             }
-            int err = SSL_get_error(u->ssl, n);
-            short ev = 0;
-            if (err == SSL_ERROR_WANT_READ) { ev = POLLIN; u->ssl_want_events = EPOLLIN; u->ssl_want_from_write = 1; }
-            else if (err == SSL_ERROR_WANT_WRITE) { ev = POLLOUT; u->ssl_want_events = EPOLLOUT; u->ssl_want_from_write = 1; }
-            else return -1;
-            if (poll_fd_until(u->fd, ev, deadline) <= 0) return -1;
+            if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) return -1;
+            if (wait_upstream_event(u, POLLIN, deadline, 0) <= 0) return -1;
         } else {
             ssize_t n = send(u->fd, p, left, MSG_NOSIGNAL);
             if (n > 0) {
                 u->last_activity = time(NULL);
-                p += n;
+                p += (size_t)n;
                 left -= (size_t)n;
                 continue;
             }
@@ -1661,34 +1563,17 @@ static ssize_t pre_read_more(upstream_ctx_t *u) {
     if (u->pre_len >= sizeof(u->pre_buf)) return -1;
     size_t space = sizeof(u->pre_buf) - u->pre_len;
 
-    if (u->ssl) {
-        int n;
-        int err = SSL_ERROR_NONE;
-        for (;;) {
-            errno = 0;
-            ssl_prepare_io();
-            n = SSL_read(u->ssl, u->pre_buf + u->pre_len, (int)space);
-            if (n > 0) break;
-            err = SSL_get_error(u->ssl, n);
-            if (err == SSL_ERROR_SYSCALL && errno == EINTR) continue;
-            break;
-        }
+    if (u->tls) {
+        ssize_t n = tls_engine_recv(u->tls, u->pre_buf + u->pre_len, space);
         if (n > 0) {
-            u->ssl_want_events = 0;
-            u->ssl_want_from_write = 0;
             u->pre_len += (size_t)n;
             u->last_activity = time(NULL);
             return n;
         }
-        if (err == SSL_ERROR_SYSCALL &&
-            (errno == EAGAIN || errno == EWOULDBLOCK))
-            return tls_callback_error_result(u, SSL_ERROR_WANT_READ, 1);
-        if (err == SSL_ERROR_WANT_READ) { u->ssl_want_events = EPOLLIN; u->ssl_want_from_write = 0; return -2; }
-        if (err == SSL_ERROR_WANT_WRITE) { u->ssl_want_events = EPOLLOUT; u->ssl_want_from_write = 0; return -2; }
-        if (err == SSL_ERROR_ZERO_RETURN) return 0;
-        unsigned long ecode = ERR_get_error();
-        if (ecode) log_red("SSL_read error: %s", ERR_reason_error_string(ecode));
-        else if (err == SSL_ERROR_SYSCALL && errno != 0) log_red("SSL_read syscall: %s", strerror(errno));
+        if (n == 0) return 0;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return -2;
+        log_red("TLS Engine receive error while reading HTTP response: %s",
+                strerror(errno ? errno : EIO));
         return -1;
     }
 
@@ -1710,24 +1595,21 @@ static void delay_wait_and_drain(upstream_ctx_t *u, int delay_ms) {
     if (delay_ms <= 0) return;
     long long deadline = now_ms() + delay_ms;
     while (!stop_requested()) {
-        long long rem = deadline - now_ms();
-        if (rem <= 0) break;
-        int to = (rem > DELAY_WAIT_POLL_MAX_MS) ? DELAY_WAIT_POLL_MAX_MS : (int)rem;
-        short want = POLLIN;
-        if (tls_want_requires_serial_retry(u)) want = POLLOUT;
-        if (u->pre_len >= sizeof(u->pre_buf)) want = 0;
-        struct pollfd pfd = { .fd = u->fd, .events = want };
-        int rc = poll(&pfd, (nfds_t)(want ? 1 : 0), to);
-        if (rc < 0) {
-            if (errno == EINTR) continue;
-            break;
+        long long remaining = deadline - now_ms();
+        if (remaining <= 0) break;
+        int timeout = remaining > DELAY_WAIT_POLL_MAX_MS
+            ? DELAY_WAIT_POLL_MAX_MS : (int)remaining;
+        long long slice = now_ms() + timeout;
+        if (slice > deadline) slice = deadline;
+        if (u->pre_len >= sizeof(u->pre_buf)) {
+            (void)poll(NULL, 0, timeout);
+            continue;
         }
+        int rc = wait_upstream_event(u, POLLIN, slice, 0);
+        if (rc < 0) break;
         if (rc == 0) continue;
-        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) break;
-        if (want && (pfd.revents & want)) {
-            ssize_t r = pre_read_more(u);
-            if (r == 0 || r == -1) break;
-        }
+        ssize_t r = pre_read_more(u);
+        if (r == 0 || r == -1) break;
     }
 }
 
@@ -1869,198 +1751,111 @@ static int consume_one_http_response(upstream_ctx_t *u,int allow_non_tunnel) {
     }
 }
 
-/* ============================================================
- * LIBSSH2 CUSTOM I/O CALLBACKS (TLS + TCP + PREBUF + BANNER SPLICE)
- * ============================================================ */
-/* Keep OpenSSL readiness only while the exact operation is retryable.
- * In particular, a terminal close_notify/error must clear a stale WANT_WRITE,
- * or shutdown_io_pending() can mistake a completed SSL operation for one that
- * still needs a writable retry. */
-static ssize_t tls_callback_error_result(upstream_ctx_t *u, int ssl_error,
-                                         int read_operation) {
-    if (!u) return -EIO;
-    if (ssl_error == SSL_ERROR_WANT_READ) {
-        u->ssl_want_from_write = !read_operation;
-        u->ssl_want_events = EPOLLIN;
-        return -EAGAIN;
-    }
-    if (ssl_error == SSL_ERROR_WANT_WRITE) {
-        u->ssl_want_from_write = !read_operation;
-        u->ssl_want_events = EPOLLOUT;
-        return -EAGAIN;
-    }
-    u->ssl_want_events = 0;
-    u->ssl_want_from_write = 0;
-    if (read_operation && ssl_error == SSL_ERROR_ZERO_RETURN) return 0;
-    return -EIO;
-}
-
 static ssize_t mark_upstream_rx_terminal(upstream_ctx_t *u, ssize_t result) {
     if (!u) return result < 0 ? result : -EIO;
     u->rx_terminal = 1;
     u->rx_terminal_rc = (int)result;
     u->hup_seen = 1;
-    u->upstream_epoll_detached = 1;
+    u->upstream_epoll_detached = !u->tls || u->tx_terminal ||
+                                 tls_engine_tx_terminal(u->tls, NULL);
     return u->rx_flush_eagain ? -EAGAIN : result;
 }
 
-/* OpenSSL < 3.0 reports an unexpected TCP EOF as SYSCALL with errno == 0.
- * That is a transport truncation, not a TLS close_notify / graceful EOF. */
-static ssize_t ssl_read_terminal_result(upstream_ctx_t *u, int ssl_error,
-                                        int ssl_errno) {
-    (void)tls_callback_error_result(u, ssl_error, 1);
-    if (ssl_error == SSL_ERROR_ZERO_RETURN)
-        return mark_upstream_rx_terminal(u, 0);
-    if (ssl_error == SSL_ERROR_SYSCALL && ssl_errno > 0)
-        return mark_upstream_rx_terminal(u, -ssl_errno);
-    if (ssl_error == SSL_ERROR_SYSCALL && ssl_errno == 0)
-        return mark_upstream_rx_terminal(u, -ECONNRESET);
-    return mark_upstream_rx_terminal(u, -EIO);
-}
-
-static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length, int flags, void **abstract) {
+static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length,
+                           int flags, void **abstract) {
     (void)flags;
     upstream_ctx_t *u = (upstream_ctx_t *)(*abstract);
-
+    if (!u) return -EIO;
+    if (length == 0) return 0;
     while (!u->tunnel_established) {
         int rc = consume_one_http_response(u, 0);
         if (rc == -2) return -EAGAIN;
         if (rc < 0) return -EIO;
     }
-
     if (u->pre_off < u->pre_len) {
-        size_t avail = u->pre_len - u->pre_off;
-        size_t take = avail < length ? avail : length;
+        size_t available = u->pre_len - u->pre_off;
+        size_t take = available < length ? available : length;
         if (g_log_perf) g_perf_stats.ssh_rx_bytes += take;
         memcpy(buffer, u->pre_buf + u->pre_off, take);
         u->pre_off += take;
         if (u->pre_off == u->pre_len) { u->pre_off = 0; u->pre_len = 0; }
         u->last_activity = time(NULL);
-        u->ssl_want_events = 0;
-        u->ssl_want_from_write = 0;
         u->rx_seq++;
         return (ssize_t)take;
     }
-
-    /* Drain pre-buffered bytes first; once empty, replay the exact terminal
-     * result instead of turning EOF or a hard error into a fake EAGAIN. */
     if (u->rx_terminal) {
         if (g_log_perf && u->rx_flush_eagain) g_perf_stats.ssh_rx_eagain++;
         return u->rx_flush_eagain ? -EAGAIN : (ssize_t)u->rx_terminal_rc;
     }
-
-    if (u->ssl) {
-        int rlen = (int)(length > 32768U ? 32768U : length);
-        int r;
-        int err = SSL_ERROR_NONE;
-        int ssl_errno = 0;
-        for (;;) {
-            errno = 0;
-            ssl_prepare_io();
-            r = SSL_read(u->ssl, buffer, rlen);
-            if (r > 0) break;
-            err = SSL_get_error(u->ssl, r);
-            if (err == SSL_ERROR_SYSCALL && errno == EINTR) continue;
-            ssl_errno = errno;
-            break;
-        }
+    if (u->tls) {
+        size_t read_length = length > 32768U ? 32768U : length;
+        ssize_t r = tls_engine_recv(u->tls, buffer, read_length);
         if (g_log_perf) g_perf_stats.tls_rx_calls++;
         if (r > 0) {
             if (g_log_perf) {
                 g_perf_stats.tls_rx_bytes += (uint64_t)r;
                 g_perf_stats.ssh_rx_bytes += (uint64_t)r;
             }
-            u->ssl_want_events = 0;
-            u->ssl_want_from_write = 0;
             u->last_activity = time(NULL);
             u->rx_seq++;
-            return (ssize_t)r;
+            return r;
         }
-        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+        if (r == 0) return mark_upstream_rx_terminal(u, 0);
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
             if (g_log_perf) {
                 g_perf_stats.tls_rx_eagain++;
                 g_perf_stats.ssh_rx_eagain++;
             }
-            return tls_callback_error_result(u, err, 1);
+            return -EAGAIN;
         }
-        if (err == SSL_ERROR_SYSCALL &&
-            (ssl_errno == EAGAIN || ssl_errno == EWOULDBLOCK)) {
-            if (g_log_perf) {
-                g_perf_stats.tls_rx_eagain++;
-                g_perf_stats.ssh_rx_eagain++;
-            }
-            return tls_callback_error_result(u, SSL_ERROR_WANT_READ, 1);
-        }
-        return ssl_read_terminal_result(u, err, ssl_errno);
+        int err = errno ? errno : EIO;
+        return mark_upstream_rx_terminal(u, -(ssize_t)err);
     }
-
     ssize_t r;
-    do {
-        r = recv(sock, buffer, length, 0);
-    } while (r < 0 && errno == EINTR);
+    do { r = recv(sock, buffer, length, 0); } while (r < 0 && errno == EINTR);
     if (r > 0) {
         if (g_log_perf) g_perf_stats.ssh_rx_bytes += (uint64_t)r;
         u->last_activity = time(NULL);
         u->rx_seq++;
         return r;
     }
-    int recv_errno = errno;
-    if (r < 0 && (recv_errno == EAGAIN || recv_errno == EWOULDBLOCK)) {
+    int recv_error = errno;
+    if (r < 0 && (recv_error == EAGAIN || recv_error == EWOULDBLOCK)) {
         if (g_log_perf) g_perf_stats.ssh_rx_eagain++;
         return -EAGAIN;
     }
     if (r == 0) return mark_upstream_rx_terminal(u, 0);
-    if (r < 0)
-        return mark_upstream_rx_terminal(u, -(recv_errno > 0 ? recv_errno : EIO));
-    return r;
+    return mark_upstream_rx_terminal(u, -(ssize_t)(recv_error ? recv_error : EIO));
 }
 
-static ssize_t ssh_send_cb(libssh2_socket_t sock, const void *buffer, size_t length, int flags, void **abstract) {
+static ssize_t ssh_send_cb(libssh2_socket_t sock, const void *buffer, size_t length,
+                           int flags, void **abstract) {
     (void)flags;
     upstream_ctx_t *u = (upstream_ctx_t *)(*abstract);
-
+    if (!u) return -EIO;
+    if (length == 0) return 0;
     if (u->skip_ssh_banner_bytes > 0) {
         size_t take = length < u->skip_ssh_banner_bytes ? length : u->skip_ssh_banner_bytes;
         u->skip_ssh_banner_bytes -= take;
         u->last_activity = time(NULL);
         return (ssize_t)take;
     }
-
-    if (u->ssl) {
-        int wlen = (int)(length > 32768U ? 32768U : length);
-        int r;
-        int err = SSL_ERROR_NONE;
-        for (;;) {
-            errno = 0;
-            ssl_prepare_io();
-            r = SSL_write(u->ssl, buffer, wlen);
-            if (r > 0) break;
-            err = SSL_get_error(u->ssl, r);
-            if (err == SSL_ERROR_SYSCALL && errno == EINTR) continue;
-            break;
-        }
+    if (u->tls) {
+        size_t write_length = length > 32768U ? 32768U : length;
+        ssize_t r = tls_engine_send(u->tls, buffer, write_length);
         if (r > 0) {
-            u->ssl_want_events = 0;
-            u->ssl_want_from_write = 0;
             u->last_activity = time(NULL);
-            return (ssize_t)r;
+            return r;
         }
-        if (err == SSL_ERROR_SYSCALL &&
-            (errno == EAGAIN || errno == EWOULDBLOCK))
-            return tls_callback_error_result(u, SSL_ERROR_WANT_WRITE, 0);
-        ssize_t result = tls_callback_error_result(u, err, 0);
-        if (err != SSL_ERROR_WANT_READ && err != SSL_ERROR_WANT_WRITE) {
-            u->tx_terminal = 1;
-            u->hup_seen = 1;
-            u->upstream_epoll_detached = 1;
-        }
-        return result;
+        if (r == 0 || errno == EAGAIN || errno == EWOULDBLOCK) return -EAGAIN;
+        int err = errno ? errno : EIO;
+        u->tx_terminal = 1;
+        u->hup_seen = 1;
+        if (tls_engine_tx_terminal(u->tls, NULL)) u->upstream_epoll_detached = 1;
+        return -err;
     }
-
     ssize_t r;
-    do {
-        r = send(sock, buffer, length, MSG_NOSIGNAL);
-    } while (r < 0 && errno == EINTR);
+    do { r = send(sock, buffer, length, MSG_NOSIGNAL); } while (r < 0 && errno == EINTR);
     if (r > 0) {
         u->last_activity = time(NULL);
         return r;
@@ -2100,33 +1895,22 @@ static void kbd_auth_cb(const char *name, int name_len, const char *instruction,
     }
 }
 
-/* SSL_has_pending() may report an incomplete TLS record. Retry it
- * immediately only when no prior SSL operation is waiting for socket readiness;
- * otherwise epoll must wait for the requested WANT_READ/WANT_WRITE direction. */
-static int tls_buffered_input_probe_allowed(const upstream_ctx_t *u) {
-    return u && u->ssl && u->ssl_want_events == 0;
-}
-
 static int tls_buffered_input_pending(const upstream_ctx_t *u) {
-    return tls_buffered_input_probe_allowed(u) && SSL_has_pending(u->ssl);
+    return u && u->tls && tls_engine_rx_pending(u->tls) > 0;
 }
-
-static int wait_ssh_nb(LIBSSH2_SESSION *session, upstream_ctx_t *u, long long deadline_ms) {
+static int wait_ssh_nb(LIBSSH2_SESSION *session, upstream_ctx_t *u,
+                       long long deadline_ms) {
     if (now_ms() >= deadline_ms) return 0;
+    if (u && u->rx_terminal) return 1;
     if (tls_buffered_input_pending(u)) return 1;
-    short ev = 0;
-    if (u->ssl && u->ssl_want_events) {
-        if (u->ssl_want_events & EPOLLIN) ev |= POLLIN;
-        if (u->ssl_want_events & EPOLLOUT) ev |= POLLOUT;
-    } else {
-        int dirs = libssh2_session_block_directions(session);
-        if (dirs & LIBSSH2_SESSION_BLOCK_INBOUND) ev |= POLLIN;
-        if (dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) ev |= POLLOUT;
-        if (ev == 0) ev = POLLIN;
-    }
-    return poll_fd_until(u->fd, ev, deadline_ms);
+    if (u && u->tls) return wait_upstream_event(u, POLLIN, deadline_ms, 0);
+    short events = 0;
+    int dirs = libssh2_session_block_directions(session);
+    if (dirs & LIBSSH2_SESSION_BLOCK_INBOUND) events |= POLLIN;
+    if (dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) events |= POLLOUT;
+    if (events == 0) events = POLLIN;
+    return poll_fd_until(u->fd, events, deadline_ms);
 }
-
 /* ============================================================
  * DIAL UPSTREAM
  *
@@ -3073,29 +2857,14 @@ static void note_upstream_rx_progress(upstream_ctx_t *u, uint64_t rx_before,
         *did_ssh_read = 1;
 }
 
-static int tls_write_retry_pending(const upstream_ctx_t *u) {
-    return u && u->ssl_want_from_write && u->ssl_want_events != 0;
-}
-
 static int tls_want_requires_serial_retry(const upstream_ctx_t *u) {
-    /* SSL_write WANT_READ is pinned; SSL_read WANT_WRITE is pinned too. */
-    return tls_write_retry_pending(u) ||
-           (u && !u->ssl_want_from_write &&
-            (u->ssl_want_events & EPOLLOUT) != 0);
+    (void)u;
+    return 0;
 }
-
-static void tls_begin_libssh2_call(upstream_ctx_t *u) {
-    if (!u) return;
-    u->ssl_want_events = 0;
-    u->ssl_want_from_write = 0;
-}
-
+static void tls_begin_libssh2_call(upstream_ctx_t *u) { (void)u; }
 static void tls_finish_libssh2_call(upstream_ctx_t *u, int returned_eagain) {
-    if (!u || returned_eagain) return;
-    u->ssl_want_events = 0;
-    u->ssl_want_from_write = 0;
+    (void)u; (void)returned_eagain;
 }
-
 /* When RX is terminal, make libssh2 see EAGAIN from its receive callback
  * during a channel read. This lets _libssh2_channel_read() inspect already
  * queued session packets instead of aborting before its packet-list scan.
@@ -3118,13 +2887,10 @@ static ssize_t channel_read_with_rx_flush(upstream_ctx_t *u,
 }
 
 static int keepalive_can_start(const upstream_ctx_t *u, pending_op_t pending_op) {
-    /* An inbound-only WANT_READ from an idle SSL_read is not a pinned
-     * OpenSSL operation. WANT_WRITE, by contrast, must be retried first. */
-    return pending_op == PENDING_NONE && !tls_want_requires_serial_retry(u);
+    (void)u; return pending_op == PENDING_NONE;
 }
-
 static int shutdown_io_pending(const upstream_ctx_t *u) {
-    return tls_want_requires_serial_retry(u) || has_pending_libssh2_work_for_shutdown();
+    (void)u; return has_pending_libssh2_work_for_shutdown();
 }
 
 static uint32_t upstream_epoll_interest(const upstream_ctx_t *u,
@@ -3135,34 +2901,22 @@ static uint32_t upstream_epoll_interest(const upstream_ctx_t *u,
                                         int readable_channel,
                                         int window_waiter) {
     if (u && u->upstream_epoll_detached) return 0;
+    if (u && u->tls) return EPOLLIN;
     uint32_t want = (u && u->hup_seen) ? 0U : EPOLLRDHUP;
     if (!idle_rx_paused) return want;
-
-    /* A TLS readiness request is authoritative only for an active serialized
-     * operation, or when OpenSSL needs the socket writable. An idle SSL_read
-     * WANT_READ must pass through the normal backpressure/pause calculation. */
-    if (u && u->ssl && u->ssl_want_events != 0 &&
-        (tls_want_requires_serial_retry(u) || pending_op != PENDING_NONE)) {
-        want |= u->ssl_want_events;
-    } else if (pending_op != PENDING_NONE) {
+    if (pending_op != PENDING_NONE) {
         if (agg_dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) want |= EPOLLOUT;
-        if (agg_dirs & LIBSSH2_SESSION_BLOCK_INBOUND)  want |= EPOLLIN;
+        if (agg_dirs & LIBSSH2_SESSION_BLOCK_INBOUND) want |= EPOLLIN;
         if (window_waiter) want |= EPOLLIN;
         if ((want & (EPOLLIN | EPOLLOUT)) == 0) want |= EPOLLOUT;
     } else {
-        int need_read =
-            !*idle_rx_paused ||
-            opening_client ||
-            readable_channel ||
-            window_waiter ||
-            (agg_dirs & LIBSSH2_SESSION_BLOCK_INBOUND);
+        int need_read = !*idle_rx_paused || opening_client || readable_channel ||
+                        window_waiter || (agg_dirs & LIBSSH2_SESSION_BLOCK_INBOUND);
         if (need_read) {
             *idle_rx_paused = 0;
             want |= EPOLLIN;
         }
-        if (agg_dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
-            want |= EPOLLOUT;
-        }
+        if (agg_dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) want |= EPOLLOUT;
     }
     return want;
 }
@@ -4070,9 +3824,9 @@ static int has_readable_relay_channel(void) {
 }
 
 static int upstream_client_write_allowed(const upstream_ctx_t *u) {
-    return u && !u->hup_seen && !u->tx_terminal;
+    return u && !u->tx_terminal &&
+           (!u->hup_seen || (u->tls && u->rx_terminal && u->rx_terminal_rc == 0));
 }
-
 static int has_window_waiter(void) {
     for (client_conn_t *c = g_clients; c; c = c->next) {
         if (c->state == ST_RELAY && c->c2s.used > 0 && c->write_waiting_window) {
@@ -4241,7 +3995,8 @@ static int upstream_http_response_rejected(const upstream_ctx_t *u) {
 }
 
 static int session_disconnect_with_deadline(LIBSSH2_SESSION *session,
-                                             int fd, long long deadline_ms) {
+                                             upstream_ctx_t *u,
+                                             long long deadline_ms) {
     if (!session) return 0;
     while (now_ms() < deadline_ms) {
         int rc = libssh2_session_disconnect(session, "Normal shutdown");
@@ -4252,13 +4007,13 @@ static int session_disconnect_with_deadline(LIBSSH2_SESSION *session,
         if (dirs & LIBSSH2_SESSION_BLOCK_INBOUND) events |= POLLIN;
         if (dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) events |= POLLOUT;
         if (events == 0) events = POLLIN | POLLOUT;
-        if (poll_fd_until_shutdown(fd, events, deadline_ms) <= 0) break;
+        if (wait_upstream_event(u, events, deadline_ms, 1) <= 0) break;
     }
     return LIBSSH2_ERROR_EAGAIN;
 }
-
 static int session_free_with_deadline(LIBSSH2_SESSION **session,
-                                       int fd, long long deadline_ms) {
+                                       upstream_ctx_t *u,
+                                       long long deadline_ms) {
     if (!session || !*session) return 0;
     while (now_ms() < deadline_ms) {
         int rc = libssh2_session_free(*session);
@@ -4269,52 +4024,9 @@ static int session_free_with_deadline(LIBSSH2_SESSION **session,
         if (dirs & LIBSSH2_SESSION_BLOCK_INBOUND) events |= POLLIN;
         if (dirs & LIBSSH2_SESSION_BLOCK_OUTBOUND) events |= POLLOUT;
         if (events == 0) events = POLLIN | POLLOUT;
-        if (poll_fd_until_shutdown(fd, events, deadline_ms) <= 0) break;
+        if (wait_upstream_event(u, events, deadline_ms, 1) <= 0) break;
     }
     return LIBSSH2_ERROR_EAGAIN;
-}
-
-static int ssl_wait_peer_close_notify(SSL *ssl, int fd, long long deadline_ms) {
-    uint8_t discard[4096];
-    while (now_ms() < deadline_ms) {
-        ssl_prepare_io();
-        int n = SSL_read(ssl, discard, sizeof(discard));
-        if (n > 0) continue;
-
-        int err = SSL_get_error(ssl, n);
-        if (err == SSL_ERROR_ZERO_RETURN) return 1;
-
-        short events = 0;
-        if (err == SSL_ERROR_WANT_READ) events = POLLIN;
-        else if (err == SSL_ERROR_WANT_WRITE) events = POLLOUT;
-        else return -1;
-
-        if (poll_fd_until_shutdown(fd, events, deadline_ms) <= 0) break;
-    }
-    return 0;
-}
-
-static int ssl_shutdown_with_deadline(SSL *ssl, int fd, long long deadline_ms) {
-    if (!ssl) return 1;
-    while (now_ms() < deadline_ms) {
-        ssl_prepare_io();
-        int rc = SSL_shutdown(ssl);
-        if (rc == 1) return 1;
-
-        /* A zero return is not an error: our close_notify was sent.
-         * SSL_get_error() must not be called with rc == 0. */
-        if (rc == 0)
-            return ssl_wait_peer_close_notify(ssl, fd, deadline_ms);
-
-        int err = SSL_get_error(ssl, rc);
-        short events = 0;
-        if (err == SSL_ERROR_WANT_READ) events = POLLIN;
-        else if (err == SSL_ERROR_WANT_WRITE) events = POLLOUT;
-        else return -1;
-
-        if (poll_fd_until_shutdown(fd, events, deadline_ms) <= 0) break;
-    }
-    return 0;
 }
 
 static void on_sig(int sig) {
@@ -4486,7 +4198,13 @@ static int core_worker_run(int argc, char **argv) {
         return 1;
     }
 
-    upstream_ctx_t uctx = { .fd=upstream_fd, .last_activity=time(NULL), .allow_http_200_tunnel=cfg.allow_http_200_tunnel };
+    int upstream_watch_fd = upstream_fd;
+    upstream_ctx_t uctx = {
+        .fd = upstream_fd, .log_path = g_log_path,
+        .log_worker_id = g_worker_id, .log_worker_count = g_worker_count,
+        .last_activity = time(NULL),
+        .allow_http_200_tunnel = cfg.allow_http_200_tunnel
+    };
     SSL_CTX *ssl_ctx = NULL;
     LIBSSH2_SESSION *session = NULL;
     int listen_fd = -1;
@@ -4524,6 +4242,7 @@ static int core_worker_run(int argc, char **argv) {
 #endif
         if (cfg.tls_diag) {
             SSL_CTX_set_msg_callback(ssl_ctx, tls_message_callback);
+            SSL_CTX_set_msg_callback_arg(ssl_ctx, &uctx);
             log_blue("TLS message tracing enabled (TLS_DIAG=1)");
         }
         if (SSL_CTX_set_alpn_protos(ssl_ctx, alpn_http11, sizeof(alpn_http11)) != 0) {
@@ -4547,58 +4266,43 @@ static int core_worker_run(int argc, char **argv) {
         size_t tls_attempt = 0;
 
         for (;;) {
-            uctx.ssl = SSL_new(ssl_ctx);
-            if (!uctx.ssl) {
-                log_red("SSL_new gagal");
-                write_marker(NEED_RESTART_FILE, "SSL_new failed");
+            tls_engine_t *engine = tls_engine_create(262144U);
+            if (!engine) {
+                log_red("TLS Engine allocation failed: %s", strerror(errno));
+                write_marker(NEED_RESTART_FILE, "TLS Engine allocation failed");
                 goto fail_cleanup;
             }
-            uctx.ssl_want_events = 0;
-            uctx.ssl_want_from_write = 0;
-
-            if (SSL_set_tlsext_host_name(uctx.ssl, sni) != 1) {
-                log_red("SSL_set_tlsext_host_name gagal");
-                write_marker(NEED_RESTART_FILE, "TLS SNI setup failed");
-                goto fail_cleanup;
-            }
-            if (cfg.verify_tls && SSL_set1_host(uctx.ssl, sni) != 1) {
-                log_red("SSL_set1_host gagal untuk %s", sni);
-                write_marker(NEED_RESTART_FILE, "TLS hostname verify setup failed");
-                goto fail_cleanup;
-            }
-            if (SSL_set_fd(uctx.ssl, upstream_fd) != 1) {
-                unsigned long ecode = ERR_get_error();
-                log_red("[TLS-DIAG] SSL_set_fd failed: %s",
-                        ecode ? ERR_reason_error_string(ecode) : "unknown OpenSSL error");
-                write_marker(NEED_RESTART_FILE, "TLS socket attach failed");
-                goto fail_cleanup;
-            }
-
-            int socket_flags = fcntl(upstream_fd, F_GETFL, 0);
-            log_blue("[TLS-DIAG] OpenSSL=%s fd=%d nonblocking=%s verify=%d SNI=%s ALPN=http/1.1 address=%s attempt=%zu/%d",
-                     OpenSSL_version(OPENSSL_VERSION), upstream_fd,
-                     socket_flags >= 0 && (socket_flags & O_NONBLOCK) ? "yes" : "no",
+            int tls_socket_fd = upstream_fd;
+            log_blue("[TLS-DIAG] OpenSSL=%s fd=%d verify=%d SNI=%s ALPN=http/1.1 address=%s attempt=%zu/%d",
+                     OpenSSL_version(OPENSSL_VERSION), tls_socket_fd,
                      cfg.verify_tls, sni, upstream_address,
                      tls_attempt + 1, TLS_CONNECT_MAX_ADDR_ATTEMPTS);
-
-            int retryable_tls_failure = 0;
-            if (tls_connect_nb(&uctx, HANDSHAKE_TIMEOUT_MS,
-                               &retryable_tls_failure) == 0) {
-                break;
+            if (tls_engine_start(engine, ssl_ctx, tls_socket_fd, sni,
+                                 cfg.verify_tls, HANDSHAKE_TIMEOUT_MS) != 0) {
+                int err = errno ? errno : EIO;
+                tls_engine_destroy(engine);
+                log_red("TLS Engine thread start failed: %s", strerror(err));
+                write_marker(NEED_RESTART_FILE, "TLS Engine start failed");
+                errno = err;
+                goto fail_cleanup;
             }
-
-            SSL_free(uctx.ssl);
-            uctx.ssl = NULL;
-            close(upstream_fd);
+            uctx.tls = engine;
+            upstream_watch_fd = tls_engine_notify_fd(engine);
             upstream_fd = -1;
             uctx.fd = -1;
-
-            if (!retryable_tls_failure ||
-                tls_attempt + 1 >= TLS_CONNECT_MAX_ADDR_ATTEMPTS) {
+            if (tls_engine_wait_ready(engine) == 0) break;
+            int retryable = tls_engine_start_retryable(engine);
+            int handshake_error = errno ? errno : EIO;
+            log_red("[TLS-DIAG] TLS Engine handshake failed error=%s retryable=%d address=%s",
+                    strerror(handshake_error), retryable, upstream_address);
+            (void)tls_engine_join(engine);
+            tls_engine_destroy(engine);
+            uctx.tls = NULL;
+            upstream_watch_fd = -1;
+            if (!retryable || tls_attempt + 1 >= TLS_CONNECT_MAX_ADDR_ATTEMPTS) {
                 write_marker(NEED_RESTART_FILE, "TLS handshake failed");
                 goto fail_cleanup;
             }
-
             snprintf(failed_tls_addresses[excluded_tls_count],
                      sizeof(failed_tls_addresses[excluded_tls_count]), "%s",
                      upstream_address);
@@ -4606,27 +4310,31 @@ static int core_worker_run(int argc, char **argv) {
                 failed_tls_addresses[excluded_tls_count];
             excluded_tls_count++;
             tls_attempt++;
-
             log_yellow("[TLS-DIAG] TLS transport failed at %s; trying another resolved address",
                        failed_tls_addresses[excluded_tls_count - 1]);
-
             upstream_fd = tcp_connect_host_excluding(
                 dial_host, dial_port, excluded_tls_addresses, excluded_tls_count,
                 upstream_address, sizeof(upstream_address));
             if (upstream_fd < 0) {
                 log_red("[TLS-DIAG] no alternate upstream address available after TLS failure");
-                write_marker(NEED_RESTART_FILE,
-                             "TLS handshake failed; no alternate address");
+                write_marker(NEED_RESTART_FILE, "TLS handshake failed; no alternate address");
                 goto fail_cleanup;
             }
-
             uctx.fd = upstream_fd;
+            upstream_watch_fd = upstream_fd;
             uctx.last_activity = time(NULL);
         }
-
+        char tls_version[32] = "unknown";
+        char tls_cipher[128] = "unknown";
+        if (tls_engine_copy_negotiated(uctx.tls, tls_version, sizeof(tls_version),
+                                        tls_cipher, sizeof(tls_cipher)) != 0) {
+            log_red("Could not read negotiated TLS parameters from TLS Engine");
+            write_marker(NEED_RESTART_FILE, "TLS Engine state unavailable");
+            goto fail_cleanup;
+        }
         log_blue("TLS Connected: %s (%s) remote=%s attempts=%zu",
-                 SSL_get_version(uctx.ssl), SSL_get_cipher_name(uctx.ssl),
-                 upstream_address, tls_attempt + 1);
+                 tls_version, tls_cipher, upstream_address, tls_attempt + 1);
+        log_blue("TLS Engine owner-thread ready; SSH Owner has no SSL* access");
     }
 
     int has_embedded_banner = 0;
@@ -4672,8 +4380,10 @@ static int core_worker_run(int argc, char **argv) {
             do {
                 uctx.last_http_code = 0;
                 while ((split_rc = consume_one_http_response(&uctx, 1)) == -2) {
-                    short ev = (uctx.ssl && uctx.ssl_want_events == EPOLLOUT) ? POLLOUT : POLLIN;
-                    if (poll_fd_until(upstream_fd, ev, deadline) <= 0) { split_rc = -1; break; }
+                    if (wait_upstream_event(&uctx, POLLIN, deadline, 0) <= 0) {
+                        split_rc = -1;
+                        break;
+                    }
                 }
             } while (split_rc == 0 && !uctx.tunnel_established &&
                      uctx.last_http_code >= 100 && uctx.last_http_code < 200);
@@ -4889,7 +4599,7 @@ static int core_worker_run(int argc, char **argv) {
         goto fail_cleanup;
     }
 
-    uint32_t upstream_ev = EPOLLIN | EPOLLRDHUP;
+    uint32_t upstream_ev = uctx.tls ? EPOLLIN : (EPOLLIN | EPOLLRDHUP);
     struct epoll_event ev = { .events = EPOLLIN, .data.ptr = &g_listen_tag };
     if (epoll_ctl(epfd, EPOLL_CTL_ADD, listen_fd, &ev) < 0) {
         log_red("epoll_ctl ADD listen_fd gagal: %s", strerror(errno));
@@ -4897,7 +4607,7 @@ static int core_worker_run(int argc, char **argv) {
     }
     ev.events = upstream_ev;
     ev.data.ptr = &g_upstream_tag;
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, upstream_fd, &ev) < 0) {
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, upstream_watch_fd, &ev) < 0) {
         log_red("epoll_ctl ADD upstream_fd gagal: %s", strerror(errno));
         goto fail_cleanup;
     }
@@ -4996,27 +4706,44 @@ static int core_worker_run(int argc, char **argv) {
                     g_accepted_total++;
                 }
             } else if (ptr == &g_upstream_tag) {
-                if (e & EPOLLERR) {
-                    int so_err = 0;
-                    socklen_t so_len = sizeof(so_err);
-                    if (getsockopt(upstream_fd, SOL_SOCKET, SO_ERROR,
-                                   &so_err, &so_len) == 0 && so_err)
+                if (uctx.tls) {
+                    /* eventfd reports RX bytes and TX queue-space; only RX bytes
+                     * and terminal state are inbound SSH readiness. */
+                    tls_engine_drain_notify(uctx.tls);
+                    int rx_pending = tls_engine_rx_pending(uctx.tls);
+                    int rx_error = 0;
+                    int rx_terminal = tls_engine_rx_terminal(uctx.tls, &rx_error);
+                    if (tls_engine_tx_terminal(uctx.tls, NULL)) {
                         uctx.tx_terminal = 1;
-                    uctx.hup_seen = 1;
-                    uctx.upstream_epoll_detached = 1;
-                    upstream_readable = 1;
+                        uctx.hup_seen = 1;
+                    }
+                    if (rx_pending > 0) upstream_readable = 1;
+                    if (rx_terminal && rx_pending == 0 && !uctx.rx_terminal) {
+                        (void)mark_upstream_rx_terminal(
+                            &uctx, rx_error ? -(ssize_t)rx_error : 0);
+                        upstream_readable = 1;
+                    }
+                } else {
+                    if (e & EPOLLERR) {
+                        int so_err = 0;
+                        socklen_t so_len = sizeof(so_err);
+                        if (getsockopt(upstream_fd, SOL_SOCKET, SO_ERROR,
+                                       &so_err, &so_len) == 0 && so_err)
+                            uctx.tx_terminal = 1;
+                        uctx.hup_seen = 1;
+                        uctx.upstream_epoll_detached = 1;
+                        upstream_readable = 1;
+                    }
+                    if (e & EPOLLHUP) {
+                        uctx.hup_seen = 1;
+                        uctx.upstream_epoll_detached = 1;
+                        upstream_readable = 1;
+                    } else if (e & EPOLLRDHUP) {
+                        uctx.hup_seen = 1;
+                        upstream_readable = 1;
+                    }
+                    if (e & EPOLLIN) upstream_readable = 1;
                 }
-                if (e & EPOLLHUP) {
-                    uctx.hup_seen = 1;
-                    uctx.upstream_epoll_detached = 1;
-                    upstream_readable = 1;
-                } else if (e & EPOLLRDHUP) {
-                    /* A peer FIN closes only its write direction. Keep EPOLLIN
-                     * armed until recv/SSL_read confirms the receive terminal. */
-                    uctx.hup_seen = 1;
-                    upstream_readable = 1;
-                }
-                if (e & EPOLLIN) upstream_readable = 1;
             } else {
                 client_conn_t *c = (client_conn_t *)ptr;
                 handle_client_io(epfd, c, e);
@@ -5026,7 +4753,7 @@ static int core_worker_run(int argc, char **argv) {
         if (stop_requested()) break;
 
         if (uctx.upstream_epoll_detached && upstream_ev != 0) {
-            if (epoll_ctl(epfd, EPOLL_CTL_DEL, upstream_fd, NULL) == 0 || errno == ENOENT)
+            if (epoll_ctl(epfd, EPOLL_CTL_DEL, upstream_watch_fd, NULL) == 0 || errno == ENOENT)
                 upstream_ev = 0;
         }
         if (uctx.hup_seen) {
@@ -5128,7 +4855,7 @@ static int core_worker_run(int argc, char **argv) {
         }
 
         if (uctx.upstream_epoll_detached && upstream_ev != 0) {
-            if (epoll_ctl(epfd, EPOLL_CTL_DEL, upstream_fd, NULL) == 0 || errno == ENOENT)
+            if (epoll_ctl(epfd, EPOLL_CTL_DEL, upstream_watch_fd, NULL) == 0 || errno == ENOENT)
                 upstream_ev = 0;
         }
         if (uctx.hup_seen) {
@@ -5206,7 +4933,7 @@ static int core_worker_run(int argc, char **argv) {
             g_opening_client != NULL,
             has_readable_relay_channel(), has_window_waiter());
         if (!uctx.upstream_epoll_detached)
-            update_epoll(epfd, upstream_fd, &g_upstream_tag, &upstream_ev, want_up);
+            update_epoll(epfd, upstream_watch_fd, &g_upstream_tag, &upstream_ev, want_up);
 
         perf_log_interval(now_ms());
     }
@@ -5232,7 +4959,7 @@ static int core_worker_run(int argc, char **argv) {
         int disconnect_rc = 0;
         if (exit_code == 0) {
             disconnect_rc = session_disconnect_with_deadline(
-                session, upstream_fd, shutdown_deadline_ms);
+                session, &uctx, shutdown_deadline_ms);
             if (disconnect_rc == LIBSSH2_ERROR_EAGAIN) {
                 log_yellow("SSH disconnect remained pending after deadline; skipping session_free and TLS shutdown");
                 g_skip_libssh2_cleanup = 1;
@@ -5242,7 +4969,7 @@ static int core_worker_run(int argc, char **argv) {
         }
         if (!g_skip_libssh2_cleanup) {
             int free_rc = session_free_with_deadline(
-                &session, upstream_fd, shutdown_deadline_ms);
+                &session, &uctx, shutdown_deadline_ms);
             if (free_rc == LIBSSH2_ERROR_EAGAIN) {
                 log_yellow("Session cleanup remained pending after deadline; skipping TLS shutdown");
                 g_skip_libssh2_cleanup = 1;
@@ -5254,16 +4981,18 @@ static int core_worker_run(int argc, char **argv) {
     } else if (session && g_skip_libssh2_cleanup) {
         log_yellow("Skipping libssh2 disconnect/free; process teardown will reclaim remaining resources");
     }
-    if (uctx.ssl) {
-        if (exit_code == 0 && !g_skip_libssh2_cleanup && session == NULL) {
-            int tls_rc = ssl_shutdown_with_deadline(
-                uctx.ssl, upstream_fd, shutdown_deadline_ms);
-            if (tls_rc <= 0)
-                log_yellow("TLS close_notify did not complete before shutdown deadline");
-        } else if (g_skip_libssh2_cleanup) {
-            log_yellow("Skipping TLS shutdown because an SSH/TLS operation is still pending");
-        }
-        SSL_free(uctx.ssl);
+    if (uctx.tls) {
+        int graceful = exit_code == 0 && !g_skip_libssh2_cleanup && session == NULL;
+        if (graceful)
+            log_blue("TLS Engine: flushing queued SSH bytes and sending close_notify");
+        else if (g_skip_libssh2_cleanup)
+            log_yellow("TLS Engine: aborting because SSH cleanup was incomplete");
+        tls_engine_stop(uctx.tls, graceful, SHUTDOWN_IO_TIMEOUT_MS);
+        if (tls_engine_join(uctx.tls) != 0)
+            log_yellow("TLS Engine join failed: %s", strerror(errno));
+        tls_engine_destroy(uctx.tls);
+        uctx.tls = NULL;
+        upstream_watch_fd = -1;
     }
     if (ssl_ctx) SSL_CTX_free(ssl_ctx);
     close(upstream_fd);
@@ -5277,9 +5006,15 @@ fail_cleanup:
         log_yellow("Startup failed; skipping further libssh2 I/O before process teardown");
         g_skip_libssh2_cleanup = 1;
     }
-    if (uctx.ssl) SSL_free(uctx.ssl);
+    if (uctx.tls) {
+        tls_engine_stop(uctx.tls, 0, 1);
+        (void)tls_engine_join(uctx.tls);
+        tls_engine_destroy(uctx.tls);
+        uctx.tls = NULL;
+        upstream_watch_fd = -1;
+    }
     if (ssl_ctx) SSL_CTX_free(ssl_ctx);
-    close(upstream_fd);
+    if (upstream_fd >= 0) close(upstream_fd);
     return 1;
 }
 

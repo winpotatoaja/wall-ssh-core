@@ -34,20 +34,20 @@ chunk sizes, byte integrity, and uint32_t counter rollover. This validates
 the queue primitive only; eventfd, TLS ownership, I/O workers, and live relay
 integration remain future stages.
 
-## TLS Engine foundation (Phase 2, R30)
+## TLS Engine integration (Phase 2, R31)
 
-The new tls_engine.c module is the transport-owner building block for the
-single-session refactor. It creates SSL* inside one dedicated pthread and keeps
-SSL_connect, SSL_read, SSL_write, SSL_shutdown, and SSL_free on that thread.
-The SSH-side API sees two SPSC byte queues and an eventfd notification pair.
-The engine preserves the exact queued pointer and length across SSL_write
-WANT_READ/WANT_WRITE retries and publishes receive EOF/error after buffered
-plaintext has been drained.
+The live SSH/TLS path uses a dedicated TLS Engine pthread. That thread creates
+and exclusively owns SSL*, performs the TLS handshake and all TLS record I/O,
+handles close_notify, and frees SSL*. The SSH Owner retains one LIBSSH2_SESSION
+and all SSH channels. The two sides exchange plaintext through two SPSC byte
+queues and an eventfd notification pair.
 
-The module is compiled into the package for native and OpenWrt SDK coverage,
-but ssh-core.c has not yet switched its transport callbacks to it. The live
-relay remains on its R29 path until the module stress tests and callback
-integration are both validated. R30 is not the completed Phase 2 integration.
+The integration covers initial HTTP payload transport, libssh2 send/receive
+callbacks, readiness waits, epoll dispatch, RX terminal handling, clean
+receive half-close while preserving TX, and bounded TLS shutdown. TX-space
+eventfd notifications are not treated as inbound SSH data. Native, OpenWrt
+24.10.7 mipsel_24kc SDK and MT7621 QEMU checks validate the engine; R31 CI
+also asserts that ssh-core.c contains no direct SSL I/O calls.
 
 ## Package and executable names
 

@@ -90,7 +90,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r30 single-session MIPS IPK and TLS Engine test helper
+      - name: Build r31 single-session MIPS IPK and TLS Engine test helper
         shell: bash
         run: |
           set -euo pipefail
@@ -103,6 +103,12 @@ jobs:
           echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
           make defconfig
           make package/passwall-ssh-core/compile -j"$(nproc)" V=s
+          if grep -Eq 'SSL_(new|connect|read|write|shutdown|free|get_error|has_pending)[[:space:]]*\\(' ssh-core.c; then
+            echo "ssh-core.c still contains direct SSL I/O; TLS Engine ownership is incomplete."
+            grep -nE 'SSL_(new|connect|read|write|shutdown|free|get_error|has_pending)[[:space:]]*\\(' ssh-core.c
+            false
+          fi
+          echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
           IPK="$(find bin/packages -type f -name 'passwall-ssh-core*.ipk' | head -n 1)"
           test -n "$IPK"
           mkdir -p "$GITHUB_WORKSPACE/test-results"
@@ -238,7 +244,7 @@ jobs:
           file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r30' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r31' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
           readelf -h test-results/socks-mt-download | grep -q 'MIPS'
           readelf -h test-results/tls-engine-test | grep -q 'MIPS'
@@ -740,7 +746,7 @@ jobs:
             fail "ImageBuilder firmware is missing libopenssl3 or libssh2-1"
           fi
 
-          echo "========== INSTALL R30 MIPS IPK (OFFLINE) =========="
+          echo "========== INSTALL R31 MIPS IPK (OFFLINE) =========="
           if [ "$STATUS" -eq 0 ]; then
             opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
@@ -749,8 +755,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r30'; then
-            pass "opkg installed passwall-ssh-core r30 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r31'; then
+            pass "opkg installed passwall-ssh-core r31 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
