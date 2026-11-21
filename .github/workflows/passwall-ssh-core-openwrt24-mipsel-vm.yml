@@ -215,7 +215,7 @@ jobs:
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
           if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/http_parser_test.c tests/spsc_rb.h tests/spsc_rb_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
             echo "SDK artifact was built from different package or test sources."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/socks_halfclose.c tests/socks_mt_download.c
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tests/spsc_rb.h tests/spsc_rb_test.c tests/socks_halfclose.c tests/socks_mt_download.c
             false
           fi
           (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256)
@@ -717,7 +717,7 @@ jobs:
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install MIPS package or runtime dependencies"
           elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r29'; then
-            pass "opkg installed passwall-ssh-core r27 on mipsel_24kc"
+            pass "opkg installed passwall-ssh-core r29 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
@@ -823,7 +823,7 @@ jobs:
               pass "MIPS half-close helper staged on executable overlay"
               if cp "$LOG/socks-mt-download" /usr/bin/socks-mt-download && \
                 chmod 0755 /usr/bin/socks-mt-download && [ -x /usr/bin/socks-mt-download ]; then
-                pass "pthread MIPS download benchmark staged on executable overlay"
+                pass "concurrent SOCKS download test helper staged on executable overlay"
               else
                 fail "could not stage pthread download benchmark"
               fi
@@ -901,7 +901,7 @@ jobs:
           fi
 
           if [ "$STATUS" -eq 0 ]; then
-            echo "========== PTHREAD LOAD TEST: ONE SSH SESSION =========="
+            echo "========== SINGLE-SESSION SSH MULTI-CLIENT TEST =========="
             EXPECTED_BYTES=33554432
             EXPECTED_SHA="$(sha256sum /tmp/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
 
@@ -954,12 +954,12 @@ jobs:
               stop_sampler "tcp-single-core-4clients"
               cat "$LOG/tcp-single-core-download.log"
               if [ "$SINGLE_RC" -eq 0 ]; then
-                pass "4 pthread download clients completed through one core; streamed 4 x 32 MiB and verified SHA-256"
+                pass "4 concurrent SOCKS clients completed through one SSH session; streamed 4 x 32 MiB and verified SHA-256"
               else
-                fail "single-core concurrent pthread download or streamed SHA-256 check failed"
+                fail "single-session concurrent SOCKS download or streamed SHA-256 check failed"
               fi
             else
-              fail "single-core baseline proxy was not running"
+              fail "single-session baseline proxy was not running"
             fi
           fi
 

@@ -179,7 +179,8 @@ workflow automatically run the full pipeline in order:
    libssh2. The APK is uploaded as an artifact in the same workflow run.
 3. **QEMU VM integration tests** — install that APK in the official OpenWrt
    25.12.5 x86_64 guest, then exercise SSH authentication, SOCKS bind safety,
-   strict numeric parsing, single and concurrent direct-tcpip transfers.
+   strict numeric parsing, and concurrent direct-tcpip transfers over one
+   upstream SSH session.
 4. **Backpressure and recovery** — force a 32 MiB C2S upload through a stalled,
    small-window receiver; run four simultaneous 8 MiB uploads; then throttle
    the S2C reader during a 32 MiB download. Both directions verify exact
@@ -191,8 +192,8 @@ workflow automatically run the full pipeline in order:
    cross-compiled by the OpenWrt SDK to test client-FIN-first and server-FIN-first
    sequences. The host fixture independently verifies that each FIN arrives
    and that the opposite write direction remains usable. Then run four
-   concurrent workers for 90 seconds, verify every 1 MiB transfer by SHA-256,
-   and monitor peak RSS and FD counts.
+   concurrent SOCKS client threads through the same single SSH session, verify
+   every response by SHA-256, and monitor peak RSS and FD counts.
 6. **Disconnect and repeated-connection checks** — abort an in-flight client
    request, verify that the service remains usable, then open and close 12
    more SOCKS connections while checking process RSS and file-descriptor
