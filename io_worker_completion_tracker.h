@@ -42,7 +42,8 @@ size_t io_worker_completion_tracker_outstanding(
     const io_worker_completion_tracker_t *tracker);
 size_t io_worker_completion_tracker_capacity(
     const io_worker_completion_tracker_t *tracker);
-void io_worker_completion_tracker_destroy(
+/* Destroy is refused with EBUSY while any accepted task is still outstanding. */
+int io_worker_completion_tracker_destroy(
     io_worker_completion_tracker_t *tracker);
 
 #ifdef __cplusplus
