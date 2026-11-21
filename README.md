@@ -376,3 +376,21 @@ requires the MIPS client to negotiate that exact TLS 1.3 suite. QEMU results
 remain an integration check; final throughput and stability decisions require
 testing on the physical MT7621 router.
 
+## R26: C2S diagnostics after remote SSH EOF
+
+The `[PERF]` interval now reports the C2S bytes received from local SOCKS
+clients and bytes accepted by `libssh2_channel_write()`, including separate
+totals for data arriving/written after the remote SSH channel EOF. It also
+reports C2S buffer occupancy, channels waiting on a zero write window,
+channels that have seen remote EOF, and upstream input events/window-waiter
+retries. These counters are intended to distinguish local socket ingestion,
+libssh2 write progress, and remote WINDOW_ADJUST wakeups.
+
+With `LOG_BACKPRESSURE=1`, the core reports remote EOF while explicitly
+keeping the local C2S half open, incoming C2S data after that EOF, successful
+C2S writes after EOF, and zero-window waits after EOF. These messages do not
+include payload bytes or secrets. A zero-window wait is not by itself a bug:
+it is expected under backpressure while the destination is not reading.
+A wait that is never followed by an input wakeup or write recovery is the
+condition this instrumentation is designed to expose.
+
