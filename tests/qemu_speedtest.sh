@@ -25,17 +25,17 @@ main() {
     : > "$RESULT/samples.log"
 
     cpu_snapshot() {
-        awk '/^cpu[0-9]*[ \\t]/ {t=0;for(i=2;i<=NF;i++)t+=$i;idle=$5+$6;print $1,t-idle,t}' /proc/stat
+        awk '/^cpu[0-9]*[ \t]/ {t=0;for(i=2;i<=NF;i++)t+=$i;idle=$5+$6;print $1,t-idle,t}' /proc/stat
     }
     net_snapshot() {
         awk 'BEGIN {
             if ((getline rx < "/sys/class/net/eth0/statistics/rx_bytes") <= 0) rx=0
             if ((getline tx < "/sys/class/net/eth0/statistics/tx_bytes") <= 0) tx=0
-            printf "%.0f %.0f\\n",rx,tx
+            printf "%.0f %.0f\n",rx,tx
         }'
     }
     proc_ticks() {
-        awk '{s=$0;sub(/^.*\\) /,"",s);n=split(s,a," ");if(n>=13)printf "%.0f",a[12]+a[13];else print 0}' "/proc/$1/stat" 2>/dev/null
+        awk '{s=$0;sub(/^.*\) /,"",s);n=split(s,a," ");if(n>=13)printf "%.0f",a[12]+a[13];else print 0}' "/proc/$1/stat" 2>/dev/null
     }
 
     echo "QEMU_INTERNET_SPEEDTEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
@@ -86,7 +86,7 @@ main() {
         CPU_LINE=$(awk 'FNR==NR{busy[$1]=$2;total[$1]=$3;next}{dt=$3-total[$1];db=$2-busy[$1];if(dt>0){p=100*db/dt;if($1=="cpu")all=p;else cores=cores sprintf("%s=%.0f%%,",$1,p)}}END{printf "sys=%.0f%% cores=[%s]",all,cores}' "$RESULT/cpu.prev" "$RESULT/cpu.now")
         NET_LINE=$(awk 'FNR==NR{rx=$1;tx=$2;next}{dr=$1-rx;dt=$2-tx;if(dr<0)dr=0;if(dt<0)dt=0;printf "eth0_rx=%.2fMBps eth0_tx=%.2fMBps",dr/1048576,dt/1048576}' "$RESULT/net.prev" "$RESULT/net.now")
         SAMPLE=$((SAMPLE+1))
-        printf 'sample=%d proc_cpu=%s%% %s %s\\n' "$SAMPLE" "$PROC_CPU" "$CPU_LINE" "$NET_LINE" >> "$RESULT/samples.log"
+        printf 'sample=%d proc_cpu=%s%% %s %s\n' "$SAMPLE" "$PROC_CPU" "$CPU_LINE" "$NET_LINE" >> "$RESULT/samples.log"
         cp "$RESULT/cpu.now" "$RESULT/cpu.prev"
         cp "$RESULT/net.now" "$RESULT/net.prev"
         PREV_TICKS=$CUR_TICKS
@@ -96,8 +96,8 @@ main() {
     DOWN_START=$(date +%s)
     DOWN_END=$((DOWN_START + DURATION))
     while [ "$(date +%s)" -lt "$DOWN_END" ]; do
-        curl -4 -fsS --socks5-hostname "$SOCKS" --connect-timeout 15 --max-time 180 \\
-          -o /dev/null -w '%{size_download} %{time_total} %{speed_download} %{http_code}\\n' "$DOWN_URL" >> "$RESULT/download-results.log" &
+        curl -4 -fsS --socks5-hostname "$SOCKS" --connect-timeout 15 --max-time 180 \
+          -o /dev/null -w '%{size_download} %{time_total} %{speed_download} %{http_code}\n' "$DOWN_URL" >> "$RESULT/download-results.log" &
         CURL_PID=$!
         while kill -0 "$CURL_PID" 2>/dev/null; do sample_metrics; sleep 1; done
         wait "$CURL_PID" || { RC=$?; echo "download curl_rc=$RC" >> "$RESULT/errors.log"; break; }
@@ -108,9 +108,9 @@ main() {
     UP_START=$(date +%s)
     UP_END=$((UP_START + DURATION))
     while [ "$(date +%s)" -lt "$UP_END" ]; do
-        curl -4 -fsS --socks5-hostname "$SOCKS" --connect-timeout 15 --max-time 180 \\
-          -X POST --data-binary "@$RESULT/upload-64MiB.bin" -o /dev/null \\
-          -w '%{size_upload} %{time_total} %{speed_upload} %{http_code}\\n' "$UP_URL" >> "$RESULT/upload-results.log" &
+        curl -4 -fsS --socks5-hostname "$SOCKS" --connect-timeout 15 --max-time 180 \
+          -X POST --data-binary "@$RESULT/upload-64MiB.bin" -o /dev/null \
+          -w '%{size_upload} %{time_total} %{speed_upload} %{http_code}\n' "$UP_URL" >> "$RESULT/upload-results.log" &
         CURL_PID=$!
         while kill -0 "$CURL_PID" 2>/dev/null; do sample_metrics; sleep 1; done
         wait "$CURL_PID" || { RC=$?; echo "upload curl_rc=$RC" >> "$RESULT/errors.log"; break; }
@@ -124,9 +124,9 @@ main() {
 
     {
       echo "DOWNLOAD"
-      awk -v wall="$DOWN_WALL" '{bytes+=$1;sec+=$2;if($3>peak)peak=$3;n++}END{printf "requests=%d bytes=%.0f wall_seconds=%d average_mbps=%.2f active_average_mbps=%.2f peak_mbps=%.2f\\n",n,bytes,wall,(wall>0?bytes*8/wall/1000000:0),(sec>0?bytes*8/sec/1000000:0),peak*8/1000000}' "$RESULT/download-results.log"
+      awk -v wall="$DOWN_WALL" '{bytes+=$1;sec+=$2;if($3>peak)peak=$3;n++}END{printf "requests=%d bytes=%.0f wall_seconds=%d average_mbps=%.2f active_average_mbps=%.2f peak_mbps=%.2f\n",n,bytes,wall,(wall>0?bytes*8/wall/1000000:0),(sec>0?bytes*8/sec/1000000:0),peak*8/1000000}' "$RESULT/download-results.log"
       echo "UPLOAD"
-      awk -v wall="$UP_WALL" '{bytes+=$1;sec+=$2;if($3>peak)peak=$3;n++}END{printf "requests=%d bytes=%.0f wall_seconds=%d average_mbps=%.2f active_average_mbps=%.2f peak_mbps=%.2f\\n",n,bytes,wall,(wall>0?bytes*8/wall/1000000:0),(sec>0?bytes*8/sec/1000000:0),peak*8/1000000}' "$RESULT/upload-results.log"
+      awk -v wall="$UP_WALL" '{bytes+=$1;sec+=$2;if($3>peak)peak=$3;n++}END{printf "requests=%d bytes=%.0f wall_seconds=%d average_mbps=%.2f active_average_mbps=%.2f peak_mbps=%.2f\n",n,bytes,wall,(wall>0?bytes*8/wall/1000000:0),(sec>0?bytes*8/sec/1000000:0),peak*8/1000000}' "$RESULT/upload-results.log"
     } | tee "$RESULT/summary.txt"
 
     echo "SAMPLE_COUNT=$SAMPLE"
