@@ -303,6 +303,19 @@ jobs:
             pkill -x qemu-system-mipsel 2>/dev/null || true
           fi
 
+      - name: Publish benchmark results in Actions UI
+        if: always()
+        shell: bash
+        run: |
+          SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
+          if [ -s "$SUMMARY" ]; then
+            echo "## R39 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Benchmark summary file was not collected." | tee "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload bandwidth benchmark artifact
         if: always()
         uses: actions/upload-artifact@v4
