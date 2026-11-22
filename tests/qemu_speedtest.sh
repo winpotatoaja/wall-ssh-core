@@ -162,7 +162,7 @@ run_diag_self_test() {
     return 0
 }
 
-# Compare direct and r39 SOCKS5 downloads from two Singapore 100 MB test endpoints.
+# Focused Datapacket direct-vs-r39-SOCKS5 diagnostic retest (100 MB).
 # Each endpoint is downloaded once direct and once through the single SSH SOCKS5 session.
 set -u
 
@@ -323,11 +323,9 @@ main() {
     }
 
     URL_DATAPACKET="http://sgp.download.datapacket.com/100mb.bin"
-    URL_OVH="https://sin1-sgp.speedtest.network.ovh.net/files/100Mb.dat"
 
-    echo "=== 100 MB DIRECT + SOCKS5; EACH REQUEST HAS A HARD 50-SECOND CAP ==="
+    echo "=== SINGLE ENDPOINT DATAPACKET 100 MB DIRECT + SOCKS5; 50-SECOND HARD CAP ==="
     run_endpoint datapacket-singapore "$URL_DATAPACKET"
-    run_endpoint ovh-singapore "$URL_OVH"
 
     kill -TERM "$CORE_PID" 2>/dev/null || :
     WAIT_N=0
@@ -335,7 +333,7 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "R39 100 MB DIRECT VS SOCKS5 SUMMARY (50s hard cap per transfer)"
+      echo "R39 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
       cat "$RESULT/download-results.log"
       echo "--- PAIRS ---"
       cat "$RESULT/pairs.log"
