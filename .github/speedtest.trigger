@@ -1,6 +1,8 @@
-r39 internet bandwidth benchmark retry
+r39 internet bandwidth benchmark
 sdk_run_id=45020186643
 qemu_run_id=45020754464
-workflow_definition=main
-
-retry_after_workflow_yaml_fix=1
+download_size=10MB
+endpoints=cherryservers-singapore,newmediaexpress-singapore
+transfer_cap=11000000_bytes
+per_transfer_timeout=120_seconds
+retries=0
