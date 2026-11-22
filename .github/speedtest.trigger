@@ -1,1 +1,1 @@
-r39 100MiB benchmark rerun: Singapore Datapacket replacement for failed DigitalOcean DNS; 50-second per-transfer hard cap; publish results to Actions summary.
+r39 focused Datapacket diagnostics: corrected /proc stat CPU accounting, per-TID CPU sampling, default-route interface discovery and RX/TX counters; 100MB direct+SOCKS5 only, 50-second hard timeout, no retries, exactly one SSH session.
