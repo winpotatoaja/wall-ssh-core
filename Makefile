@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=39
+PKG_RELEASE:=40
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1
@@ -10,7 +10,7 @@ PKG_BUILD_PARALLEL:=1
 include $(INCLUDE_DIR)/package.mk
 
 # OpenWrt package architectures expose mipsel_24kc through ARCH_PACKAGES.
-# Keep the ChaCha-first TLS policy and MIPS libatomic dependency scoped to
+# Keep the MIPS-specific SSH cipher preference and libatomic dependency scoped to
 # that exact ABI/target only.
 CORE_ARCH_CPPFLAGS:=
 CORE_ARCH_LDLIBS:=
