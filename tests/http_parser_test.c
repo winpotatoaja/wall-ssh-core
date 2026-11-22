@@ -355,14 +355,14 @@ static int run_relay_buffer_capacity_regression(void) {
     rb_t c2s = {0}, s2c = {0};
     int failed = rb_init(&c2s, C2S_RELAY_BUF_SIZE) < 0 ||
                  rb_init(&s2c, S2C_RELAY_BUF_SIZE) < 0;
-    if (!failed && (c2s.cap != 32768 || s2c.cap != 131072)) failed = 1;
+    if (!failed && (c2s.cap != 32768 || s2c.cap != 262144)) failed = 1;
     rb_free(&c2s);
     rb_free(&s2c);
     if (failed) {
         fprintf(stderr, "[FAIL] separate C2S/S2C ring capacities\\n");
         return 1;
     }
-    puts("[PASS] C2S ring=32 KiB and S2C ring=128 KiB");
+    puts("[PASS] C2S ring=32 KiB and S2C ring=256 KiB");
     return 0;
 }
 
