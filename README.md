@@ -152,7 +152,7 @@ Implementasi yang sudah ada pada branch ini:
   tepat satu kali, termasuk jalur shutdown dan invariant failure.
 - Memastikan timeout join tidak menyebabkan worker mengakses storage yang sudah
   dibebaskan atau FD yang sudah dipakai ulang.
-- Menambahkan/menegaskan regresi eksplisit untuk RST, reconnect, dan FD reuse (belum ada assertion khusus yang terverifikasi di QEMU run ini).
+- Regresi RST/reconnect/FD reuse kini ditambahkan pada workflow MT7621 QEMU: helper mengirim RST pada client idle saat fixture menunda body, lalu delapan transfer SOCKS baru berurutan memverifikasi byte dan SHA-256. **Workflow baru belum dijalankan pada source SHA ini.**
 - Menyamakan cakupan assertion native, MIPS, dan QEMU.
 
 **Gerbang kelulusan tahap 3:**
@@ -164,7 +164,7 @@ Implementasi yang sudah ada pada branch ini:
 - Tidak ada task/reference tertinggal, ring buffer yang tidak terkuras, atau
   kegagalan integritas data pada skenario uji.
 
-**Status saat ini:** native regression, OpenWrt SDK cross-build, dan MT7621 QEMU runtime telah lulus untuk source SHA yang tercatat. Tahap 3 masih terbuka untuk audit edge-case RST, reconnect, dan FD reuse serta verifikasi bahwa semua completion/lifetime invariant tercover.
+**Status saat ini:** native regression, OpenWrt SDK cross-build, dan MT7621 QEMU runtime telah lulus untuk source SHA sebelumnya. Assertion RST/reconnect/FD reuse sudah ditambahkan ke workflow, tetapi belum tervalidasi pada source SHA terbaru. Tahap 3 tetap terbuka sampai suite terbaru lulus dan audit completion/lifetime invariant ditutup.
 
 ## Tahap 4 — Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU
 
