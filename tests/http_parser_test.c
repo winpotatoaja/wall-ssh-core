@@ -2019,6 +2019,17 @@ static int run_worker_hup_eagain_regression(void) {
     close(sv[0]);
     close(sv[1]);
 
+    /* A second direction may still hold the FD when the HUP completion is
+     * consumed; detach must defer close instead of closing under that worker. */
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return 1;
+    c = (client_conn_t){.fd = sv[0], .hup_pending = 1};
+    c.lifetime.worker_refs = 1U;
+    settle_c2s_hup_eagain(-1, &c);
+    if (!c.client_eof || !c.client_dead || !c.fd_close_pending ||
+        c.fd != sv[0]) failed = 1;
+    close(sv[0]);
+    close(sv[1]);
+
     if (failed) {
         fprintf(stderr, "[FAIL] worker EAGAIN with pending HUP/RDHUP must settle EOF without rearming read\\n");
         return 1;
