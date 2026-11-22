@@ -102,6 +102,19 @@ static long detect_available_cpu_count(void) {
     return online_count > 0 ? online_count : 1;
 }
 
+/* CPU count selects auxiliary socket-I/O threads only. */
+static int ssh_session_count_for_cpu_count(long cpu_count) {
+    (void)cpu_count;
+    return 1;
+}
+
+static uint32_t io_worker_count_for_cpu_count(long cpu_count) {
+    if (cpu_count < 1L) return 1U;
+    if (cpu_count > (long)IO_WORKER_POOL_MAX_WORKERS)
+        return IO_WORKER_POOL_MAX_WORKERS;
+    return (uint32_t)cpu_count;
+}
+
 static long g_detected_cpu_count = 1;
 static uint32_t g_io_worker_count = 1U;
 static int g_worker_count_auto = 1;
@@ -5799,10 +5812,7 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
     g_worker_count_auto = 1;
     /* CPU topology sizes only the auxiliary socket-I/O pool. The process
      * still starts exactly one SSH Owner and one upstream SSH session. */
-    g_io_worker_count = (uint32_t)(g_detected_cpu_count > (long)IO_WORKER_POOL_MAX_WORKERS
-                                      ? IO_WORKER_POOL_MAX_WORKERS
-                                      : g_detected_cpu_count);
-    if (g_io_worker_count == 0U) g_io_worker_count = 1U;
+    g_io_worker_count = io_worker_count_for_cpu_count(g_detected_cpu_count);
     *out_count = 1;
     fprintf(stderr,
             "[CPU] detected=%ld io_workers=%u/%u SSH_sessions=1 mode=single-owner; "
