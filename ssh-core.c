@@ -2583,6 +2583,12 @@ static void start_closing_client(int epfd, client_conn_t *c) {
     c->state = ST_CLOSING;
 }
 
+static int client_read_epoll_allowed(const client_conn_t *c) {
+    return c && c->fd >= 0 && !c->client_eof && !c->client_dead &&
+           !c->hup_pending && !c->rdhup_pending &&
+           !c->c2s_worker_inflight && rb_free_space(&c->c2s) > 0U;
+}
+
 static uint32_t client_rdhup_flag(const client_conn_t *c) {
     return (!c->client_eof && !c->rdhup_pending && !c->hup_pending && !c->client_dead)
                ? EPOLLRDHUP
@@ -3268,8 +3274,7 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
 
         if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
             uint32_t want = client_rdhup_flag(c);
-            if (!c->client_eof && !c->c2s_worker_inflight &&
-                rb_free_space(&c->c2s) > 0) want |= EPOLLIN;
+            if (client_read_epoll_allowed(c)) want |= EPOLLIN;
             if ((c->s2c.used > 0 && !c->s2c_worker_inflight) ||
                 c->ctrl_len > 0) want |= EPOLLOUT;
             update_client_epoll(epfd, c, want);
@@ -3380,9 +3385,7 @@ static int drain_io_worker_completions(int epfd,
                             handle_client_io(epfd, c, EPOLLOUT);
                         else {
                             uint32_t want = client_rdhup_flag(c);
-                            if (!c->client_eof && !c->c2s_worker_inflight &&
-                                rb_free_space(&c->c2s) > 0U)
-                                want |= EPOLLIN;
+                            if (client_read_epoll_allowed(c)) want |= EPOLLIN;
                             if ((c->s2c.used > 0U && !c->s2c_worker_inflight) ||
                                 c->ctrl_len > 0U)
                                 want |= EPOLLOUT;
@@ -3449,10 +3452,7 @@ static int drain_io_worker_completions(int epfd,
                             (c->hup_pending ? EPOLLHUP : EPOLLRDHUP));
                     } else {
                         uint32_t want = client_rdhup_flag(c);
-                        if (!c->client_eof && !c->hup_pending &&
-                            !c->rdhup_pending && !c->c2s_worker_inflight &&
-                            rb_free_space(&c->c2s) > 0U)
-                            want |= EPOLLIN;
+                        if (client_read_epoll_allowed(c)) want |= EPOLLIN;
                         if ((c->s2c.used > 0U && !c->s2c_worker_inflight) ||
                             c->ctrl_len > 0U)
                             want |= EPOLLOUT;
@@ -3637,7 +3637,7 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
 
     if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
         uint32_t want = client_rdhup_flag(c);
-        if (!c->client_eof && rb_free_space(&c->c2s) > 0) want |= EPOLLIN;
+        if (client_read_epoll_allowed(c)) want |= EPOLLIN;
         if ((c->s2c.used > 0 && !c->s2c_worker_inflight) ||
             c->ctrl_len > 0) want |= EPOLLOUT;
         update_client_epoll(epfd, c, want);
@@ -4411,8 +4411,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
 
             if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
                 uint32_t want = client_rdhup_flag(c);
-                if (upstream_client_write_allowed(u) && !c->client_eof &&
-                    !c->c2s_worker_inflight && rb_free_space(&c->c2s) > 0)
+                if (upstream_client_write_allowed(u) && client_read_epoll_allowed(c))
                     want |= EPOLLIN;
                 if ((c->s2c.used > 0 && !c->s2c_worker_inflight) ||
                     c->ctrl_len > 0) want |= EPOLLOUT;
