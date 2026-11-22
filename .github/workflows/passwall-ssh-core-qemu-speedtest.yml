@@ -31,7 +31,7 @@ concurrency:
 jobs:
   internet-bandwidth:
     name: Download through r37 SOCKS5
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - name: Checkout benchmark script only
@@ -85,9 +85,36 @@ jobs:
             mkdir -p "$EMU_DIR/presets"
             cp -a "$EMU_DIR/Router-Emulator/presets/." "$EMU_DIR/presets/"
           fi
-          test -x "$EMU_DIR/qemu/qemu-system-mipsel"
-          test -f "$EMU_DIR/presets/zbtlink-zbt-wg3526-16m.ini"
-          echo "EMU_DIR=$(readlink -f "$EMU_DIR")" >> "$GITHUB_ENV"
+          QEMU_MIPSEL="$EMU_DIR/qemu/qemu-system-mipsel"
+          if [ ! -x "$QEMU_MIPSEL" ]; then
+            echo "Missing executable QEMU MIPS binary: $QEMU_MIPSEL"
+            ls -la "$EMU_DIR/qemu" 2>&1 || true
+            false
+          fi
+          "$QEMU_MIPSEL" --version
+          if "$QEMU_MIPSEL" -M help > /tmp/mips-qemu-machines.txt 2>/tmp/mips-qemu-machines.err; then
+            echo "QEMU machine help succeeded."
+          else
+            QEMU_RC=$?
+            echo "QEMU machine help failed with status $QEMU_RC"
+            cat /tmp/mips-qemu-machines.err
+            cat /tmp/mips-qemu-machines.txt
+            false
+          fi
+          cat /tmp/mips-qemu-machines.txt
+          if ! grep -qi 'mt7621-router' /tmp/mips-qemu-machines.txt; then
+            echo "QEMU binary does not advertise the MT7621 machine."
+            false
+          fi
+          PRESET_FILE="$EMU_DIR/presets/zbtlink-zbt-wg3526-16m.ini"
+          if [ ! -f "$PRESET_FILE" ]; then
+            echo "ZBT-WG3526-16M preset not found in downloaded preset archive."
+            find "$EMU_DIR" -maxdepth 4 -type f -iname '*wg3526*' -print
+            false
+          fi
+          echo "Preset file: $PRESET_FILE"
+          EMU_DIR="$(readlink -f "$EMU_DIR")"
+          echo "EMU_DIR=$EMU_DIR" >> "$GITHUB_ENV"
 
           IB_BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
           IB_FILE="openwrt-imagebuilder-24.10.7-ramips-mt7621.Linux-x86_64.tar.zst"
@@ -96,7 +123,9 @@ jobs:
           tar --zstd -xf /tmp/openwrt-imagebuilder.tar.zst
           IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-24.10.7-ramips-mt7621*' -print -quit)"
           test -n "$IB_DIR"
-          echo "IB_DIR=$(readlink -f "$IB_DIR")" >> "$GITHUB_ENV"
+          IB_DIR="$(readlink -f "$IB_DIR")"
+          test -f "$IB_DIR/Makefile"
+          echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
 
           ssh-keygen -q -t ed25519 -N "" -f "$RUNNER_TEMP/mips-vm-key"
           FILES_DIR="$RUNNER_TEMP/mips-image-files"
@@ -108,6 +137,7 @@ jobs:
           SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*zbtlink-zbt-wg3526-16m*squashfs-sysupgrade.bin' -print -quit)"
           test -n "$SYSUP"
           SYSUP="$(readlink -f "$SYSUP")"
+          test -s "$SYSUP"
 
           cd "$EMU_DIR"
           BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
