@@ -1,6 +1,12 @@
 name: R37 Internet Bandwidth Benchmark (QEMU)
 
 on:
+  push:
+    branches:
+      - phase3/io-worker-pool-foundation
+    paths:
+      - ".github/workflows/passwall-ssh-core-qemu-speedtest.yml"
+      - "tests/qemu_speedtest.sh"
   workflow_dispatch:
     inputs:
       duration:
@@ -186,14 +192,7 @@ jobs:
           ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 'mkdir -p /tmp/mips-test'
           IPK="$(find "$GITHUB_WORKSPACE/package" -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
-          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            "$IPK" "$GITHUB_WORKSPACE/tests/qemu_speedtest.sh" \
-            root@127.0.0.1:/tmp/mips-test/
-          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null root@127.0.0.1 ' \
-              set -e
-              opkg install /tmp/mips-test/passwall-ssh-core*.ipk
-              cat > /tmp/mips-test/tcp.env <<EOF
+          cat > "$RUNNER_TEMP/tcp.env" <<'TCP_ENV'
           TRANSPORT=TCP
           HOST=10.0.2.2
           HOST_PORT=2222
@@ -208,10 +207,13 @@ jobs:
           IDLE_TIMEOUT=600
           WORKERS=2
           LOG_BACKPRESSURE=1
-          EOF
-              chmod 0700 /tmp/mips-test/qemu_speedtest.sh
-              /tmp/mips-test/qemu_speedtest.sh ${{ inputs.duration }}
-            '
+          TCP_ENV
+          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            "$IPK" "$GITHUB_WORKSPACE/tests/qemu_speedtest.sh" "$RUNNER_TEMP/tcp.env" \
+            root@127.0.0.1:/tmp/mips-test/
+          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
+            "opkg install /tmp/mips-test/passwall-ssh-core*.ipk && chmod 0700 /tmp/mips-test/qemu_speedtest.sh && /tmp/mips-test/qemu_speedtest.sh ${{ inputs.duration }}"
 
       - name: Collect benchmark results
         if: always()
