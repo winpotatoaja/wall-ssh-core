@@ -1,6 +1,6 @@
 #!/bin/sh
-# Download exactly one test file from each public endpoint through r38 SOCKS5.
-# No upload test and no local fixture benchmark.
+# Compare direct and r39 SOCKS5 downloads from two public 100 MB endpoints.
+# Each endpoint is downloaded directly once and through the single SSH SOCKS5 session once.
 set -u
 
 main() {
@@ -31,7 +31,7 @@ main() {
         awk '{s=$0;sub(/^.*\\) /,"",s);n=split(s,a," ");if(n>=13)printf "%.0f",a[12]+a[13];else print 0}' "/proc/$1/stat" 2>/dev/null
     }
 
-    echo "R38_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R39_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     echo "SOCKS5=$SOCKS"
     echo "GUEST=$(uname -a)"
     echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
@@ -108,6 +108,12 @@ main() {
             echo "ERROR: $LABEL produced no curl statistics" | tee -a "$RESULT/errors.log"
             return 2
         fi
+        BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$OUT")
+        case "$BYTES" in ''|*[!0-9]*) BYTES=0;; esac
+        if [ "$BYTES" -lt 95000000 ]; then
+            echo "ERROR: $LABEL mode=$MODE downloaded only $BYTES bytes; expected a 100 MB test file" | tee -a "$RESULT/errors.log"
+            return 2
+        fi
         awk -v label="$LABEL" -v mode="$MODE" -v wall="$WALL" '{
           bytes=$1;sec=$2;speed=$3;code=$4;ip=$5;type=$6;
           printf "%s mode=%s bytes=%.0f (%.2f MiB) wall_seconds=%d curl_seconds=%.3f average_MBps=%.2f curl_MBps=%.2f http_code=%s remote_ip=%s content_type=%s\n",
@@ -129,7 +135,7 @@ main() {
         return 2
     }
 
-    echo "=== PHASE 2: SAME URLS THROUGH R38 SSH SOCKS5 ==="
+    echo "=== PHASE 2: SAME URLS THROUGH R39 SSH SOCKS5 ==="
     test_download vultr-singapore "$URL_VULTR" socks5 || {
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
@@ -145,14 +151,23 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "R38 DIRECT VS SOCKS5 SUMMARY"
+      echo "R39 DIRECT VS SOCKS5 SUMMARY"
       cat "$RESULT/download-results.log"
       echo "SAMPLE_COUNT=$SAMPLE"
       echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
     } | tee "$RESULT/summary.txt"
 
+    for LABEL in vultr-singapore linode-singapore; do
+        DIRECT_BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$RESULT/$LABEL-direct.curl.log")
+        SOCKS_BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$RESULT/$LABEL-socks5.curl.log")
+        if [ "$DIRECT_BYTES" != "$SOCKS_BYTES" ]; then
+            echo "ERROR: $LABEL direct/SOCKS byte counts differ: direct=$DIRECT_BYTES socks5=$SOCKS_BYTES" | tee -a "$RESULT/errors.log"
+            return 2
+        fi
+    done
+
     echo "RESULT_DIR=$RESULT"
-    echo "R38_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R39_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     [ ! -s "$RESULT/errors.log" ] || return 2
     [ "$(wc -l < "$RESULT/download-results.log")" -ge 4 ] || return 2
     return 0
