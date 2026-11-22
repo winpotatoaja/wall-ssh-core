@@ -293,12 +293,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r39-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r40-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r39-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r39-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r39-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r40-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r40-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r40-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -327,7 +327,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r39-qemu-internet-bandwidth
+          name: r40-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14
@@ -556,12 +556,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r39-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r40-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r39-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r39-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r39-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r40-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r40-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r40-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -590,7 +590,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r39-qemu-internet-bandwidth
+          name: r40-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14
@@ -821,12 +821,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r39-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r40-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r39-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r39-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r39-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r40-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r40-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r40-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -855,7 +855,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r39-qemu-internet-bandwidth
+          name: r40-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14
@@ -1087,12 +1087,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r39-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r40-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r39-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r39-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r39-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r40-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r40-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r40-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -1121,7 +1121,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r39-qemu-internet-bandwidth
+          name: r40-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14
@@ -1350,12 +1350,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r39-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r40-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r39-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r39-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r39-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r40-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r40-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r40-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -1384,7 +1384,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r39-qemu-internet-bandwidth
+          name: r40-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14
@@ -1612,12 +1612,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r39-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r40-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r39-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r39-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r39-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r40-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r40-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r40-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -1646,7 +1646,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r39-qemu-internet-bandwidth
+          name: r40-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14
@@ -1878,12 +1878,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r39-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r40-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r39-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r39-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r39-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r40-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r40-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r40-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -1912,7 +1912,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r39-qemu-internet-bandwidth
+          name: r40-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14
@@ -2141,12 +2141,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r39-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r40-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r39-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r39-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r39-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r40-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r40-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r40-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -2175,7 +2175,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r39-qemu-internet-bandwidth
+          name: r40-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14
