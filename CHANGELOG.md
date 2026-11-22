@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Reduce the isolated r39 internet bandwidth benchmark from 100 MB to two Singapore-hosted files of about 10 MB each: Cherry Servers `https://speedtest.sg.cherryservers.com/test-10mb` (10,485,760 bytes) and NewMedia Express `https://sg1.newmediaexpress.com/10MB.test` (10,000,000 bytes). Four total transfers are about 40 MB. Curl has a hard 11,000,000-byte file cap, 120-second transfer timeout, 15-second connect timeout, and no automatic retries; each download must deliver at least 9,500,000 bytes and direct/SOCKS byte counts must match. This remains a bandwidth-only workflow and preserves one SSH session.
+
 - Queue the isolated r39 Internet bandwidth benchmark on branch `benchmark/r39-internet-speedtest`. It downloads the Vultr Singapore and Linode Singapore 100 MB files once direct and once through the r39 SOCKS5 relay, verifies each transfer is at least 95,000,000 bytes and that direct/SOCKS byte counts match, and records CPU/network samples. It uses the already verified SDK artifact from run `45020186643`; no native/MIPS regression suite is run in this workflow.
 
 - Complete native regressions and OpenWrt 24.10.7 mipsel_24kc SDK build for S2C direct nonblocking r39. SDK run `45020186643` produced the source-matched IPK artifact `14753870688`, version `1.0.0-r39`, architecture `mipsel_24kc`, SHA-256 `702b00fc6c5da703a9fb848f39e0a7418d7766df10746d960e5dca032eba9350`. MT7621 QEMU run `45020754464` passed (`MIPS TEST STATUS: 0`, artifact `14754055916`); only the dedicated Internet bandwidth benchmark remains.
