@@ -94,17 +94,19 @@ main() {
     done
     wait "$DL_PID"
     DL_RC=$?
+    WALL_END=$(date +%s)
+    WALL_SECONDS=$((WALL_END - START))
 
     kill -TERM "$CORE_PID" 2>/dev/null || :
     WAIT_N=0
     while kill -0 "$CORE_PID" 2>/dev/null && [ "$WAIT_N" -lt 10 ]; do sleep 1; WAIT_N=$((WAIT_N+1)); done
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
-    awk '
-    {bytes+=$1;seconds+=$2;speed+=$3;if($3>peak)peak=$3;n++}
+    awk -v wall="$WALL_SECONDS" '
+    {bytes+=$1;seconds+=$2;if($3>peak)peak=$3;n++}
     END {
-      printf "downloads=%d bytes=%.0f transfer_seconds=%.3f avg_mbps=%.2f peak_curl_mbps=%.2f\\n",
-        n,bytes,seconds,(seconds>0?bytes*8/seconds/1000000:0),peak*8/1000000
+      printf "downloads=%d bytes=%.0f wall_seconds=%.0f wall_avg_mbps=%.2f active_transfer_seconds=%.3f active_avg_mbps=%.2f peak_curl_mbps=%.2f\\n",
+        n,bytes,wall,(wall>0?bytes*8/wall/1000000:0),seconds,(seconds>0?bytes*8/seconds/1000000:0),peak*8/1000000
     }' "$RESULT/curl-results.log" | tee "$RESULT/summary.txt"
     echo "SAMPLE_COUNT=$SAMPLE CURL_RC=$DL_RC"
     echo "RESULT_DIR=$RESULT"
