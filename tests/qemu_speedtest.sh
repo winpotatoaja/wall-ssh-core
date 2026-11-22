@@ -169,7 +169,7 @@ run_diag_self_test() {
         rm -rf "$TEST_ROOT"
         return 1
     fi
-    PROC_TEST=$(awk -v a=68 -v b=168 -v ref="$CPU_REFERENCE" 'BEGIN{d=b-a;if(d<0)d=0;printf "%.1f",ref>0?100*d/ref:0}')
+    PROC_TEST=$(awk -v a=68 -v b=168 -v ref="$CPU_REFERENCE" 'BEGIN{d=b-a;if(d<0)d=0;printf "%.1f",(ref>0?100*d/ref:0)}')
     if [ "$PROC_TEST" != "100.0" ]; then
         echo "DIAG SELF-TEST FAIL: process CPU normalization is incorrect: $PROC_TEST"
         rm -rf "$TEST_ROOT"
@@ -264,7 +264,7 @@ main() {
         CUR_TICKS=$(proc_ticks "$CORE_PID")
         thread_snapshot "$CORE_PID" "" > "$RESULT/threads.now"
         CPU_REFERENCE=$(cpu_reference_ticks "$RESULT/cpu.prev" "$RESULT/cpu.now")
-        PROC_CPU=$(awk -v a="$PREV_TICKS" -v b="$CUR_TICKS" -v ref="$CPU_REFERENCE" 'BEGIN{d=b-a;if(d<0)d=0;printf "%.1f",ref>0?100*d/ref:0}')
+        PROC_CPU=$(awk -v a="$PREV_TICKS" -v b="$CUR_TICKS" -v ref="$CPU_REFERENCE" 'BEGIN{d=b-a;if(d<0)d=0;printf "%.1f",(ref>0?100*d/ref:0)}')
         THREAD_LINE=$(thread_cpu_line "$RESULT/threads.prev" "$RESULT/threads.now" "$CPU_REFERENCE")
         CPU_LINE=$(awk 'FNR==NR{busy[$1]=$2;total[$1]=$3;next}{dt=$3-total[$1];db=$2-busy[$1];if(dt>0){p=100*db/dt;if($1=="cpu")all=p;else cores=cores sprintf("%s=%.0f%%,",$1,p)}}END{if(all=="")all=0;printf "sys=%.0f%% cores=[%s]",all,cores}' "$RESULT/cpu.prev" "$RESULT/cpu.now")
         NET_LINE=$(net_rate_line "$RESULT/net.prev" "$RESULT/net.now" "$DEFAULT_IFACE" "$SAMPLE_ELAPSED")
