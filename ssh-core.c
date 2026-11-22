@@ -1092,13 +1092,19 @@ static char *translate_payload(const char *raw, const app_cfg_t *cfg, int is_tls
 
     for (int mode = 0; mode < 2; mode++) {
         const char *tag = (mode == 0) ? "[rotate=" : "[random=";
+        char *scan = cur;
         char *hit;
-        while ((hit = strstr(cur, tag)) != NULL) {
+        while (scan && (hit = strstr(scan, tag)) != NULL) {
             char *endb = strchr(hit + strlen(tag), ']');
             if (!endb) break;
+            size_t prefix_len = (size_t)(hit - cur);
             size_t list_len = (size_t)(endb - (hit + strlen(tag)));
-            char *list = malloc(list_len + 1);
-            if (!list) abort();
+            char *list = malloc(list_len + 1U);
+            if (!list) {
+                log_red("Memori tidak cukup saat memproses payload %s", tag);
+                free(cur);
+                return NULL;
+            }
             memcpy(list, hit + strlen(tag), list_len);
             list[list_len] = '\0';
 
@@ -1134,18 +1140,34 @@ static char *translate_payload(const char *raw, const app_cfg_t *cfg, int is_tls
                     chosen = items[sel];
                     rotate_tag_no++;
                 } else {
-                    int idx=rand_idx(nitems);
-                    if(idx<0){log_red("RAND_bytes gagal saat memilih payload random");free(list);free(cur);return NULL;}
-                    chosen=items[idx];
+                    int idx = rand_idx(nitems);
+                    if (idx < 0) {
+                        log_red("RAND_bytes gagal saat memilih payload random");
+                        free(list);
+                        free(cur);
+                        return NULL;
+                    }
+                    chosen = items[idx];
                 }
             }
+
+            size_t chosen_len = strlen(chosen);
             sbuf_t sb = {0};
-            sbuf_append(&sb, cur, (size_t)(hit - cur));
-            sbuf_append(&sb, chosen, strlen(chosen));
+            sbuf_append(&sb, cur, prefix_len);
+            sbuf_append(&sb, chosen, chosen_len);
             sbuf_append(&sb, endb + 1, strlen(endb + 1));
             free(list);
+            if (!sb.data) {
+                sb.data = strdup("");
+                if (!sb.data) {
+                    free(cur);
+                    return NULL;
+                }
+            }
             free(cur);
             cur = sb.data;
+            /* Do not parse a replacement recursively. Continue after it. */
+            scan = cur + prefix_len + chosen_len;
         }
     }
     return cur;
@@ -2159,7 +2181,8 @@ static int tcp_connect_addrinfo_list(const struct addrinfo *res, int family,
                                       &candidate_error, &error_size) < 0) {
                     candidate_error = errno;
                 } else if (candidate_error == 0 &&
-                           (pfds[i].revents & POLLOUT)) {
+                           (pfds[i].revents & POLLOUT) &&
+                           !(pfds[i].revents & (POLLERR | POLLHUP | POLLNVAL))) {
                     int winner = candidates[i].fd;
                     candidates[i].fd = -1;
                     for (size_t j = 0; j < count; j++)
@@ -2455,29 +2478,13 @@ static void start_closing_client(int epfd, client_conn_t *c) {
         g_pending_op == PENDING_OPEN) {
         c->abort_on_open = 1;
         c->cleanup_deadline_ms = 0;
-        if (c->lifetime.worker_refs != 0U) {
-            if (c->fd >= 0 && c->in_epoll) {
-                (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
-                c->in_epoll = 0;
-                c->epoll_events = 0;
-            }
-        } else {
-            detach_client_fd(epfd, c);
-        }
+        detach_client_fd(epfd, c);
         return;
     }
     if (c == g_pending_client && g_pending_op != PENDING_NONE) {
         c->abort_on_pending = 1;
         set_client_cleanup_deadline(c);
-        if (c->lifetime.worker_refs != 0U) {
-            if (c->fd >= 0 && c->in_epoll) {
-                (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
-                c->in_epoll = 0;
-                c->epoll_events = 0;
-            }
-        } else {
-            detach_client_fd(epfd, c);
-        }
+        detach_client_fd(epfd, c);
         return;
     }
     /* libssh2 channel_write may have built a packet before an SSL callback
@@ -2486,43 +2493,19 @@ static void start_closing_client(int epfd, client_conn_t *c) {
     if (c->channel && c->write_pending && !c->write_waiting_window) {
         c->abort_on_pending = 1;
         set_client_cleanup_deadline(c);
-        if (c->lifetime.worker_refs != 0U) {
-            if (c->fd >= 0 && c->in_epoll) {
-                (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
-                c->in_epoll = 0;
-                c->epoll_events = 0;
-            }
-        } else {
-            detach_client_fd(epfd, c);
-        }
+        detach_client_fd(epfd, c);
         return;
     }
     if (c == g_opening_client && !c->channel) {
         /* The channel-open hard timeout owns this lifetime (30 seconds). */
         c->abort_on_open = 1;
-        if (c->lifetime.worker_refs != 0U) {
-            if (c->fd >= 0 && c->in_epoll) {
-                (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
-                c->in_epoll = 0;
-                c->epoll_events = 0;
-            }
-        } else {
-            detach_client_fd(epfd, c);
-        }
+        detach_client_fd(epfd, c);
         return;
     }
     /* A channel read EAGAIN and a zero-window write wait do not retain an
      * application buffer in libssh2. Active writes are pinned by the guard
      * above even when their TLS callback is waiting for inbound readiness. */
-    if (c->lifetime.worker_refs != 0U) {
-            if (c->fd >= 0 && c->in_epoll) {
-                (void)epoll_ctl(epfd, EPOLL_CTL_DEL, c->fd, NULL);
-                c->in_epoll = 0;
-                c->epoll_events = 0;
-            }
-        } else {
-            detach_client_fd(epfd, c);
-        }
+    detach_client_fd(epfd, c);
     if (c->channel) {
         c->write_pending = 0;
         c->write_pending_head = 0;
@@ -3382,14 +3365,32 @@ static int drain_io_worker_completions(int epfd,
                     detach_client_fd(epfd, c);
                 }
 
+                if ((completion->status == EAGAIN ||
+                     completion->status == EWOULDBLOCK) &&
+                    (c->hup_pending || c->rdhup_pending) && !c->client_eof) {
+                    /* HUP/RDHUP says no more client bytes can arrive. If the
+                     * nonblocking worker observed EAGAIN, stop retrying this
+                     * edge forever and serialize the final EOF to SSH. */
+                    c->client_eof = 1;
+                    c->need_send_eof = 1;
+                    if (c->hup_pending) {
+                        c->client_dead = 1;
+                        detach_client_fd(epfd, c);
+                    }
+                    c->hup_pending = 0;
+                    c->rdhup_pending = 0;
+                }
+
                 if (c->fd >= 0 && c->state == ST_RELAY) {
                     if ((c->hup_pending || c->rdhup_pending) &&
+                        completion->status == 0 && completion->result_len > 0U &&
                         !c->client_eof && rb_free_space(&c->c2s) > 0U) {
                         handle_client_io(epfd, c, EPOLLIN |
                             (c->hup_pending ? EPOLLHUP : EPOLLRDHUP));
                     } else {
                         uint32_t want = client_rdhup_flag(c);
-                        if (!c->client_eof && !c->c2s_worker_inflight &&
+                        if (!c->client_eof && !c->hup_pending &&
+                            !c->rdhup_pending && !c->c2s_worker_inflight &&
                             rb_free_space(&c->c2s) > 0U)
                             want |= EPOLLIN;
                         if ((c->s2c.used > 0U && !c->s2c_worker_inflight) ||
@@ -5704,7 +5705,7 @@ static int core_worker_run(int argc, char **argv) {
         upstream_watch_fd = -1;
     }
     if (ssl_ctx) SSL_CTX_free(ssl_ctx);
-    close(upstream_fd);
+    if (upstream_fd >= 0) close(upstream_fd);
     return exit_code;
 
 fail_cleanup:
