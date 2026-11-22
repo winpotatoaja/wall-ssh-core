@@ -243,7 +243,7 @@ jobs:
               target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
   vm:
-    if: ${{ inputs.sdk_run_id != '' || contains(github.event.head_commit.message, '[mips-stage=vm]') }}
+    if: ${{ true }}
     runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
