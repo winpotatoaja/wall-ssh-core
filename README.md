@@ -273,6 +273,8 @@ Implementasi pada source:
   completion eventfd didaftarkan ke epoll dan semua worker dipantau saat idle.
 - Tetap hanya ada satu SSH Owner, satu upstream TCP/TLS, dan satu autentikasi/
   sesi SSH. Opsi legacy `-workers` tidak mengubah jumlah sesi SSH.
+- Log CPU mempertahankan format diagnostik single-session yang dipakai regression
+  harness; jumlah auxiliary I/O worker dilaporkan pada baris `[IO worker]` terpisah.
 - Worker tetap hanya menjalankan operasi socket client; libssh2 dan TLS Engine
   tetap berada pada owner masing-masing.
 
