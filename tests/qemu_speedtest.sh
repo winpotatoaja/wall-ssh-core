@@ -1,5 +1,5 @@
 #!/bin/sh
-# Download exactly one test file from each public endpoint through r37 SOCKS5.
+# Download exactly one test file from each public endpoint through r38 SOCKS5.
 # No upload test and no local fixture benchmark.
 set -u
 
@@ -31,7 +31,7 @@ main() {
         awk '{s=$0;sub(/^.*\\) /,"",s);n=split(s,a," ");if(n>=13)printf "%.0f",a[12]+a[13];else print 0}' "/proc/$1/stat" 2>/dev/null
     }
 
-    echo "R37_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R38_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     echo "SOCKS5=$SOCKS"
     echo "GUEST=$(uname -a)"
     echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
@@ -129,7 +129,7 @@ main() {
         return 2
     }
 
-    echo "=== PHASE 2: SAME URLS THROUGH R37 SSH SOCKS5 ==="
+    echo "=== PHASE 2: SAME URLS THROUGH R38 SSH SOCKS5 ==="
     test_download vultr-singapore "$URL_VULTR" socks5 || {
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
@@ -145,14 +145,14 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "R37 DIRECT VS SOCKS5 SUMMARY"
+      echo "R38 DIRECT VS SOCKS5 SUMMARY"
       cat "$RESULT/download-results.log"
       echo "SAMPLE_COUNT=$SAMPLE"
       echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
     } | tee "$RESULT/summary.txt"
 
     echo "RESULT_DIR=$RESULT"
-    echo "R37_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R38_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     [ ! -s "$RESULT/errors.log" ] || return 2
     [ "$(wc -l < "$RESULT/download-results.log")" -ge 4 ] || return 2
     return 0
