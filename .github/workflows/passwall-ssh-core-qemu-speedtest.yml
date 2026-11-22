@@ -243,7 +243,7 @@ jobs:
               target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
   vm:
-    if: ${{ true }}
+    if: ${{ always() }}
     runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
