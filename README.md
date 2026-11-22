@@ -15,7 +15,7 @@ Branch pengerjaan: `phase3/io-worker-pool-foundation`
 | 1 | Fondasi koneksi dan arsitektur single SSH session | **LULUS** |
 | 2 | TLS Engine, pemisahan kepemilikan TLS/SSH, dan fondasi antrean | **LULUS** |
 | 3 | Integrasi local socket I/O worker ke relay aktif | **LULUS** |
-| 4 | Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU | **BERJALAN — VALIDASI ULANG DIAGNOSTIK** |
+| 4 | Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU | **LULUS FINAL** |
 | 5 | Validasi perangkat OpenWrt MT7621 fisik | **BELUM DIMULAI** |
 
 > Status di atas menggambarkan keadaan source dan catatan pengujian yang tersedia.
@@ -186,7 +186,7 @@ Implementasi yang sudah ada pada branch ini:
 
 ## Tahap 4 — Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU
 
-<badge color="warning">BERJALAN — BASELINE MIPS LULUS; ANALISIS/TUNING BELUM DITUTUP</badge>
+<badge color="success">LULUS FINAL — VALIDASI DAN AUDIT SELESAI</badge>
 
 **Tujuan:** membuktikan implementasi akhir pada target arsitektur, memperbaiki
 regresi yang ditemukan, lalu melakukan tuning berdasarkan pengukuran.
@@ -196,9 +196,9 @@ Urutan kerja:
 2. Build paket dengan OpenWrt 24.10.7 SDK untuk `mipsel_24kc`.
 3. Jalankan paket hasil build tersebut di MT7621 QEMU; verifikasi artifact/source SHA.
 4. Jalankan QEMU OpenWrt x86_64 sebagai pembanding bila workflow terkait berubah.
-6. Evaluasi hasil throughput, CPU/thread, RSS, FD, queue occupancy, backpressure,
+5. Evaluasi hasil throughput, CPU/thread, RSS, FD, queue occupancy, backpressure,
    retransmission, dan latensi; lakukan tuning hanya berdasarkan hasil terukur.
-7. Setelah perubahan tuning, ulangi regression yang terdampak dan validasi akhir.
+6. Setelah perubahan tuning, ulangi regression yang terdampak dan validasi akhir.
 
 **Cakupan pengujian minimum:**
 - Transfer dasar dan multi-client dengan satu SSH session.
@@ -227,7 +227,14 @@ Urutan kerja:
 - Metrik `s2c_epollout_missing=0` pada seluruh 392 interval PERF TCP. TCP retransmit counter: 8 segmen pada TCP dan 9 pada TLS. Backpressure S2C mengisi buffer 131,072/131,072 byte dan kemudian kembali ke 0; log TCP mencatat 15 kejadian penuh dan 14 drain, TLS 2 penuh dan 1 drain selama sampel.
 - Ini adalah baseline pengukuran pertama pada beban empat client yang sama, bukan bukti peningkatan dibanding baseline lama yang memakai beban berbeda. Tidak ada tuning datapath yang diklaim atau dilakukan. Tidak ada dasar terukur untuk mengubah worker count/buffer saat ini; pertahankan satu worker dan gunakan angka ini sebagai baseline pembanding.
 
-**Pekerjaan Tahap 4 yang masih terbuka:** audit sumber metrik dan interpretasi CPU/epoll/backpressure, tentukan apakah ada perubahan tuning yang didukung pengukuran, lalu jalankan regression native + SDK + QEMU baru jika source/datapath berubah. Benchmark beberapa proses/SSH session di `tests/MIPS-MT-BENCHMARK.md` hanya pembanding kapasitas dan bukan bukti worker pool satu-session lebih cepat.
+**Audit akhir dan keputusan tuning:**
+- Audit source mengonfirmasi `s2c_worker_inflight` sengaja menonaktifkan EPOLLOUT selama worker write; metrik `s2c_epollout_missing` kini mengecualikan state tersebut. Jalur epoll mengaktifkan kembali EPOLLOUT setelah completion ketika masih ada data S2C. Ini sesuai dengan ownership worker dan tidak mengubah datapath.
+- Seluruh 392 interval PERF TCP mencatat `s2c_epollout_missing=0`; tidak ada `epoll_ctl_add_fail`, `epoll_ctl_mod_fail`, atau errno pada interval akhir yang direkam. Backpressure S2C mencapai 128 KiB dan kembali kosong setelah client melanjutkan pembacaan.
+- Regression guest mencakup worker pool 50.000 task/eventfd, completion tracker, client lifetime, token, SPSC, TLS Engine, TCP idle RST lalu delapan reconnect dengan SHA-256, TCP/TLS half-close, full-duplex, upload 32 MiB, empat client download bersamaan, TLS 1.3/SNI, dan graceful SIGTERM. Guest melaporkan `MIPS TEST STATUS: 0`.
+- Keputusan: **tidak melakukan tuning datapath**. Pengukuran ini adalah baseline pertama untuk empat client pada satu SSH session; tidak ada A/B yang sebanding untuk membuktikan bahwa perubahan buffer, worker count, atau scheduler akan meningkatkan hasil. Mengubah parameter tanpa pembanding akan menjadi tebakan. Pertahankan satu I/O worker dan kapasitas queue saat ini sebagai baseline.
+- QEMU TCG adalah validasi fungsional dan perbandingan relatif; throughput di emulator bukan prediksi throughput router MT7621 fisik.
+
+**Status akhir Tahap 4:** seluruh gerbang native, OpenWrt 24.10.7 MIPS SDK, MT7621 QEMU, pemeriksaan source metrik, dan analisis baseline telah selesai. Tidak ada tuning yang terbukti perlu dilakukan, sehingga Tahap 4 ditutup **LULUS FINAL** tanpa klaim speedup. Tahap 5 membutuhkan pengujian pada router MT7621 fisik. Benchmark beberapa proses/SSH session di `tests/MIPS-MT-BENCHMARK.md` tetap hanya pembanding kapasitas dan bukan bukti worker pool satu-session lebih cepat.
 
 ## Tahap 5 — Validasi perangkat OpenWrt MT7621 fisik
 
@@ -283,4 +290,4 @@ Hasil lama tidak boleh dianggap mewakili source terbaru jika ada perubahan sesud
   **LULUS**.
 - Tahap 5 hanya dapat dinyatakan lulus setelah pengujian pada router MT7621 fisik.
 
-**Validasi baseline Tahap 4:** native regression run `44984703377`, OpenWrt 24.10.7 MIPS SDK run `44984703379` (artifact `14739159030`), dan MT7621 QEMU run `44985100177` (artifact `14739727217`) lulus. Kode yang diuji: `e2f150f27b3218022559f15a59a4a6fd59de70c0`; QEMU checkout `74bc19850024605d4f8d737f5cfbd57233744cfd` hanya menambahkan catatan dokumentasi. Hasil empat client TCP dan empat client TLS/SNI serta pengukuran CPU/RSS/backpressure dicatat pada bagian Tahap 4. Analisis/tuning tetap terbuka; belum ada klaim peningkatan performa.
+**Tahap 4 LULUS FINAL:** native regression run `44984703377`, OpenWrt 24.10.7 MIPS SDK run `44984703379` (artifact `14739159030`), dan MT7621 QEMU run `44985100177` (artifact `14739727217`) lulus. Kode yang diuji: `e2f150f27b3218022559f15a59a4a6fd59de70c0`; QEMU checkout `74bc19850024605d4f8d737f5cfbd57233744cfd` hanya menambahkan catatan dokumentasi. Pengukuran CPU/RSS/backpressure serta keputusan tidak melakukan tuning tanpa A/B yang sebanding dicatat pada bagian Tahap 4. Tidak ada klaim speedup. Tahap 5 adalah validasi pada router MT7621 fisik.
