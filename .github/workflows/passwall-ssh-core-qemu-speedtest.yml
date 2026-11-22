@@ -193,7 +193,7 @@ jobs:
             --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
           test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
           test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-          echo "R39 package and MT7621 QEMU firmware are ready."
+          echo "R40 package and MT7621 QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
         shell: bash
@@ -316,7 +316,7 @@ jobs:
         run: |
           SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
           if [ -s "$SUMMARY" ]; then
-            echo "## R39 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "## R40 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -456,7 +456,7 @@ jobs:
             --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
           test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
           test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-          echo "R39 package and MT7621 QEMU firmware are ready."
+          echo "R40 package and MT7621 QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
         shell: bash
@@ -579,7 +579,7 @@ jobs:
         run: |
           SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
           if [ -s "$SUMMARY" ]; then
-            echo "## R39 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "## R40 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -721,7 +721,7 @@ jobs:
             --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
           test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
           test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-          echo "R39 package and MT7621 QEMU firmware are ready."
+          echo "R40 package and MT7621 QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
         shell: bash
@@ -844,7 +844,7 @@ jobs:
         run: |
           SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
           if [ -s "$SUMMARY" ]; then
-            echo "## R39 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "## R40 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -987,7 +987,7 @@ jobs:
             --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
           test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
           test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-          echo "R39 package and MT7621 QEMU firmware are ready."
+          echo "R40 package and MT7621 QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
         shell: bash
@@ -1110,7 +1110,7 @@ jobs:
         run: |
           SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
           if [ -s "$SUMMARY" ]; then
-            echo "## R39 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "## R40 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -1250,7 +1250,7 @@ jobs:
             --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
           test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
           test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-          echo "R39 package and MT7621 QEMU firmware are ready."
+          echo "R40 package and MT7621 QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
         shell: bash
@@ -1373,7 +1373,7 @@ jobs:
         run: |
           SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
           if [ -s "$SUMMARY" ]; then
-            echo "## R39 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "## R40 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -1512,7 +1512,7 @@ jobs:
             --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
           test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
           test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-          echo "R39 package and MT7621 QEMU firmware are ready."
+          echo "R40 package and MT7621 QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
         shell: bash
@@ -1635,7 +1635,7 @@ jobs:
         run: |
           SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
           if [ -s "$SUMMARY" ]; then
-            echo "## R39 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "## R40 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -1778,7 +1778,7 @@ jobs:
             --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
           test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
           test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-          echo "R39 package and MT7621 QEMU firmware are ready."
+          echo "R40 package and MT7621 QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
         shell: bash
@@ -1901,7 +1901,7 @@ jobs:
         run: |
           SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
           if [ -s "$SUMMARY" ]; then
-            echo "## R39 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "## R40 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -2041,7 +2041,7 @@ jobs:
             --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
           test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
           test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-          echo "R39 package and MT7621 QEMU firmware are ready."
+          echo "R40 package and MT7621 QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
         shell: bash
@@ -2164,7 +2164,7 @@ jobs:
         run: |
           SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
           if [ -s "$SUMMARY" ]; then
-            echo "## R39 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "## R40 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
           else
