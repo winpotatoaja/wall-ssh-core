@@ -224,7 +224,7 @@ jobs:
 
       - name: Boot MT7621 and run only the internet bandwidth benchmark
         shell: bash
-        timeout-minutes: 35
+        timeout-minutes: 65
         run: |
           set -euo pipefail
           cd "$EMU_DIR"
