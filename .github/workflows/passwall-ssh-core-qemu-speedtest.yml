@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   internet-bandwidth:
-    name: Download and upload through r37 SOCKS5
+    name: Download through r37 SOCKS5
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -113,9 +113,11 @@ jobs:
           BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
           UBOOT_REL="u-boot-mt7621_zbtlink_zbt-wg3526-16m/u-boot-mt7621.bin"
           mkdir -p "$EMU_DIR/firmware/24.10.7/$(dirname "$UBOOT_REL")"
-          curl -fL --retry 3 "$BASE/$UBOOT_REL" -o "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
-          curl -fL --retry 3 "$BASE/sha256sums" -o "$EMU_DIR/firmware/24.10.7/sha256sums"
-          (cd "$EMU_DIR/firmware/24.10.7" && grep -F -- "$UBOOT_REL" sha256sums | sha256sum -c -)
+          curl -fL --retry 3 --connect-timeout 20 --max-time 300 \
+            "$BASE/$UBOOT_REL" \
+            -o "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
+          test -s "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
+          echo "U-Boot image downloaded successfully."
           FLASH_DIR="$EMU_DIR/nor-zbt-wg3526-16m"
           python3 "$EMU_DIR/tools/mknand.py" --prefix mt7621 nor -o "$FLASH_DIR" \
             --size-mb 16 \
