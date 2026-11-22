@@ -9,7 +9,7 @@ permissions:
 
 concurrency:
   group: openwrt24-mipsel-r37-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   sdk:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=sdk]') }}
