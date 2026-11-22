@@ -19,5 +19,6 @@ jobs:
           set -euo pipefail
           curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz -o /tmp/actionlint.tar.gz
           tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          git fetch --no-tags --unshallow origin "$GITHUB_REF_NAME"
           git show ecf630f093c1bab9ae9dddf3672c13569cb1b4a7:.github/workflows/passwall-ssh-core-qemu-speedtest.yml > /tmp/full-speedtest.yml
           /tmp/actionlint -color /tmp/full-speedtest.yml
