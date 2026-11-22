@@ -367,7 +367,7 @@ Patch batch on `phase3/io-worker-pool-foundation`:
 - Payload buffer allocation and size-overflow failures now propagate as errors instead of terminating the process.
 - Upstream inactivity/keepalive, SOCKS handshake, and EMFILE throttling use monotonic millisecond clocks.
 - A shared EPOLLIN gate suppresses client read re-arming while HUP/RDHUP, EOF, an in-flight C2S task, or a full C2S ring is present.
-- Package release bumped to r37.
+- Package release bumped to r38.
 
 **Validation status:** pending fresh native + OpenWrt 24.10.7 `mipsel_24kc` SDK and matching MT7621 QEMU runs. This patch does not change the one-SSH-session architecture. Physical MT7621 router validation remains separate and is not claimed here.
 
@@ -376,7 +376,7 @@ Patch batch on `phase3/io-worker-pool-foundation`:
 
 Audit GitHub Actions run [45011761935](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/45011761935):
 
-- Artifact IPK r37 berhasil diunduh dan validasi versi `1.0.0-r37` serta arsitektur `mipsel_24kc` lolos.
+- Artifact IPK r38 berhasil diunduh dan validasi versi `1.0.0-r38` serta arsitektur `mipsel_24kc` lolos.
 - ImageBuilder menyelesaikan finalisasi root filesystem, pembuatan SquashFS, dan padding image.
 - Job berhenti pada target terakhir ImageBuilder, `checksum`, tepat setelah log `Calculating checksums...` (exit code 1). Langkah boot QEMU, SSH forwarding, dan benchmark internet belum dijalankan. Run ini **bukan** hasil benchmark bandwidth.
 - Perbaikan workflow membuat target manifest checksum tetap dicoba, tetapi kegagalannya tidak lagi menggagalkan build QEMU karena manifest tersebut bukan input emulator. File sysupgrade tetap wajib ditemukan, tidak kosong, dan SHA-256-nya dicatat sebelum firmware diserahkan ke pembuat flash NAND.
@@ -386,7 +386,7 @@ Audit GitHub Actions run [45011761935](https://github.com/winpotatoaja/wall-ssh-
 
 ## Audit bottleneck throughput SSH/SOCKS — 2026-11-22
 
-**Penyebab teridentifikasi pada source r37:** `io_worker_pool.h` menetapkan
+**Penyebab teridentifikasi pada source r38:** `io_worker_pool.h` menetapkan
 `IO_WORKER_POOL_PAYLOAD_SIZE=128`. Delapan byte payload dipakai untuk FD dan
 panjang data, sehingga `IO_WORKER_SOCKET_WRITE_MAX` hanya **120 byte per task**.
 Jalur S2C di `ssh-core.c:submit_s2c_worker_write()` membatasi setiap pengiriman
@@ -409,6 +409,11 @@ satu payload penuh 16 KiB.
 **Validasi masih terbuka:** perubahan harus lulus native regression dan OpenWrt
 24.10.7 `mipsel_24kc` SDK build, lalu benchmark MT7621 QEMU harus memakai IPK
 yang dibangun dari source SHA perubahan ini. Workflow bandwidth khusus juga
-dibandingkan pada URL identik secara langsung dari guest dan melalui r37 SOCKS5:
+dibandingkan pada URL identik secara langsung dari guest dan melalui r38 SOCKS5:
 Vultr 100 MB serta Linode 100 MB. Jangan memakai hasil run lama atau artifact
 sebelum patch sebagai bukti throughput perbaikan.
+
+
+## r38 build status
+
+Release r38 carries the S2C I/O worker payload increase from 128 bytes to 16 KiB and the full-size worker socket-write regression. The OpenWrt 24.10.7 `mipsel_24kc` SDK build is queued from the `[mips-stage=sdk]` commit. Do not install or benchmark this release until the SDK job publishes the IPK and its checksum.
