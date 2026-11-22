@@ -260,7 +260,7 @@ Rencana validasi perangkat:
 - Catat log, throughput, checksum, suhu/performa perangkat bila tersedia,
   serta seluruh kendala yang hanya muncul pada perangkat fisik.
 
-### Sub-tahap: penskalaan I/O worker berdasarkan CPU (implementasi, validasi pending)
+### Sub-tahap: penskalaan I/O worker berdasarkan CPU — LULUS
 
 Tujuan tambahan sebelum validasi perangkat fisik adalah memakai kapasitas CPU yang
 tersedia untuk operasi socket client tanpa menggandakan sesi SSH.
@@ -278,16 +278,26 @@ Implementasi pada source:
 - Worker tetap hanya menjalankan operasi socket client; libssh2 dan TLS Engine
   tetap berada pada owner masing-masing.
 
-Status implementasi: **sudah diterapkan pada source**. Regression mapping
-CPU→I/O worker lulus untuk input 1/2/3/4 dan nilai di luar rentang. Native
-regression serta OpenWrt 24.10.7 MIPS SDK lulus pada run `44987910879`;
-artifact IPK `14740154895` berukuran 897,968 byte dengan SHA-256
-`ef506b22d3453b6ef51175adada0d6a4a70dc7d566de793d8e5f285e885535c3`.
-MT7621 QEMU masih pending dan harus memakai artifact SDK yang sama.
+Status: **LULUS pada native, MIPS SDK, dan MT7621 QEMU**.
 
-Gerbang runtime harus membuktikan konfigurasi 1/2/4 CPU menghasilkan 1/2/4
-I/O worker (dengan cap 4), seluruh completion terlayani, dan jumlah sesi SSH
-tetap satu. Hasil QEMU tidak menggantikan validasi router fisik Tahap 5.
+- Regression mapping CPU→I/O worker lulus untuk input 1/2/3/4 dan nilai di luar
+  rentang; pemetaan 1/2/3/4 worker dan cap maksimum 4 diverifikasi.
+- Native regression dan OpenWrt 24.10.7 MIPS SDK lulus pada run
+  `44987910879`. Artifact IPK `14740154895`, 897,968 byte, SHA-256
+  `ef506b22d3453b6ef51175adada0d6a4a70dc7d566de793d8e5f285e885535c3`.
+- MT7621 QEMU lulus pada run `44988206417`, artifact hasil
+  `14741740494` (10,073,315 byte), SHA-256
+  `9a85658ebddac7927c6d9ab5b3d5e4b4fe9dc9b4ddea3a62a5963a73f5606eda`.
+- Guest QEMU melaporkan `CPU topology: detected=4 selected=1 mode=auto max=4`
+  dan `IO worker pool started: 4 workers (CPU detected=4, cap=4), one SSH session`.
+  Artinya satu sesi SSH tetap dipakai sementara empat worker I/O dibuat.
+- Guest berakhir dengan `MIPS TEST STATUS: 0`; transfer full-duplex 8 MiB
+  upload/32 MiB download dan SHA-256 cocok, backpressure mencapai kapasitas
+  128 KiB lalu terkuras, dan `s2c_epollout_missing=0`.
+
+Sub-tahap penskalaan CPU→I/O worker dinyatakan lulus untuk native dan MT7621
+QEMU. Validasi pada router MT7621 fisik tetap termasuk Tahap 5 dan belum
+dinyatakan selesai.
 
 **Gerbang kelulusan:** seluruh skenario wajib lulus pada router fisik dan tidak ada
 regresi stabilitas atau integritas data. Hasil QEMU saja tidak cukup untuk meluluskan
@@ -302,6 +312,7 @@ tahap ini.
 | Native regression | **Lulus** | Run `44984703377`, source `e2f150f27b3218022559f15a59a4a6fd59de70c0` |
 | OpenWrt 24.10.7 MIPS SDK | **Lulus** | Run `44984703379`, artifact `14739159030`, source `e2f150f27b3218022559f15a59a4a6fd59de70c0` |
 | MT7621 QEMU | **Baseline lulus** | Run `44985100177`, artifact `14739727217`; SDK artifact `14739159030`; guest `MIPS TEST STATUS: 0`; code SHA `e2f150f27b3218022559f15a59a4a6fd59de70c0` |
+| CPU-aware I/O worker MT7621 QEMU | **Lulus** | Run `44988206417`, artifact `14741740494`; source `1f62cba8a464e734547cdd8db9476e35e65ffb05`; guest `detected=4`, `4 I/O workers`, satu SSH session, `MIPS TEST STATUS: 0` |
 | OpenWrt 25.12.5 x86_64 QEMU | Pembanding | Tidak menggantikan target MIPS maupun router fisik |
 | Router MT7621 fisik | Belum diuji pada tahap ini | Tahap 5 |
 
