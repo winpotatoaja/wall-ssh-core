@@ -188,6 +188,13 @@ Implementasi yang sudah ada pada branch ini:
 
 <badge color="warning">VALIDASI FUNGSIONAL LULUS — RETEST THROUGHPUT TERBUKA</badge>
 
+### Optimasi kandidat bottleneck SSH Owner — r40, validasi MIPS/Datapacket menunggu
+
+- Retest r39 Datapacket `45074227741` mengonfirmasi TID `ssh_owner` memakai sekitar satu vCPU penuh selama bulk transfer; auxiliary worker TID tetap idle. Socket lokal tidak menunjukkan `send()` EAGAIN/partial write, `s2c_epollout_missing=0`, pending-block state 0, dan buffer S2C terkuras normal.
+- Log negosiasi SSH menunjukkan cipher server-to-client yang aktif adalah `aes128-gcm@openssh.com`, walaupun ChaCha dicantumkan lebih dulu pada preferensi lama. Untuk target `mipsel_24kc` saja, source kini mencoba `aes128-ctr` terlebih dahulu, lalu GCM/AES-256-CTR/ChaCha sebagai fallback. Target non-MIPS mempertahankan preferensi lama.
+- Package release dinaikkan menjadi `1.0.0-r40`. Log handshake mencatat apakah preferensi MIPS berhasil diterapkan, dan log `SSH Cipher` tetap menjadi bukti cipher yang benar-benar dinegosiasikan.
+- Workflow SDK MIPS menerima branch benchmark ini; setelah SDK build sukses dan artifact IPK/source SHA terunggah, workflow otomatis men-dispatch benchmark Datapacket. Benchmark menerima IPK r40 dengan source SHA yang sama persis, kemudian mengunduh hanya satu URL: `http://sgp.download.datapacket.com/100mb.bin`, sekali direct dan sekali SOCKS5. Setiap transfer dibatasi 50 detik, tanpa retry.
+- **Status: kandidat optimasi, belum terbukti lebih cepat.** Keberhasilan build dan benchmark berikutnya harus menentukan apakah AES-128-CTR mengurangi CPU SSH Owner dan menaikkan throughput. Tidak ada klaim speedup sebelum hasil aktual tersedia.
 ### Diagnostik bottleneck CPU/jaringan — diperbaiki dan retest Datapacket selesai
 
 - Run diagnostik pertama `45073574300` menemukan dua masalah residual pada alat ukur: pembagi CPU berbasis CLK_TCK/detik kasar bisa menghasilkan persentase thread di atas 100%, dan sampel jaringan pertama masih mencakup direct download. Koreksi kedua memakai rata-rata delta total tick per-vCPU dari `/proc/stat` untuk menormalkan CPU proses dan tiap TID; baseline CPU/thread/network di-reset tepat sebelum request SOCKS5. TID utama diberi label `ssh_owner`.
