@@ -1,43 +1,1440 @@
 name: Passwall SSH Core - MT7621 QEMU Speedtest
-
 on:
   push:
     branches: [phase3/io-worker-pool-foundation]
     paths:
       - ".github/workflows/passwall-ssh-core-qemu-speedtest.yml"
       - "tests/qemu_speedtest.sh"
-      - ".github/workflows/passwall-ssh-core-openwrt24-mipsel-vm.yml"
   workflow_dispatch:
     inputs:
       sdk_run_id:
-        description: "Successful MIPS SDK run containing the package artifact"
+        description: "Successful MIPS SDK run containing the r37 package artifact"
         required: true
         default: "44998188775"
         type: string
-      duration:
-        description: "Sustained download test duration (seconds)"
+      benchmark_duration:
+        description: "Sustained download duration in seconds"
         required: true
-        default: "60"
-        type: choice
-        options:
-          - "30"
-          - "60"
-          - "120"
-          - "180"
-
+        default: 60
+        type: number
 permissions:
   contents: read
   actions: read
   statuses: write
 
+concurrency:
+  group: openwrt24-qemu-speedtest-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  qemu-speedtest:
-    name: OpenWrt 24.10.7 MT7621 sustained SOCKS5 benchmark
-    uses: ./.github/workflows/passwall-ssh-core-openwrt24-mipsel-vm.yml
-    with:
-      sdk_run_id: ${{ github.event_name == 'push' && '44998188775' || inputs.sdk_run_id }}
-      benchmark_duration: ${{ github.event_name == 'push' && 60 || fromJSON(inputs.duration) }}
-    permissions:
-      contents: read
-      actions: read
-      statuses: write
+  sdk:
+    if: ${{ contains(github.event.head_commit.message, '[mips-stage=sdk]') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang flex bison gawk gettext git libncurses-dev libssl-dev libssh2-1-dev python3 rsync unzip wget zstd curl ca-certificates binutils file
+      - name: Run native relay-core and SPSC regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          gcc -std=gnu11 -O1 -g -Wall -Wextra -pthread \
+            -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
+            -ffunction-sections -fdata-sections -I. \
+            tests/http_parser_test.c tls_engine.c client_lifetime.c \
+            -Wl,--gc-sections -o /tmp/http-parser-test \
+            -lssh2 -lssl -lcrypto
+          /tmp/http-parser-test | tee test-results/http-parser-test.log
+          gcc -std=c11 -O2 -g -Wall -Wextra -Werror -pthread \
+            tests/spsc_rb_test.c -o /tmp/spsc-rb-test
+          timeout 90s /tmp/spsc-rb-test | tee test-results/spsc-rb-test-native.log
+          gcc -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread -DTLS_ENGINE_DIAGNOSTICS \
+            -I. tests/tls_engine_test.c tls_engine.c \
+            -o /tmp/tls-engine-test -lssl -lcrypto
+          timeout 60s /tmp/tls-engine-test | tee test-results/tls-engine-test-native.log
+          gcc -std=gnu11 -O2 -g -Wall -Wextra -Werror -pthread tests/io_worker_pool_test.c io_worker_pool.c -o /tmp/io-worker-pool-test
+          timeout 120s /tmp/io-worker-pool-test | tee test-results/io-worker-pool-test-native.log
+          gcc -std=c11 -O2 -g -Wall -Wextra -Werror -I. tests/client_lifetime_test.c client_lifetime.c -o /tmp/client-lifetime-test
+          timeout 10s /tmp/client-lifetime-test | tee test-results/client-lifetime-test-native.log
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/client_event_token_test.c -o /tmp/client-event-token-test
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/io_worker_completion_tracker_test.c io_worker_completion_tracker.c io_worker_pool.c -pthread -o /tmp/io-worker-completion-tracker-test
+          timeout 10s /tmp/io-worker-completion-tracker-test | tee test-results/io-worker-completion-tracker-test-native.log
+          timeout 10s /tmp/client-event-token-test | tee test-results/client-event-token-test-native.log
+      - name: Download OpenWrt 24.10.7 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
+          FILE="openwrt-sdk-24.10.7-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
+          curl -fL --retry 3 --connect-timeout 20 --max-time 1200 "$BASE/$FILE" -o /tmp/openwrt-sdk.tar.zst
+          echo "014cd0f69b2b28088fd89e5b00e4f4d5087e2fe6da52cbaa48cd521087ebf10d  /tmp/openwrt-sdk.tar.zst" | sha256sum -c -
+          tar --zstd -xf /tmp/openwrt-sdk.tar.zst
+          SDK_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-sdk-24.10.7-ramips-mt7621_*' | head -n 1)"
+          test -n "$SDK_DIR"
+          mv "$SDK_DIR" sdk
+          git clone --depth 1 --filter=blob:none --sparse --branch openwrt-24.10 https://github.com/openwrt/openwrt.git /tmp/openwrt-24.10-source
+          git -C /tmp/openwrt-24.10-source sparse-checkout set package/libs/openssl package/libs/zlib
+          mkdir -p sdk/package/libs
+          cp -a /tmp/openwrt-24.10-source/package/libs/openssl sdk/package/libs/openssl
+          cp -a /tmp/openwrt-24.10-source/package/libs/zlib sdk/package/libs/zlib
+      - name: Build OpenSSL zlib and libssh2
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd sdk
+          STAGING="$(find staging_dir -maxdepth 1 -type d -name 'target-*' | head -n 1)"
+          test -n "$STAGING"
+          {
+            echo "CONFIG_PACKAGE_libopenssl=y"
+            echo "CONFIG_OPENSSL_WITH_CHACHA_POLY1305=y"
+            echo "CONFIG_OPENSSL_WITH_TLS13=y"
+            echo "CONFIG_OPENSSL_WITH_BLAKE2=y"
+            echo "CONFIG_PACKAGE_zlib=y"
+            echo "# CONFIG_ALL is not set"
+            echo "# CONFIG_ALL_KMODS is not set"
+            echo "# CONFIG_ALL_NONSHARED is not set"
+          } >> .config
+          make defconfig
+          make package/libs/openssl/compile -j"$(nproc)" V=s
+          make package/libs/zlib/compile -j"$(nproc)" V=s
+          ./scripts/feeds update packages
+          ./scripts/feeds install libssh2
+          echo "CONFIG_PACKAGE_libssh2=y" >> .config
+          make defconfig
+          make package/feeds/packages/libssh2/compile -j"$(nproc)" V=s
+          test -f "$STAGING/usr/include/openssl/ssl.h"
+          test -f "$STAGING/usr/include/libssh2.h"
+          test -e "$STAGING/usr/lib/libssl.so"
+          test -e "$STAGING/usr/lib/libcrypto.so"
+          test -e "$STAGING/usr/lib/libssh2.so"
+      - name: Build r37 single-session MIPS IPK and I/O worker pool helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKG_DIR="$GITHUB_WORKSPACE/sdk/package/passwall-ssh-core"
+          mkdir -p "$PKG_DIR"
+          cp Makefile "$PKG_DIR/Makefile"
+          cp ssh-core.c "$PKG_DIR/ssh-core.c"
+          cp tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h client_lifetime.c client_lifetime.h io_worker_completion_tracker.c io_worker_completion_tracker.h "$PKG_DIR/"
+          cd "$GITHUB_WORKSPACE/sdk"
+          echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
+          make defconfig
+          make package/passwall-ssh-core/compile -j"$(nproc)" V=s
+          test -f "$GITHUB_WORKSPACE/ssh-core.c"
+          if grep -Eq 'SSL_(new|connect|read|write|shutdown|free|get_error|has_pending)[[:space:]]*\(' "$GITHUB_WORKSPACE/ssh-core.c"; then
+            echo "ssh-core.c still contains direct SSL I/O; TLS Engine ownership is incomplete."
+            grep -nE 'SSL_(new|connect|read|write|shutdown|free|get_error|has_pending)[[:space:]]*\(' "$GITHUB_WORKSPACE/ssh-core.c"
+            false
+          fi
+          echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
+          IPK="$(find bin/packages -type f -name 'passwall-ssh-core*.ipk' | head -n 1)"
+          test -n "$IPK"
+          mkdir -p "$GITHUB_WORKSPACE/test-results"
+          cp "$IPK" "$GITHUB_WORKSPACE/test-results/"
+          printf '%s\n' "$GITHUB_SHA" > "$GITHUB_WORKSPACE/test-results/build-source.sha"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum "$(basename "$IPK")" > ipk.sha256)
+          file "$IPK"
+          sha256sum "$IPK"
+          BIN="$(find "$GITHUB_WORKSPACE/sdk/build_dir" -type f -name passwall-ssh-core -perm -111 | head -n 1)"
+          test -n "$BIN"
+          readelf -h "$BIN" | tee "$GITHUB_WORKSPACE/test-results/elf-header.txt"
+          CROSS_CC="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -path '*/bin/*-openwrt-linux-musl-gcc' -print | head -n 1)"
+          test -n "$CROSS_CC"
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -pthread "$GITHUB_WORKSPACE/tests/spsc_rb_test.c" -o "$GITHUB_WORKSPACE/test-results/spsc-rb-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/spsc-rb-test"
+          file "$GITHUB_WORKSPACE/test-results/spsc-rb-test" | tee "$GITHUB_WORKSPACE/test-results/spsc-rb-test-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum spsc-rb-test > spsc-rb.sha256)
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror "$GITHUB_WORKSPACE/tests/socks_halfclose.c" -o "$GITHUB_WORKSPACE/test-results/socks-halfclose"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/socks-halfclose"
+          file "$GITHUB_WORKSPACE/test-results/socks-halfclose" | tee "$GITHUB_WORKSPACE/test-results/helper-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum socks-halfclose > halfclose.sha256)
+          STAGING="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -maxdepth 1 -type d -name 'target-*' -print -quit)"
+          test -n "$STAGING"
+          "$CROSS_CC" -std=gnu11 -Os -Wall -Wextra -Werror -pthread -DTLS_ENGINE_DIAGNOSTICS \
+            -I"$STAGING/usr/include" "$GITHUB_WORKSPACE/tests/socks_mt_download.c" \
+            -L"$STAGING/usr/lib" -Wl,-rpath-link,"$STAGING/usr/lib" \
+            -o "$GITHUB_WORKSPACE/test-results/socks-mt-download" -lcrypto
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/socks-mt-download"
+          file "$GITHUB_WORKSPACE/test-results/socks-mt-download" | tee "$GITHUB_WORKSPACE/test-results/mt-helper-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum socks-mt-download > mt-download.sha256)
+          "$CROSS_CC" -std=gnu11 -Os -Wall -Wextra -Werror -pthread \
+            -I"$STAGING/usr/include" -I"$GITHUB_WORKSPACE" \
+            "$GITHUB_WORKSPACE/tests/tls_engine_test.c" "$GITHUB_WORKSPACE/tls_engine.c" \
+            -L"$STAGING/usr/lib" -Wl,-rpath-link,"$STAGING/usr/lib" \
+            -o "$GITHUB_WORKSPACE/test-results/tls-engine-test" -lssl -lcrypto
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/tls-engine-test"
+          file "$GITHUB_WORKSPACE/test-results/tls-engine-test" | tee "$GITHUB_WORKSPACE/test-results/tls-engine-test-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum tls-engine-test > tls-engine-test.sha256)
+          "$CROSS_CC" -std=gnu11 -Os -static -Wall -Wextra -Werror -pthread "$GITHUB_WORKSPACE/tests/io_worker_pool_test.c" "$GITHUB_WORKSPACE/io_worker_pool.c" -o "$GITHUB_WORKSPACE/test-results/io-worker-pool-test" -latomic
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/io-worker-pool-test"
+          file "$GITHUB_WORKSPACE/test-results/io-worker-pool-test" | tee "$GITHUB_WORKSPACE/test-results/io-worker-pool-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum io-worker-pool-test > io-worker-pool.sha256)
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -I"$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/client_lifetime_test.c" "$GITHUB_WORKSPACE/client_lifetime.c" -o "$GITHUB_WORKSPACE/test-results/client-lifetime-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/client-lifetime-test"
+          file "$GITHUB_WORKSPACE/test-results/client-lifetime-test" | tee "$GITHUB_WORKSPACE/test-results/client-lifetime-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum client-lifetime-test > client-lifetime.sha256)
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -I"$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/client_event_token_test.c" -o "$GITHUB_WORKSPACE/test-results/client-event-token-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/client-event-token-test"
+          file "$GITHUB_WORKSPACE/test-results/client-event-token-test" | tee "$GITHUB_WORKSPACE/test-results/client-event-token-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum client-event-token-test > client-event-token.sha256)
+           "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -I"$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/io_worker_completion_tracker_test.c" "$GITHUB_WORKSPACE/io_worker_completion_tracker.c" "$GITHUB_WORKSPACE/io_worker_pool.c" -pthread -o "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
+           chmod 0755 "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
+           file "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" | tee "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-file.txt"
+           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum io-worker-completion-tracker-test > io-worker-completion-tracker.sha256)
+      - name: Upload MIPS IPK and helper
+        uses: actions/upload-artifact@v4
+        with:
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-ipk
+          path: |
+            test-results/passwall-ssh-core*.ipk
+            test-results/build-source.sha
+            test-results/ipk.sha256
+            test-results/socks-halfclose
+            test-results/halfclose.sha256
+            test-results/socks-mt-download
+            test-results/mt-download.sha256
+            test-results/spsc-rb-test
+            test-results/spsc-rb.sha256
+            test-results/spsc-rb-test-file.txt
+            test-results/mt-helper-file.txt
+            test-results/elf-header.txt
+            test-results/helper-file.txt
+            test-results/tls-engine-test
+            test-results/tls-engine-test.sha256
+            test-results/tls-engine-test-file.txt
+            test-results/io-worker-pool-test
+            test-results/io-worker-pool.sha256
+            test-results/io-worker-pool-file.txt
+            test-results/client-lifetime-test
+            test-results/client-lifetime.sha256
+            test-results/client-lifetime-file.txt
+            test-results/client-event-token-test
+            test-results/client-event-token.sha256
+            test-results/client-event-token-file.txt
+            test-results/io-worker-completion-tracker-test
+            test-results/io-worker-completion-tracker.sha256
+            test-results/io-worker-completion-tracker-file.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: SDK summary
+        run: |
+          printf 'SDK run ID: %s\n' "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish mipsel SDK build status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const state = `${{ job.status }}` === "success" ? "success" : "failure";
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              context: "mipsel_24kc / SDK build",
+              description: state === "success"
+                ? "OpenWrt 24.10.7 mipsel_24kc IPK built successfully."
+                : "OpenWrt 24.10.7 mipsel_24kc SDK build failed.",
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
+  vm:
+    if: ${{ inputs.sdk_run_id != '' || contains(github.event.head_commit.message, '[mips-stage=vm]') }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install VM host dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl unzip zstd python3 openssh-client openssh-server \
+            socat mtd-utils gdisk wget ca-certificates binutils file
+
+      - name: Resolve and download the SDK artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.sdk_run_id || '44998188775' }}" ]; then
+            SDK_RUN_ID="${{ inputs.sdk_run_id || '44998188775' }}"
+          else
+            MESSAGE="$(jq -r '.head_commit.message // empty' "$GITHUB_EVENT_PATH")"
+            SDK_RUN_ID="$(printf '%s\n' "$MESSAGE" | sed -n 's/.*\[mips_sdk_run_id=\([0-9][0-9]*\)\].*/\1/p')"
+            if [ -z "$SDK_RUN_ID" ]; then
+              SDK_RUN_ID="$(printf '%s\n' "$MESSAGE" | sed -n 's/.*\[sdk_run_id=\([0-9][0-9]*\)\].*/\1/p')"
+            fi
+          fi
+          case "$SDK_RUN_ID" in
+            ""|*[!0-9]*) echo "Missing [mips_sdk_run_id=RUN_ID] in commit message."; false ;;
+          esac
+          echo "SDK_RUN_ID=$SDK_RUN_ID" >> "$GITHUB_ENV"
+          echo "Using MIPS SDK run ID: $SDK_RUN_ID"
+
+      - name: Download the MIPS IPK and test helper
+        uses: actions/download-artifact@v4
+        with:
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-ipk
+          run-id: ${{ env.SDK_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          path: test-results
+
+      - name: Verify SDK artifact, checksums and MIPS ELF metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
+          printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
+            echo "SDK artifact was built from different package or test sources."
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c
+            false
+          fi
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256)
+          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test
+          cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
+          grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r37' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          readelf -h test-results/socks-halfclose | grep -q 'MIPS'
+          readelf -h test-results/socks-mt-download | grep -q 'MIPS'
+          readelf -h test-results/tls-engine-test | grep -q 'MIPS'
+          readelf -h test-results/io-worker-pool-test | grep -q 'MIPS'
+          readelf -h test-results/client-lifetime-test | grep -q 'MIPS'
+          readelf -h test-results/client-event-token-test | grep -q 'MIPS'
+          readelf -h test-results/io-worker-completion-tracker-test | grep -q 'MIPS'
+
+      - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p emulator
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-linux-x86_64.tar.gz \
+            -o /tmp/router-emulator.tar.gz
+          echo "8ae277cc0fecfb99da3a452fb4226f272ee6d571f362898ca2176513f3adb0b7  /tmp/router-emulator.tar.gz" | sha256sum -c -
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-presets.zip \
+            -o /tmp/router-emulator-presets.zip
+          echo "8146b505a9d75407c4504bf90638d7e3d3e3ccfc529d09c45a40b2b6868604a2  /tmp/router-emulator-presets.zip" | sha256sum -c -
+          tar -xzf /tmp/router-emulator.tar.gz -C emulator
+          EMU_DIR="$(find emulator -maxdepth 3 -type f -name emulator.sh -print -quit | xargs dirname)"
+          test -n "$EMU_DIR"
+          unzip -q /tmp/router-emulator-presets.zip -d "$EMU_DIR"
+          # v4.1 preset ZIP contains Router-Emulator/presets; emulator.sh
+          # resolves presets relative to EMU_DIR, so flatten that one level.
+          if [ -d "$EMU_DIR/Router-Emulator/presets" ]; then
+            mkdir -p "$EMU_DIR/presets"
+            cp -a "$EMU_DIR/Router-Emulator/presets/." "$EMU_DIR/presets/"
+          fi
+          echo "========== ROUTER EMULATOR PACKAGE LAYOUT =========="
+          echo "EMU_DIR=$EMU_DIR"
+          ls -ld "$EMU_DIR" "$EMU_DIR/qemu" "$EMU_DIR/presets" 2>&1 || true
+          find "$EMU_DIR" -maxdepth 4 -type f \( -name 'qemu-system-mipsel' -o -iname '*wg3526*' \) -print
+          QEMU_MIPSEL="$EMU_DIR/qemu/qemu-system-mipsel"
+          if [ ! -x "$QEMU_MIPSEL" ]; then
+            echo "Missing executable QEMU MIPS binary: $QEMU_MIPSEL"
+            ls -la "$EMU_DIR/qemu" 2>&1 || true
+            false
+          fi
+          "$QEMU_MIPSEL" --version
+          if "$QEMU_MIPSEL" -M help > /tmp/mips-qemu-machines.txt 2>/tmp/mips-qemu-machines.err; then
+            echo "QEMU machine help succeeded."
+          else
+            QEMU_RC=$?
+            echo "QEMU machine help failed with status $QEMU_RC"
+            cat /tmp/mips-qemu-machines.err
+            cat /tmp/mips-qemu-machines.txt
+            false
+          fi
+          cat /tmp/mips-qemu-machines.txt
+          if ! grep -qi 'mt7621-router' /tmp/mips-qemu-machines.txt; then
+            echo "QEMU binary does not advertise the MT7621 machine."
+            false
+          fi
+          PRESET_FILE="$EMU_DIR/presets/zbtlink-zbt-wg3526-16m.ini"
+          if [ -z "$PRESET_FILE" ]; then
+            echo "ZBT-WG3526-16M preset not found in downloaded preset archive."
+            find "$EMU_DIR" -maxdepth 4 -type f -iname '*wg3526*' -print
+            false
+          fi
+          echo "Preset file: $PRESET_FILE"
+          EMU_DIR="$(readlink -f "$EMU_DIR")"
+          echo "EMU_DIR=$EMU_DIR" >> "$GITHUB_ENV"
+
+          IB_BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
+          IB_FILE="openwrt-imagebuilder-24.10.7-ramips-mt7621.Linux-x86_64.tar.zst"
+          curl -fL --retry 3 --connect-timeout 20 --max-time 1200 "$IB_BASE/$IB_FILE" -o /tmp/openwrt-imagebuilder.tar.zst
+          echo "19f321d10a78a8ca768b934243789c6b45c003374618a3c0aa51c06e06553fcc  /tmp/openwrt-imagebuilder.tar.zst" | sha256sum -c -
+          tar --zstd -xf /tmp/openwrt-imagebuilder.tar.zst
+          IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-24.10.7-ramips-mt7621*' -print -quit)"
+          test -n "$IB_DIR"
+          IB_DIR="$(readlink -f "$IB_DIR")"
+          test -f "$IB_DIR/Makefile"
+          echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
+
+      - name: Build the OpenWrt 24.10.7 MT7621 firmware and NOR flash
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh-keygen -q -t ed25519 -N "" -f "$RUNNER_TEMP/mips-vm-key"
+          FILES_DIR="$RUNNER_TEMP/mips-image-files"
+          mkdir -p "$FILES_DIR/etc/dropbear" "$FILES_DIR/root/.ssh"
+          install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/etc/dropbear/authorized_keys"
+          install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/root/.ssh/authorized_keys"
+
+          cd "$IB_DIR"
+          make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2" FILES="$FILES_DIR"
+          SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*zbtlink_zbt-wg3526-16m*squashfs-sysupgrade.bin' -print -quit)"
+          test -n "$SYSUP"
+          SYSUP="$(readlink -f "$SYSUP")"
+          test -s "$SYSUP"
+          mkdir -p "$GITHUB_WORKSPACE/test-results/firmware"
+          cp "$SYSUP" "$GITHUB_WORKSPACE/test-results/firmware/openwrt-24.10.7-zbt-wg3526-16m-ci-sysupgrade.bin"
+          sha256sum "$SYSUP" | tee "$GITHUB_WORKSPACE/test-results/firmware/image.sha256"
+
+          cd "$EMU_DIR"
+          BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
+          UBOOT_REL="u-boot-mt7621_zbtlink_zbt-wg3526-16m/u-boot-mt7621.bin"
+          mkdir -p "$EMU_DIR/firmware/24.10.7/$(dirname "$UBOOT_REL")"
+          curl -fL --retry 3 "$BASE/$UBOOT_REL" -o "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
+          curl -fL --retry 3 "$BASE/sha256sums" -o "$EMU_DIR/firmware/24.10.7/sha256sums"
+          (cd "$EMU_DIR/firmware/24.10.7" && grep -- " *$UBOOT_REL\$" sha256sums | sha256sum -c -)
+
+          FLASH_DIR="$EMU_DIR/nor-zbt-wg3526-16m"
+          python3 "$EMU_DIR/tools/mknand.py" --prefix mt7621 nor -o "$FLASH_DIR" \
+            --size-mb 16 \
+            --parts "u-boot:0x30000,u-boot-env:0x10000,factory:0x10000,firmware:-" \
+            --bl2 "$EMU_DIR/firmware/24.10.7/$UBOOT_REL" \
+            --sysupgrade "$SYSUP" \
+            --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
+          test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
+          test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
+          ls -lh "$FLASH_DIR"
+
+      - name: Prepare host SSH, HTTP and TLS fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mips-fixtures
+          dd if=/dev/urandom of=/tmp/mips-fixtures/payload-1MiB.bin bs=1M count=1 status=none
+          sha256sum /tmp/mips-fixtures/payload-1MiB.bin | awk '{print $1}' > /tmp/mips-fixtures/payload.sha
+          dd if=/dev/urandom of=/tmp/mips-fixtures/slow-download-32MiB.bin bs=1M count=32 status=none
+          sha256sum /tmp/mips-fixtures/slow-download-32MiB.bin | awk '{print $1}' > /tmp/mips-fixtures/slow-download.sha
+          dd if=/dev/urandom of=/tmp/mips-fixtures/half-close-upload-8MiB.bin bs=1M count=8 status=none
+          sha256sum /tmp/mips-fixtures/half-close-upload-8MiB.bin | awk '{print $1}' > /tmp/mips-fixtures/upload-8MiB.sha
+
+          cat > /tmp/mips-http-server.py <<'PY_SERVER'
+          from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+          import hashlib, os, socket, threading, time
+          ROOT = "/tmp/mips-fixtures"
+          def file_hash(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for part in iter(lambda: f.read(65536), b""):
+                      h.update(part)
+              return h.hexdigest()
+          class Handler(BaseHTTPRequestHandler):
+              protocol_version = "HTTP/1.1"
+              def log_message(self, fmt, *args):
+                  print("%s - %s" % (self.client_address[0], fmt % args), flush=True)
+              def send_body(self, status, body):
+                  self.send_response(status)
+                  self.send_header("Content-Length", str(len(body)))
+                  self.send_header("Connection", "close")
+                  self.end_headers()
+                  self.wfile.write(body)
+                  self.wfile.flush()
+                  self.close_connection = True
+              def do_GET(self):
+                  if self.path == "/health":
+                      self.send_body(200, b"ok\n")
+                      return
+                  if self.path in ("/payload", "/slow-download"):
+                      path = os.path.join(ROOT, "payload-1MiB.bin" if self.path == "/payload" else "slow-download-32MiB.bin")
+                      # Keep the throughput fixture unconstrained. The dedicated
+                      # /duplex-backpressure endpoint applies a small socket buffer.
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(os.path.getsize(path)))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      with open(path, "rb") as f:
+                          while True:
+                              block = f.read(262144)
+                              if not block:
+                                  break
+                              self.wfile.write(block)
+                      self.close_connection = True
+                      return
+                  if self.path == "/idle":
+                      body = b"idle-rst-fixture-body-64-bytes-padded-------------------------"
+                      if len(body) != 64:
+                          body = body[:64].ljust(64, b"-")
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(len(body)))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      time.sleep(25)
+                      try:
+                          self.wfile.write(body)
+                          self.wfile.flush()
+                      except OSError:
+                          pass
+                      self.close_connection = True
+                      return
+                  if self.path == "/half-close-server-eof":
+                      body = b"server-half-close-ok\n"
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(len(body)))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      self.wfile.write(body)
+                      self.wfile.flush()
+                      self.connection.shutdown(socket.SHUT_WR)
+                      self.connection.settimeout(20)
+                      expected = b"client-write-after-server-fin"
+                      received = bytearray()
+                      try:
+                          while len(received) < len(expected):
+                              part = self.connection.recv(len(expected) - len(received))
+                              if not part:
+                                  break
+                              received.extend(part)
+                      except OSError:
+                          pass
+                      if bytes(received) == expected:
+                          print("[HALFCLOSE] server FIN path received exact client trailer", flush=True)
+                      else:
+                          print("[HALFCLOSE] server FIN path trailer mismatch %r" % bytes(received), flush=True)
+                      self.close_connection = True
+                      return
+                  if self.path == "/half-close-server-eof-large":
+                      body = b"server-half-close-large-ok\n"
+                      self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32768)
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(len(body)))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      self.wfile.write(body)
+                      self.wfile.flush()
+                      self.connection.shutdown(socket.SHUT_WR)
+                      print("[HALFCLOSE-LARGE] remote FIN sent; pausing reads", flush=True)
+                      time.sleep(8)
+                      self.connection.settimeout(60)
+                      digest = hashlib.sha256()
+                      received = 0
+                      try:
+                          while received < 8 * 1024 * 1024:
+                              block = self.connection.recv(min(16384, 8 * 1024 * 1024 - received))
+                              if not block:
+                                  break
+                              digest.update(block)
+                              received += len(block)
+                      except OSError as exc:
+                          print("[HALFCLOSE-LARGE] read error %r" % exc, flush=True)
+                      actual = digest.hexdigest()
+                      expected = open(os.path.join(ROOT, "upload-8MiB.sha")).read().strip()
+                      if received == 8 * 1024 * 1024 and actual == expected:
+                          print("[HALFCLOSE-LARGE] PASS received exact 8388608-byte upload SHA-256=%s" % actual, flush=True)
+                      else:
+                          print("[HALFCLOSE-LARGE] FAIL received=%d sha=%s expected=%s" % (received, actual, expected), flush=True)
+                      self.close_connection = True
+                      return
+                  self.send_error(404)
+              def do_POST(self):
+                  if self.path == "/half-close-client-eof":
+                      length = int(self.headers.get("Content-Length", "0"))
+                      body = self.rfile.read(length)
+                      self.connection.settimeout(20)
+                      try:
+                          client_fin = self.connection.recv(1) == b""
+                      except OSError:
+                          client_fin = False
+                      if len(body) == length and client_fin:
+                          print("[HALFCLOSE] client FIN observed after complete request body", flush=True)
+                          self.send_body(200, body)
+                      else:
+                          print("[HALFCLOSE] client FIN/body mismatch size=%d expected=%d fin=%s" % (len(body), length, client_fin), flush=True)
+                          self.send_body(400, b"bad client FIN\n")
+                      return
+                  if self.path == "/slow-upload":
+                      self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32768)
+                      length = int(self.headers.get("Content-Length", "0"))
+                      time.sleep(8)
+                      digest = hashlib.sha256()
+                      received = 0
+                      while received < length:
+                          block = self.rfile.read(min(16384, length - received))
+                          if not block:
+                              break
+                          digest.update(block)
+                          received += len(block)
+                      actual = digest.hexdigest()
+                      print("[UPLOAD] size=%d sha256=%s" % (received, actual), flush=True)
+                      self.send_body(200 if received == length else 400,
+                                     ("size=%d sha256=%s\n" % (received, actual)).encode())
+                      return
+                  if self.path == "/duplex-backpressure":
+                      upload_size = 8 * 1024 * 1024
+                      download_size = 32 * 1024 * 1024
+                      expected_upload = open(os.path.join(ROOT, "upload-8MiB.sha")).read().strip()
+                      self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32768)
+                      self.connection.settimeout(180)
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(download_size))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      self.wfile.flush()
+                      state = {"sent": 0, "error": ""}
+                      def send_response():
+                          try:
+                              with open(os.path.join(ROOT, "slow-download-32MiB.bin"), "rb") as f:
+                                  while True:
+                                      block = f.read(16384)
+                                      if not block:
+                                          break
+                                      self.wfile.write(block)
+                                      self.wfile.flush()
+                                      state["sent"] += len(block)
+                          except OSError as exc:
+                              state["error"] = repr(exc)
+                      thread = threading.Thread(target=send_response, daemon=True)
+                      thread.start()
+                      digest = hashlib.sha256()
+                      received = 0
+                      try:
+                          while received < upload_size:
+                              block = self.rfile.read(min(16384, upload_size - received))
+                              if not block:
+                                  break
+                              digest.update(block)
+                              received += len(block)
+                          client_fin = self.connection.recv(1) == b"" if received == upload_size else False
+                      except OSError:
+                          client_fin = False
+                      thread.join(180)
+                      actual = digest.hexdigest()
+                      ok = received == upload_size and actual == expected_upload and client_fin and state["sent"] == download_size and not state["error"] and not thread.is_alive()
+                      if ok:
+                          print("[DUPLEX] PASS upload=8388608 SHA-256=%s client_FIN=True response=33554432" % actual, flush=True)
+                      else:
+                          print("[DUPLEX] FAIL upload=%d sha=%s fin=%s response=%d error=%s" % (received, actual, client_fin, state["sent"], state["error"]), flush=True)
+                      self.close_connection = True
+                      return
+                  self.send_error(404)
+          ThreadingHTTPServer(("0.0.0.0", 18080), Handler).serve_forever()
+          PY_SERVER
+          python3 -m py_compile /tmp/mips-http-server.py
+          python3 /tmp/mips-http-server.py >/tmp/mips-http-server.log 2>&1 &
+          echo "$!" >/tmp/mips-http-server.pid
+
+          sudo useradd -m -s /bin/bash sshcore-ci
+          echo 'sshcore-ci:OpenWrt-CI-SSH-Only-2026' | sudo chpasswd
+          sudo ssh-keygen -A
+          sudo install -d -m 0755 -o root -g root /run/sshd
+          sudo /usr/sbin/sshd -D -e -f /dev/null \
+            -p 2222 \
+            -o PidFile=/tmp/mips-sshd.pid \
+            -o HostKey=/etc/ssh/ssh_host_ed25519_key \
+            -o ListenAddress=0.0.0.0 \
+            -o PasswordAuthentication=yes \
+            -o KbdInteractiveAuthentication=no \
+            -o PubkeyAuthentication=no \
+            -o PermitRootLogin=no \
+            -o UsePAM=no \
+            -o StrictModes=no \
+            -o AllowUsers=sshcore-ci \
+            -o AllowTcpForwarding=yes \
+            -o PermitOpen=127.0.0.1:18080 \
+            -o MaxSessions=64 \
+            -o LogLevel=VERBOSE >/tmp/mips-sshd.log 2>&1 &
+          echo "$!" >/tmp/mips-sshd.pid
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/health >/dev/null && timeout 2 bash -c '</dev/tcp/127.0.0.1/2222' 2>/dev/null; then
+              echo "Host HTTP and SSH fixtures are ready."
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/health
+
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout /tmp/mips-tls.key -out /tmp/mips-tls.crt \
+            -subj '/CN=localhost' -days 2 >/tmp/mips-tls-cert.log 2>&1
+          cat > /tmp/mips-tls-relay.py <<'PY_TLS'
+          import socket, ssl, threading
+          context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+          context.load_cert_chain('/tmp/mips-tls.crt', '/tmp/mips-tls.key')
+          def pump(source, destination):
+              try:
+                  while True:
+                      block = source.recv(65536)
+                      if not block:
+                          break
+                      destination.sendall(block)
+              except (OSError, ssl.SSLError):
+                  pass
+              if not isinstance(destination, ssl.SSLSocket):
+                  try:
+                      destination.shutdown(socket.SHUT_WR)
+                  except OSError:
+                      pass
+          def handle(raw, address):
+              tls = upstream = None
+              try:
+                  tls = context.wrap_socket(raw, server_side=True)
+                  upstream = socket.create_connection(("127.0.0.1", 2222), timeout=10)
+                  tls.settimeout(None)
+                  upstream.settimeout(None)
+                  a = threading.Thread(target=pump, args=(tls, upstream), daemon=True)
+                  b = threading.Thread(target=pump, args=(upstream, tls), daemon=True)
+                  a.start()
+                  b.start()
+                  a.join()
+                  b.join()
+                  try:
+                      tls.unwrap()
+                      tls = None
+                      print("[TLS-RELAY] close_notify exchange completed", flush=True)
+                  except (OSError, ssl.SSLError) as exc:
+                      print("[TLS-RELAY] close_notify failed %r" % exc, flush=True)
+              except Exception as exc:
+                  print("[TLS-RELAY] connection error %r" % exc, flush=True)
+              finally:
+                  for item in (upstream, tls, raw):
+                      if item is not None:
+                          try:
+                              item.close()
+                          except OSError:
+                              pass
+          listener = socket.socket()
+          listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          listener.bind(("0.0.0.0", 8443))
+          listener.listen(64)
+          print("[TLS-RELAY] listening on 8443", flush=True)
+          while True:
+              connection, address = listener.accept()
+              threading.Thread(target=handle, args=(connection, address), daemon=True).start()
+          PY_TLS
+          python3 -m py_compile /tmp/mips-tls-relay.py
+          # Restrict this test-only TLS server to ChaCha20-Poly1305 so the
+          # MIPS VM test proves actual negotiation, not just local preference setup.
+          cat > /tmp/mips-tls-chacha.cnf <<'OPENSSL_CONF'
+          openssl_conf = openssl_init
+          [openssl_init]
+          ssl_conf = ssl_sect
+          [ssl_sect]
+          system_default = system_default_sect
+          [system_default_sect]
+          Ciphersuites = TLS_CHACHA20_POLY1305_SHA256
+          OPENSSL_CONF
+          OPENSSL_CONF=/tmp/mips-tls-chacha.cnf python3 /tmp/mips-tls-relay.py >/tmp/mips-tls-relay.log 2>&1 &
+          echo "$!" >/tmp/mips-tls-relay.pid
+
+      - name: Boot the MT7621 OpenWrt 24.10.7 VM
+        shell: bash
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          cd "$EMU_DIR"
+          mkdir -p work
+          setsid ./emulator.sh -P zbtlink-zbt-wg3526-16m -w user -l user \
+            -o "lan-forwards=8022:22" -u none \
+            -S work/mips-console.sock -L work/logs >work/mips-emulator.log 2>&1 &
+          EMU_PID=$!
+          echo "$EMU_PID" > "$GITHUB_WORKSPACE/test-results/mips-emulator.pid"
+          SSH_KEY="$RUNNER_TEMP/mips-vm-key"
+          READY=0
+          for attempt in $(seq 1 360); do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then
+              echo "MT7621 emulator stopped before SSH was ready."
+              cat work/mips-emulator.log
+              false
+            fi
+            if ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o ConnectTimeout=5 \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              root@127.0.0.1 'echo MIPS_GUEST_READY' 2>/dev/null | grep -q MIPS_GUEST_READY; then
+              READY=1
+              break
+            fi
+            sleep 2
+          done
+          test "$READY" -eq 1
+          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
+            'cat /etc/openwrt_release; uname -a; opkg print-architecture; ip -4 addr show'
+          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
+            'wget -qO- http://10.0.2.2:18080/health | grep -qx ok'
+          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 'mkdir -p /tmp/mips-test'
+
+          IPK="$(find "$GITHUB_WORKSPACE/test-results" -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
+          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            "$IPK" "$GITHUB_WORKSPACE/test-results/spsc-rb-test" \
+            "$GITHUB_WORKSPACE/test-results/socks-halfclose" \
+            "$GITHUB_WORKSPACE/test-results/socks-mt-download" \
+            "$GITHUB_WORKSPACE/test-results/tls-engine-test" \
+            "$GITHUB_WORKSPACE/test-results/io-worker-pool-test" \
+            "$GITHUB_WORKSPACE/test-results/client-lifetime-test" \
+            "$GITHUB_WORKSPACE/test-results/client-event-token-test" \
+             "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" \
+            /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
+            /tmp/mips-fixtures/half-close-upload-8MiB.bin \
+            root@127.0.0.1:/tmp/mips-test/
+
+          cat > "$GITHUB_WORKSPACE/test-results/run-mips-guest-tests.sh" <<'GUEST_TEST'
+          #!/bin/sh
+          set -u
+          LOG=/tmp/mips-test
+          BIN=/usr/bin/passwall-ssh-core
+          STATUS=0
+          APP_PID=
+          TLS_PID=
+          pass() { echo "[PASS] $*"; }
+          fail() { echo "[FAIL] $*"; STATUS=1; }
+
+          echo "========== OPENWRT GUEST IDENTITY =========="
+          cat /etc/openwrt_release
+          uname -a
+          opkg print-architecture
+          if ! grep -q 'DISTRIB_RELEASE=.24.10.7' /etc/openwrt_release; then
+            fail "guest is not OpenWrt 24.10.7"
+          fi
+          if ! opkg print-architecture | grep -q mipsel_24kc; then
+            fail "guest opkg architecture is not mipsel_24kc"
+          fi
+
+          echo "========== VERIFY OFFLINE RUNTIME DEPENDENCIES =========="
+          opkg status libopenssl3 >"$LOG/opkg-libopenssl3.status" 2>&1
+          OPENSSL_STATUS_RC=$?
+          opkg status libssh2-1 >"$LOG/opkg-libssh2-1.status" 2>&1
+          SSH2_STATUS_RC=$?
+          if [ "$OPENSSL_STATUS_RC" -eq 0 ] && [ "$SSH2_STATUS_RC" -eq 0 ] &&
+             grep -q 'Status:.*installed' "$LOG/opkg-libopenssl3.status" &&
+             grep -q 'Status:.*installed' "$LOG/opkg-libssh2-1.status"; then
+            pass "libopenssl3 and libssh2-1 are preinstalled in the MT7621 firmware"
+          else
+            cat "$LOG/opkg-libopenssl3.status" "$LOG/opkg-libssh2-1.status" 2>/dev/null || true
+            opkg list-installed | grep -E '^(libopenssl|libssh2)' || true
+            fail "ImageBuilder firmware is missing libopenssl3 or libssh2-1"
+          fi
+
+          echo "========== INSTALL R37 MIPS IPK (OFFLINE) =========="
+          if [ "$STATUS" -eq 0 ]; then
+            opkg install /tmp/mips-test/passwall-ssh-core*.ipk
+            OPKG_RC=$?
+          else
+            OPKG_RC=1
+          fi
+          if [ "$OPKG_RC" -ne 0 ]; then
+            fail "opkg could not install the local MIPS package"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r37'; then
+            pass "opkg installed passwall-ssh-core r37 on mipsel_24kc"
+          else
+            fail "installed package version or executable path mismatch"
+          fi
+
+          if [ -f "$LOG/spsc-rb-test" ]; then
+            chmod 0755 "$LOG/spsc-rb-test"
+            if cp "$LOG/spsc-rb-test" /usr/bin/spsc-rb-test; then
+              chmod 0755 /usr/bin/spsc-rb-test
+              if /usr/bin/spsc-rb-test >"$LOG/spsc-rb-test.log" 2>&1; then
+                cat "$LOG/spsc-rb-test.log"
+                pass "MIPS SPSC ring stress, pinned-span and uint32_t wraparound tests"
+              else
+                cat "$LOG/spsc-rb-test.log"
+                fail "MIPS SPSC ring test failed"
+              fi
+            else
+              fail "could not copy static MIPS SPSC test binary to executable overlay"
+            fi
+          else
+            fail "static MIPS SPSC test binary is missing from /tmp/mips-test"
+          fi
+
+          if [ -f "$LOG/client-lifetime-test" ] && cp "$LOG/client-lifetime-test" /usr/bin/client-lifetime-test; then
+            chmod 0755 /usr/bin/client-lifetime-test
+            if /usr/bin/client-lifetime-test >"$LOG/client-lifetime-test.log" 2>&1; then
+              cat "$LOG/client-lifetime-test.log"
+              pass "MIPS client lifetime tokens, stale completion and deferred close"
+            else
+              cat "$LOG/client-lifetime-test.log"
+              fail "MIPS client lifetime regression failed"
+            fi
+          else
+            fail "MIPS client lifetime test helper missing"
+          fi
+
+          if [ -f "$LOG/client-event-token-test" ] && cp "$LOG/client-event-token-test" /usr/bin/client-event-token-test; then
+            chmod 0755 /usr/bin/client-event-token-test
+            if /usr/bin/client-event-token-test >"$LOG/client-event-token-test.log" 2>&1; then
+              cat "$LOG/client-event-token-test.log"
+              pass "MIPS client epoll event-token encode/decode and reserved values"
+            else
+              cat "$LOG/client-event-token-test.log"
+              fail "MIPS client event-token regression failed"
+            fi
+          else
+            fail "MIPS client event-token test helper missing"
+          fi
+
+          if [ -f "$LOG/io-worker-completion-tracker-test" ] && cp "$LOG/io-worker-completion-tracker-test" /usr/bin/io-worker-completion-tracker-test; then
+            chmod 0755 /usr/bin/io-worker-completion-tracker-test
+            if /usr/bin/io-worker-completion-tracker-test >"$LOG/io-worker-completion-tracker-test.log" 2>&1; then
+              cat "$LOG/io-worker-completion-tracker-test.log"
+              pass "MIPS completion identity, exactly-once consumption, bounded registry and rollback"
+            else
+              cat "$LOG/io-worker-completion-tracker-test.log"
+              fail "MIPS completion tracker regression failed"
+            fi
+          else
+            fail "MIPS completion tracker test helper missing"
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== MIPS I/O WORKER POOL REGRESSION =========="
+            WORKER_TEST_RC=0
+            if [ -f "$LOG/io-worker-pool-test" ] &&
+               cp "$LOG/io-worker-pool-test" /usr/bin/io-worker-pool-test; then
+              chmod 0755 /usr/bin/io-worker-pool-test
+              if command -v timeout >/dev/null 2>&1; then
+                timeout 180 /usr/bin/io-worker-pool-test >"$LOG/io-worker-pool-test.log" 2>&1 || WORKER_TEST_RC=$?
+              else
+                /usr/bin/io-worker-pool-test >"$LOG/io-worker-pool-test.log" 2>&1 || WORKER_TEST_RC=$?
+              fi
+              cat "$LOG/io-worker-pool-test.log"
+              if [ "$WORKER_TEST_RC" -eq 0 ]; then
+                pass "MIPS eventfd worker pool, 50k tasks, generations, bounded shutdown and rearm"
+              else
+                fail "MIPS I/O worker pool test failed (rc=$WORKER_TEST_RC)"
+              fi
+            else
+              fail "MIPS I/O worker pool helper missing or could not be staged"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== MIPS TLS ENGINE OWNER-THREAD REGRESSION =========="
+            TLS_TEST_RC=0
+            if [ -f "$LOG/tls-engine-test" ] &&
+               cp "$LOG/tls-engine-test" /usr/bin/tls-engine-test; then
+              chmod 0755 /usr/bin/tls-engine-test
+              if command -v timeout >/dev/null 2>&1; then
+                timeout 210 /usr/bin/tls-engine-test >"$LOG/tls-engine-test.log" 2>&1 || TLS_TEST_RC=$?
+              else
+                /usr/bin/tls-engine-test >"$LOG/tls-engine-test.log" 2>&1 || TLS_TEST_RC=$?
+              fi
+              cat "$LOG/tls-engine-test.log"
+              if [ "$TLS_TEST_RC" -eq 0 ]; then
+                pass "MIPS TLS Engine owner-thread duplex, close_notify and graceful shutdown"
+              else
+                fail "MIPS TLS Engine test failed (rc=$TLS_TEST_RC)"
+              fi
+            else
+              fail "MIPS TLS Engine helper missing or could not be staged"
+            fi
+          fi
+          if [ "$STATUS" -eq 0 ]; then
+            "$BIN" -h
+            if [ "$?" -eq 0 ]; then
+              pass "MIPS executable loads and prints usage"
+            else
+              fail "MIPS executable startup failed"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            cat > "$LOG/tcp.env" <<'TCP_ENV'
+          TRANSPORT=TCP
+          HOST=10.0.2.2
+          HOST_PORT=2222
+          USERNAME=sshcore-ci
+          PASSWORD=OpenWrt-CI-SSH-Only-2026
+          DELAY=0
+          FIX_CRLF=1
+          SOCKS_ADDR=127.0.0.1:1080
+          KEEPALIVE=15
+          VERIFY_TLS=0
+          MAX_CLIENTS=32
+          IDLE_TIMEOUT=600
+          WORKERS=2
+          LOG_BACKPRESSURE=1
+          TCP_ENV
+
+            echo "========== SSH AUTH DIAGNOSTIC: INTENTIONALLY INVALID PASSWORD =========="
+            sed 's|^PASSWORD=.*$|PASSWORD=R25-INTENTIONAL-BAD-SECRET|' \
+              "$LOG/tcp.env" > "$LOG/tcp-bad-auth.env"
+            if "$BIN" -env "$LOG/tcp-bad-auth.env" -log "$LOG/tcp-bad-auth.log" \
+              -log-backpressure 1 -log-perf 1 >"$LOG/tcp-bad-auth-stdout.log" 2>&1; then
+              fail "invalid SSH password was unexpectedly accepted"
+            else
+              BAD_AUTH_COUNT="$(grep -cF '[AUTH-DIAG] password method rejected: rc=' "$LOG/tcp-bad-auth.log" 2>/dev/null || true)"
+              if grep -qF 'legacy requested workers=2 (ignored to prevent multiple SSH logins)' "$LOG/tcp-bad-auth-stdout.log" && \
+                 [ "$BAD_AUTH_COUNT" -eq 1 ] && \
+                 grep -qF '[AUTH-DIAG] server methods: password' "$LOG/tcp-bad-auth.log" && \
+                 grep -qF '[AUTH-DIAG] password method rejected: rc=' "$LOG/tcp-bad-auth.log" && \
+                 grep -qE 'Authentication Failed:.*methods=.*username_len=10 password_len=' "$LOG/tcp-bad-auth.log" && \
+                 ! grep -qF 'R25-INTENTIONAL-BAD-SECRET' "$LOG/tcp-bad-auth.log" "$LOG/tcp-bad-auth-stdout.log"; then
+                pass "invalid password rejected with method/return-code diagnostics and no secret leakage"
+              else
+                fail "invalid-password diagnostics missing or the test secret appeared in logs"
+                cat "$LOG/tcp-bad-auth.log" "$LOG/tcp-bad-auth-stdout.log" 2>/dev/null || true
+              fi
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            "$BIN" -env "$LOG/tcp.env" -workers 4 -log "$LOG/tcp-ssh-core.log" \
+              -log-backpressure 1 -log-perf 1 >"$LOG/tcp-stdout.log" 2>&1 &
+            APP_PID=$!
+            READY=0
+            I=0
+            while [ "$I" -lt 90 ]; do
+              if grep -q "SOCKS5 Listening" "$LOG/tcp-ssh-core.log" 2>/dev/null; then READY=1; break; fi
+              if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
+              I=$((I + 1))
+              sleep 1
+            done
+            if [ "$READY" -eq 1 ]; then
+              pass "MIPS TCP SSH authentication and SOCKS listener"
+              LISTENER_COUNT="$(grep -c "SOCKS5 Listening" "$LOG/tcp-ssh-core.log" 2>/dev/null || true)"
+              LOGIN_COUNT="$(grep -cF '[AUTH-DIAG] authentication accepted via password' "$LOG/tcp-ssh-core.log" 2>/dev/null || true)"
+              if grep -qF 'SSH_sessions=1 mode=single-session; legacy requested workers=4 (ignored to prevent multiple SSH logins)' "$LOG/tcp-stdout.log" &&
+                 [ "$LISTENER_COUNT" -eq 1 ] && [ "$LOGIN_COUNT" -eq 1 ]; then
+                pass "-workers=4 still produces one listener and one SSH login"
+              else
+                fail "legacy worker options violated the one-session/one-login invariant"
+              fi
+              if grep -qF '[AUTH-DIAG] authentication accepted via password' "$LOG/tcp-ssh-core.log" && \
+                 grep -qF '[AUTH-DIAG] configured credential sizes: username=10 password=24 bytes' "$LOG/tcp-ssh-core.log"; then
+                pass "valid SSH password accepted; only redacted credential lengths were logged"
+              else
+                fail "valid-password authentication diagnostics were incomplete"
+                cat "$LOG/tcp-ssh-core.log" 2>/dev/null || true
+              fi
+            else
+              fail "MIPS TCP SSH session did not start"
+              cat "$LOG/tcp-stdout.log" "$LOG/tcp-ssh-core.log" 2>/dev/null
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            # OpenWrt mounts /tmp with noexec; keep large fixtures there but
+            # place the small static MIPS helper on the executable overlay.
+            if cp "$LOG/socks-halfclose" /usr/bin/socks-halfclose && \
+              chmod 0755 /usr/bin/socks-halfclose && [ -x /usr/bin/socks-halfclose ]; then
+              pass "MIPS half-close helper staged on executable overlay"
+              if cp "$LOG/socks-mt-download" /usr/bin/socks-mt-download && \
+                chmod 0755 /usr/bin/socks-mt-download && [ -x /usr/bin/socks-mt-download ]; then
+                pass "concurrent SOCKS download test helper staged on executable overlay"
+              else
+                fail "could not stage pthread download benchmark"
+              fi
+            else
+              fail "could not stage MIPS half-close helper on executable overlay"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== TCP BASIC SOCKS TRANSFER =========="
+            if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 --connect-timeout 20 --max-time 120 \
+              http://127.0.0.1:18080/payload -o "$LOG/payload-1MiB.bin"; then
+              ACTUAL="$(sha256sum "$LOG/payload-1MiB.bin" | awk '{print $1}')"
+              EXPECTED="$(sha256sum /tmp/mips-test/payload-1MiB.bin | awk '{print $1}')"
+              SIZE="$(wc -c < "$LOG/payload-1MiB.bin" | tr -d ' ')"
+              if [ "$SIZE" = 1048576 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
+                pass "1 MiB TCP SOCKS transfer exact length and SHA-256"
+              else
+                fail "TCP SOCKS download size/hash mismatch"
+              fi
+            else
+              fail "TCP SOCKS download failed"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== TCP IDLE CLIENT RST + RECONNECT / FD REUSE =========="
+            if /usr/bin/socks-halfclose --rst-idle 1080; then
+              pass "idle client RST delivered while remote response body was delayed"
+              RST_RECONNECT_OK=1
+              N=1
+              while [ "$N" -le 8 ]; do
+                if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 --connect-timeout 20 --max-time 120 \
+                  http://127.0.0.1:18080/payload -o "$LOG/rst-reconnect-$N.bin"; then
+                  SIZE="$(wc -c < "$LOG/rst-reconnect-$N.bin" | tr -d ' ')"
+                  ACTUAL="$(sha256sum "$LOG/rst-reconnect-$N.bin" | awk '{print $1}')"
+                  EXPECTED="$(sha256sum /tmp/mips-test/payload-1MiB.bin | awk '{print $1}')"
+                  if [ "$SIZE" != 1048576 ] || [ "$ACTUAL" != "$EXPECTED" ]; then
+                    RST_RECONNECT_OK=0
+                    break
+                  fi
+                else
+                  RST_RECONNECT_OK=0
+                  break
+                fi
+                N=$((N + 1))
+              done
+              if [ "$RST_RECONNECT_OK" -eq 1 ] && [ "$N" -eq 9 ]; then
+                pass "8 fresh SOCKS reconnects after RST with exact payload SHA-256 (FD reuse stress)"
+              else
+                fail "reconnect/FD-reuse transfer failed after RST"
+              fi
+            else
+              fail "idle RST helper failed"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== TCP HALF-CLOSE AND 8 MiB POST-EOF UPLOAD =========="
+            if /usr/bin/socks-halfclose /tmp/mips-test/half-close-upload-8MiB.bin; then
+              pass "TCP client-FIN-first, server-FIN-first and 8 MiB post-EOF upload"
+            else
+              fail "TCP half-close helper failed"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== TCP FULL-DUPLEX 8 MiB UP / 32 MiB DOWN =========="
+            if /usr/bin/socks-halfclose --duplex /tmp/mips-test/half-close-upload-8MiB.bin "$LOG/tcp-duplex-32MiB.bin"; then
+              SIZE="$(wc -c < "$LOG/tcp-duplex-32MiB.bin" | tr -d ' ')"
+              ACTUAL="$(sha256sum "$LOG/tcp-duplex-32MiB.bin" | awk '{print $1}')"
+              EXPECTED="$(sha256sum /tmp/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
+              if [ "$SIZE" = 33554432 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
+                pass "TCP full-duplex exact 8 MiB upload and 32 MiB response"
+              else
+                fail "TCP full-duplex response mismatch"
+              fi
+            else
+              fail "TCP full-duplex helper failed"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== TCP 32 MiB C2S BACKPRESSURE =========="
+            dd if=/dev/urandom of="$LOG/tcp-upload-32MiB.bin" bs=1M count=32 2>/dev/null
+            LOCAL_SHA="$(sha256sum "$LOG/tcp-upload-32MiB.bin" | awk '{print $1}')"
+            if RESPONSE="$(curl -4 -fsS --socks5-hostname 127.0.0.1:1080 --connect-timeout 20 --max-time 420 \
+              --data-binary @"$LOG/tcp-upload-32MiB.bin" http://127.0.0.1:18080/slow-upload)"; then
+              echo "$RESPONSE"
+              if echo "$RESPONSE" | grep -q "size=33554432 sha256=$LOCAL_SHA"; then
+                pass "TCP 32 MiB upload preserved exact remote SHA-256"
+              else
+                fail "TCP C2S upload hash mismatch"
+              fi
+            else
+              fail "TCP 32 MiB upload failed"
+            fi
+            NOT_DRAINED="$(grep -c "SSH channel buffer not drained at close" "$LOG/tcp-ssh-core.log" 2>/dev/null || true)"
+            C2S_TOTALS="$(awk '{
+              for (i = 1; i <= NF; i++) {
+                if ($i ~ /^c2s_rx_bytes=/) { split($i, a, "="); rx += a[2] }
+                if ($i ~ /^c2s_ssh_write_bytes=/) { split($i, a, "="); written += a[2] }
+              }
+            } END { printf "%.0f %.0f", rx, written }' "$LOG/tcp-ssh-core.log")"
+            set -- $C2S_TOTALS
+            C2S_RX_TOTAL="${1:-0}"
+            C2S_WRITE_TOTAL="${2:-0}"
+            echo "TCP C2S received=$C2S_RX_TOTAL committed=$C2S_WRITE_TOTAL not_drained=$NOT_DRAINED"
+            if [ "$C2S_RX_TOTAL" -gt 0 ] && [ "$C2S_RX_TOTAL" -eq "$C2S_WRITE_TOTAL" ] && [ "$NOT_DRAINED" -eq 0 ]; then
+              pass "TCP C2S bytes fully committed with no retained channel buffer at close"
+            else
+              fail "TCP C2S accounting mismatch or channel buffer remained queued at close"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== SINGLE-SESSION SSH MULTI-CLIENT TEST =========="
+            EXPECTED_BYTES=33554432
+            EXPECTED_SHA="$(sha256sum /tmp/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
+
+            start_sampler() {
+              LABEL="$1"; PID_FILE="$2"
+              touch "$LOG/$LABEL.active"
+              (
+                while [ -f "$LOG/$LABEL.active" ]; do
+                  TICK_HZ="$(getconf CLK_TCK 2>/dev/null || echo 100)"
+                  echo "===== epoch=$(date +%s) clk_tck=$TICK_HZ load=$(cat /proc/loadavg) ====="
+                  awk '/^cpu([0-9]+)? / {print}' /proc/stat
+                  while IFS= read -r P; do
+                    [ -r "/proc/$P/status" ] || continue
+                    echo "PROC pid=$P"
+                    awk '/^(Name|State|Threads|VmRSS|voluntary_ctxt_switches|nonvoluntary_ctxt_switches):/ {print}' "/proc/$P/status"
+                    awk '{print "PROC_STAT utime="$14 " stime="$15}' "/proc/$P/stat"
+                    for T in /proc/"$P"/task/*; do
+                      [ -r "$T/stat" ] || continue
+                      TID="$(basename "$T")"
+                      awk -v tid="$TID" '{print "THREAD tid="tid " utime="$14 " stime="$15}' "$T/stat"
+                    done
+                  done < "$PID_FILE"
+                  echo "--- SNMP ---"; cat /proc/net/snmp
+                  echo "--- NETSTAT ---"; cat /proc/net/netstat
+                  echo "--- SOCKSTAT ---"; cat /proc/net/sockstat
+                  echo "--- TCP ---"; cat /proc/net/tcp
+                  echo "--- TCP6 ---"; cat /proc/net/tcp6
+                  echo "--- SOFTIRQS ---"; cat /proc/softirqs
+                  echo "--- NET DEV ---"; cat /proc/net/dev
+                  awk '/^(MemAvailable|MemFree|SwapFree):/ {print}' /proc/meminfo
+                  sleep 1
+                done
+              ) >> "$LOG/$LABEL-sampler.log" 2>&1 &
+              echo $! > "$LOG/$LABEL-sampler.pid"
+            }
+            stop_sampler() {
+              LABEL="$1"
+              rm -f "$LOG/$LABEL.active"
+              SPID="$(cat "$LOG/$LABEL-sampler.pid" 2>/dev/null)"
+              [ -n "$SPID" ] && wait "$SPID" 2>/dev/null || true
+            }
+            if [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null; then
+              echo "$APP_PID" > "$LOG/tcp-single-core-pids"
+              /usr/bin/socks-mt-download 4 1 1080 "$EXPECTED_BYTES" "$EXPECTED_SHA" >"$LOG/tcp-single-core-download.log" 2>&1 &
+              MT_PID=$!
+              echo "$MT_PID" >> "$LOG/tcp-single-core-pids"
+              start_sampler "tcp-single-core-4clients" "$LOG/tcp-single-core-pids"
+              wait "$MT_PID"
+              SINGLE_RC=$?
+              stop_sampler "tcp-single-core-4clients"
+              cat "$LOG/tcp-single-core-download.log"
+              if [ "$SINGLE_RC" -eq 0 ]; then
+                pass "4 concurrent SOCKS clients completed through one SSH session; streamed 4 x 32 MiB and verified SHA-256"
+              else
+                fail "single-session concurrent SOCKS download or streamed SHA-256 check failed"
+              fi
+            else
+              fail "single-session baseline proxy was not running"
+            fi
+          fi
+
+          echo "========== TCP SINGLE-SESSION RELAY LOG =========="
+          cat "$LOG/tcp-ssh-core.log" 2>/dev/null || true
+          if [ -n "$APP_PID" ]; then
+            kill -TERM "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+            APP_PID=
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== TLS/SNI SINGLE-SESSION MULTI-CLIENT TEST =========="
+            sed -e 's|^TRANSPORT=.*$|TRANSPORT=TLS|' \
+                -e 's|^HOST_PORT=.*$|HOST_PORT=8443|' \
+                -e 's|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:1080|' \
+                -e 's|^VERIFY_TLS=.*$|VERIFY_TLS=0|' \
+                "$LOG/tcp.env" > "$LOG/bench-tls.env"
+            printf '%s\n' 'SNI=localhost' >> "$LOG/bench-tls.env"
+            rm -f "$LOG/tls-single-core.log" "$LOG/tls-single-core-stdout.log"
+            "$BIN" -env "$LOG/bench-tls.env" -log "$LOG/tls-single-core.log" \
+              -log-backpressure 1 -log-perf 1 >"$LOG/tls-single-core-stdout.log" 2>&1 &
+            TLS_BENCH_PID=$!
+            READY=0; I=0
+            while [ "$I" -lt 90 ]; do
+              if grep -q "SOCKS5 Listening" "$LOG/tls-single-core.log" 2>/dev/null; then READY=1; break; fi
+              if ! kill -0 "$TLS_BENCH_PID" 2>/dev/null; then break; fi
+              I=$((I + 1)); sleep 1
+            done
+            if [ "$READY" -eq 1 ]; then
+              echo "$TLS_BENCH_PID" > "$LOG/tls-single-core-pids"
+              /usr/bin/socks-mt-download 4 1 1080 "$EXPECTED_BYTES" "$EXPECTED_SHA" \
+                >"$LOG/tls-single-core-download.log" 2>&1 &
+              MT_PID=$!
+              echo "$MT_PID" >> "$LOG/tls-single-core-pids"
+              start_sampler "tls-single-core-4clients" "$LOG/tls-single-core-pids"
+              wait "$MT_PID"; TLS_SINGLE_RC=$?
+              stop_sampler "tls-single-core-4clients"
+              cat "$LOG/tls-single-core-download.log"
+              if [ "$TLS_SINGLE_RC" -eq 0 ]; then
+                pass "4 pthread downloads passed through one TLS/SNI SSH session with exact bytes and SHA-256"
+                if grep -q 'TLS Connected: TLSv1.3 (TLS_CHACHA20_POLY1305_SHA256)' "$LOG/tls-single-core.log"; then
+                  pass "mipsel_24kc negotiated TLS_CHACHA20_POLY1305_SHA256 as the preferred TLS 1.3 suite"
+                else
+                  fail "MIPS TLS connection did not negotiate the required ChaCha20-Poly1305 suite"
+                fi
+                if grep -q 'mipsel_24kc TLS 1.3 cipher preference configured' "$LOG/tls-single-core.log"; then
+                  pass "MIPS-only TLS 1.3 cipher preference was compiled and applied"
+                else
+                  fail "MIPS-only TLS 1.3 cipher preference was not applied"
+                fi
+              else
+                fail "TLS/SNI single-session pthread download failed"
+              fi
+            else
+              fail "TLS/SNI baseline core did not become ready"
+              cat "$LOG/tls-single-core-stdout.log" "$LOG/tls-single-core.log" 2>/dev/null || true
+            fi
+            kill -TERM "$TLS_BENCH_PID" 2>/dev/null || true
+            wait "$TLS_BENCH_PID" 2>/dev/null || true
+          fi
+
+          echo "========== TLS/SNI SINGLE-SESSION LOG =========="
+          cat "$LOG/tls-single-core.log" 2>/dev/null || true
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== TLS HALF-CLOSE AND FULL-DUPLEX =========="
+            sed -e 's|^TRANSPORT=.*$|TRANSPORT=TLS|' \
+                -e 's|^HOST_PORT=.*$|HOST_PORT=8443|' \
+                -e 's|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:1082|' \
+                -e 's|^KEEPALIVE=.*$|KEEPALIVE=10|' \
+                "$LOG/tcp.env" > "$LOG/tls.env"
+            printf '%s\n' 'SNI=localhost' >> "$LOG/tls.env"
+            "$BIN" -env "$LOG/tls.env" -log "$LOG/tls-ssh-core.log" >"$LOG/tls-stdout.log" 2>&1 &
+            TLS_PID=$!
+            READY=0
+            I=0
+            while [ "$I" -lt 90 ]; do
+              if grep -q "SOCKS5 Listening" "$LOG/tls-ssh-core.log" 2>/dev/null; then READY=1; break; fi
+              if ! kill -0 "$TLS_PID" 2>/dev/null; then break; fi
+              I=$((I + 1))
+              sleep 1
+            done
+            if [ "$READY" -eq 1 ]; then
+              pass "MIPS TLS SSH transport and SOCKS listener"
+              sleep 22
+              KEEPALIVE="$(grep -c "SSH keepalive sent" "$LOG/tls-ssh-core.log" 2>/dev/null || true)"
+              if [ "$KEEPALIVE" -ge 2 ]; then
+                pass "TLS SSH keepalive transmitted while idle"
+              else
+                fail "TLS idle keepalive missing"
+              fi
+              if [ "$STATUS" -eq 0 ] && /usr/bin/socks-halfclose /tmp/mips-test/half-close-upload-8MiB.bin 1082; then
+                pass "TLS client/server half-close and 8 MiB post-EOF upload"
+              else
+                fail "TLS half-close regression failed"
+              fi
+              if [ "$STATUS" -eq 0 ] && /usr/bin/socks-halfclose --duplex /tmp/mips-test/half-close-upload-8MiB.bin "$LOG/tls-duplex-32MiB.bin" 1082; then
+                SIZE="$(wc -c < "$LOG/tls-duplex-32MiB.bin" | tr -d ' ')"
+                ACTUAL="$(sha256sum "$LOG/tls-duplex-32MiB.bin" | awk '{print $1}')"
+                EXPECTED="$(sha256sum /tmp/mips-test/slow-download-32MiB.bin | awk '{print $1}')"
+                if [ "$SIZE" = 33554432 ] && [ "$ACTUAL" = "$EXPECTED" ]; then
+                  pass "TLS full-duplex exact 8 MiB upload and 32 MiB response"
+                else
+                  fail "TLS full-duplex response mismatch"
+                fi
+              else
+                fail "TLS full-duplex helper failed"
+              fi
+            else
+              fail "MIPS TLS SSH session did not start"
+              cat "$LOG/tls-stdout.log" "$LOG/tls-ssh-core.log" 2>/dev/null || true
+            fi
+            if [ -n "$TLS_PID" ]; then
+              kill -TERM "$TLS_PID" 2>/dev/null || true
+              TLS_RC=0
+              wait "$TLS_PID" || TLS_RC=$?
+              TLS_PID=
+              if [ "$TLS_RC" -eq 0 ] && \
+                ! grep -q "A libssh2/OpenSSL operation is still pending at process shutdown" "$LOG/tls-ssh-core.log" 2>/dev/null && \
+                ! grep -q "TLS close_notify did not complete before shutdown deadline" "$LOG/tls-ssh-core.log" 2>/dev/null; then
+                pass "TLS SIGTERM completed graceful SSH/TLS shutdown"
+              else
+                fail "TLS graceful shutdown reported an error"
+              fi
+            fi
+          fi
+
+          echo "========== TCP SSH CORE LOG =========="
+          cat "$LOG/tcp-ssh-core.log" 2>/dev/null || true
+          echo "========== TLS SSH CORE LOG =========="
+          cat "$LOG/tls-ssh-core.log" 2>/dev/null || true
+          echo "MIPS TEST STATUS: $STATUS" | tee "$LOG/test-status"
+          exit "$STATUS"
+          GUEST_TEST
+          chmod 0700 "$GITHUB_WORKSPACE/test-results/run-mips-guest-tests.sh"
+          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            "$GITHUB_WORKSPACE/test-results/run-mips-guest-tests.sh" root@127.0.0.1:/tmp/mips-test/run-tests.sh
+          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 'sh /tmp/mips-test/run-tests.sh'
+
+          echo "========== QEMU SUSTAINED SOCKS5 SPEEDTEST =========="
+          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            "$GITHUB_WORKSPACE/tests/qemu_speedtest.sh" root@127.0.0.1:/tmp/mips-test/qemu_speedtest.sh
+          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
+            'chmod 0700 /tmp/mips-test/qemu_speedtest.sh && /tmp/mips-test/qemu_speedtest.sh "${{ inputs.benchmark_duration || 60 }}"'
+
+          echo "========== VERIFY HOST OBSERVED TCP AND TLS HALF-CLOSE =========="
+          cat /tmp/mips-http-server.log
+          CLIENT_FIN="$(grep -cF '[HALFCLOSE] client FIN observed after complete request body' /tmp/mips-http-server.log || true)"
+          SERVER_FIN="$(grep -cF '[HALFCLOSE] server FIN path received exact client trailer' /tmp/mips-http-server.log || true)"
+          LARGE="$(grep -cF '[HALFCLOSE-LARGE] PASS received exact 8388608-byte upload SHA-256=' /tmp/mips-http-server.log || true)"
+          DUPLEX="$(grep -cF '[DUPLEX] PASS upload=8388608 SHA-256=' /tmp/mips-http-server.log || true)"
+          echo "client_FIN=$CLIENT_FIN server_FIN=$SERVER_FIN exact_8MiB_post_EOF=$LARGE duplex_8MiB_up_32MiB_down=$DUPLEX"
+          test "$CLIENT_FIN" -ge 2
+          test "$SERVER_FIN" -ge 2
+          # The 8 MiB post-EOF upload endpoint is exercised by the TCP
+          # half-close suite once; TLS independently covers client/server
+          # half-close and full-duplex transfers below.
+          test "$LARGE" -ge 1
+          test "$DUPLEX" -ge 2
+
+      - name: Collect guest logs, stop MT7621 emulator and collect host logs
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -f "$RUNNER_TEMP/mips-vm-key" ]; then
+            mkdir -p test-results/guest
+            ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
+              -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
+              'cd /tmp/mips-test && find . -type f \( -name "*.log" -o -name "*.env" -o -name "*-pids" -o -name "test-status" -o -name "run-tests.sh" -o -path "./qemu-speedtest/*" \) -print > /tmp/mips-log-files.list && tar -czf /tmp/mips-guest-logs.tgz -T /tmp/mips-log-files.list' 2>/dev/null
+            scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              root@127.0.0.1:/tmp/mips-guest-logs.tgz test-results/guest/ 2>/dev/null
+            if [ -s test-results/guest/mips-guest-logs.tgz ] && \
+              gzip -t test-results/guest/mips-guest-logs.tgz && \
+              tar -tzf test-results/guest/mips-guest-logs.tgz >/dev/null 2>&1; then
+              tar -xzf test-results/guest/mips-guest-logs.tgz -C test-results/guest/
+              echo "Guest log archive passed gzip/tar integrity checks."
+            else
+              echo "WARNING: guest log archive is missing or corrupt; retaining raw archive for diagnosis."
+            fi
+          fi
+          if [ -n "$EMU_DIR" ]; then
+            if [ -f "$GITHUB_WORKSPACE/test-results/mips-emulator.pid" ]; then
+              EMU_PID="$(cat "$GITHUB_WORKSPACE/test-results/mips-emulator.pid")"
+              kill -- "-$EMU_PID" 2>/dev/null
+            fi
+            pkill -x qemu-system-mipsel 2>/dev/null
+            mkdir -p test-results/mips-console-logs
+            cp -a "$EMU_DIR/work/mips-emulator.log" test-results/mips-emulator.log 2>/dev/null
+            cp -a "$EMU_DIR/work/logs/." test-results/mips-console-logs/ 2>/dev/null
+          fi
+          cp /tmp/mips-http-server.log test-results/host-http-server.log 2>/dev/null
+          cp /tmp/mips-sshd.log test-results/host-sshd.log 2>/dev/null
+          cp /tmp/mips-tls-relay.log test-results/host-tls-relay.log 2>/dev/null
+          ls -lh test-results test-results/guest test-results/mips-console-logs 2>/dev/null || true
+
+      - name: Upload OpenWrt 24.10.7 MIPS VM results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: passwall-ssh-core-openwrt24-mipsel-qemu-speedtest
+          path: |
+            test-results/**
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Publish mipsel QEMU integration status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const state = `${{ job.status }}` === "success" ? "success" : "failure";
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state,
+              context: "mipsel_24kc / QEMU speedtest",
+              description: state === "success"
+                ? "OpenWrt 24.10.7 mipsel_24kc QEMU speedtest passed."
+                : "OpenWrt 24.10.7 mipsel_24kc QEMU speedtest failed.",
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
