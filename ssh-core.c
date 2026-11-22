@@ -191,7 +191,7 @@ typedef struct {
     int      http_chunk_state; /* 0=size, 1=data, 2=delim, 3=trailers */
     size_t   http_chunk_rem;
     size_t   http_chunk_total;
-    time_t   last_activity;
+    long long last_activity_ms;
     int      hup_seen;
     int      rx_terminal;
     int      rx_terminal_rc; /* stable callback result: 0 EOF, negative errno */
@@ -239,7 +239,7 @@ typedef struct client_conn {
     int            in_epoll;
     client_state_t state;
     uint32_t       epoll_events;
-    time_t         accepted_at;
+    long long      accepted_at_ms;
     long long      open_started_ms;
     long long      ctrl_close_deadline_ms;
     long long      cleanup_deadline_ms;
@@ -1605,7 +1605,7 @@ static int raw_write_all_nb(upstream_ctx_t *u, const void *data,
         if (u->tls) {
             ssize_t n = tls_engine_send(u->tls, p, left);
             if (n > 0) {
-                u->last_activity = time(NULL);
+                u->last_activity_ms = now_ms();
                 p += (size_t)n;
                 left -= (size_t)n;
                 continue;
@@ -1615,7 +1615,7 @@ static int raw_write_all_nb(upstream_ctx_t *u, const void *data,
         } else {
             ssize_t n = send(u->fd, p, left, MSG_NOSIGNAL);
             if (n > 0) {
-                u->last_activity = time(NULL);
+                u->last_activity_ms = now_ms();
                 p += (size_t)n;
                 left -= (size_t)n;
                 continue;
@@ -1656,7 +1656,7 @@ static ssize_t pre_read_more(upstream_ctx_t *u) {
         ssize_t n = tls_engine_recv(u->tls, u->pre_buf + u->pre_len, space);
         if (n > 0) {
             u->pre_len += (size_t)n;
-            u->last_activity = time(NULL);
+            u->last_activity_ms = now_ms();
             return n;
         }
         if (n == 0) return 0;
@@ -1672,7 +1672,7 @@ static ssize_t pre_read_more(upstream_ctx_t *u) {
     } while (n < 0 && errno == EINTR);
     if (n > 0) {
         u->pre_len += (size_t)n;
-        u->last_activity = time(NULL);
+        u->last_activity_ms = now_ms();
         return n;
     }
     if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return -2;
@@ -1868,7 +1868,7 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length,
         memcpy(buffer, u->pre_buf + u->pre_off, take);
         u->pre_off += take;
         if (u->pre_off == u->pre_len) { u->pre_off = 0; u->pre_len = 0; }
-        u->last_activity = time(NULL);
+        u->last_activity_ms = now_ms();
         u->rx_seq++;
         return (ssize_t)take;
     }
@@ -1885,7 +1885,7 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length,
                 g_perf_stats.tls_rx_bytes += (uint64_t)r;
                 g_perf_stats.ssh_rx_bytes += (uint64_t)r;
             }
-            u->last_activity = time(NULL);
+            u->last_activity_ms = now_ms();
             u->rx_seq++;
             return r;
         }
@@ -1904,7 +1904,7 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length,
     do { r = recv(sock, buffer, length, 0); } while (r < 0 && errno == EINTR);
     if (r > 0) {
         if (g_log_perf) g_perf_stats.ssh_rx_bytes += (uint64_t)r;
-        u->last_activity = time(NULL);
+        u->last_activity_ms = now_ms();
         u->rx_seq++;
         return r;
     }
@@ -1926,14 +1926,14 @@ static ssize_t ssh_send_cb(libssh2_socket_t sock, const void *buffer, size_t len
     if (u->skip_ssh_banner_bytes > 0) {
         size_t take = length < u->skip_ssh_banner_bytes ? length : u->skip_ssh_banner_bytes;
         u->skip_ssh_banner_bytes -= take;
-        u->last_activity = time(NULL);
+        u->last_activity_ms = now_ms();
         return (ssize_t)take;
     }
     if (u->tls) {
         size_t write_length = length > 32768U ? 32768U : length;
         ssize_t r = tls_engine_send(u->tls, buffer, write_length);
         if (r > 0) {
-            u->last_activity = time(NULL);
+            u->last_activity_ms = now_ms();
             return r;
         }
         if (r == 0 || errno == EAGAIN || errno == EWOULDBLOCK) return -EAGAIN;
@@ -1946,7 +1946,7 @@ static ssize_t ssh_send_cb(libssh2_socket_t sock, const void *buffer, size_t len
     ssize_t r;
     do { r = send(sock, buffer, length, MSG_NOSIGNAL); } while (r < 0 && errno == EINTR);
     if (r > 0) {
-        u->last_activity = time(NULL);
+        u->last_activity_ms = now_ms();
         return r;
     }
     if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return -EAGAIN;
@@ -3658,7 +3658,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         tls_finish_libssh2_call(u, rc == LIBSSH2_ERROR_EAGAIN);
         int settled = settle_pending_keepalive_result(rc);
         if (settled > 0) {
-            u->last_activity = time(NULL);
+            u->last_activity_ms = now_ms();
             if (g_log_backpressure) log_blue("SSH keepalive sent");
             return 1;
         }
@@ -4791,7 +4791,7 @@ static int core_worker_run(int argc, char **argv) {
     upstream_ctx_t uctx = {
         .fd = upstream_fd, .log_path = g_log_path,
         .log_worker_id = g_worker_id, .log_worker_count = g_worker_count,
-        .last_activity = time(NULL),
+        .last_activity_ms = now_ms(),
         .allow_http_200_tunnel = cfg.allow_http_200_tunnel
     };
     SSL_CTX *ssl_ctx = NULL;
@@ -4914,7 +4914,7 @@ static int core_worker_run(int argc, char **argv) {
             uctx.fd = upstream_fd;
             upstream_libssh2_socket = upstream_fd;
             upstream_watch_fd = upstream_fd;
-            uctx.last_activity = time(NULL);
+            uctx.last_activity_ms = now_ms();
         }
         char tls_version[32] = "unknown";
         char tls_cipher[128] = "unknown";
@@ -5249,8 +5249,8 @@ static int core_worker_run(int argc, char **argv) {
     if (g_log_perf) perf_begin(now_ms());
     int force_next_tick = 0;
     int idle_rx_paused = 0;
-    time_t last_ka_try = 0;
-    time_t last_emfile_log = 0;
+    long long last_ka_try_ms = 0;
+    long long last_emfile_log_ms = 0;
     exit_code = 0;
 
     while (!stop_requested()) {
@@ -5329,10 +5329,10 @@ static int core_worker_run(int argc, char **argv) {
                         if (errno == EINTR) continue;
                         if (errno == EAGAIN || errno == EWOULDBLOCK) break;
                         if (errno == EMFILE || errno == ENFILE) {
-                            time_t now_err = time(NULL);
-                            if (now_err - last_emfile_log >= 5) {
+                            long long now_err_ms = now_ms();
+                            if (now_err_ms - last_emfile_log_ms >= 5000LL) {
                                 log_yellow("Batas FD tercapai (%s), menolak koneksi baru sementara", strerror(errno));
-                                last_emfile_log = now_err;
+                                last_emfile_log_ms = now_err_ms;
                             }
                             usleep(5000);
                         }
@@ -5375,7 +5375,7 @@ static int core_worker_run(int argc, char **argv) {
                     nc->fd = cfd;
                     nc->state = ST_SOCKS_GREETING;
                     nc->epoll_events = EPOLLIN | EPOLLRDHUP;
-                    nc->accepted_at = time(NULL);
+                    nc->accepted_at_ms = now_ms();
                     nc->last_activity_ms = now_ms();
 
                     struct epoll_event cev = {
@@ -5463,7 +5463,6 @@ static int core_worker_run(int argc, char **argv) {
             retry_window_waiters();
         }
 
-        time_t now_sec = time(NULL);
         long long now_msec = now_ms();
         for (client_conn_t *c = g_clients, *nxt = NULL; c; c = nxt) {
             nxt = c->next;
@@ -5482,7 +5481,7 @@ static int core_worker_run(int argc, char **argv) {
                 continue;
             }
             if ((c->state == ST_SOCKS_GREETING || c->state == ST_SOCKS_REQUEST) &&
-                (now_sec - c->accepted_at) >= SOCKS_HS_TIMEOUT_SEC) {
+                (now_msec - c->accepted_at_ms) >= (long long)SOCKS_HS_TIMEOUT_SEC * 1000LL) {
                 start_closing_client(epfd, c);
             } else if (!uctx.hup_seen && relay_idle_timeout_due(c, cfg.idle_timeout_sec, now_msec)) {
                 /* Idle expiry is intentionally silent; the timeout cleanup remains active. */
@@ -5585,15 +5584,15 @@ static int core_worker_run(int argc, char **argv) {
 
         if (!uctx.hup_seen && keepalive_can_start(&uctx, g_pending_op) &&
             cfg.keepalive_sec > 0 &&
-            (now_sec - uctx.last_activity) >= cfg.keepalive_sec &&
-            (now_sec - last_ka_try) >= 1) {
+            (now_msec - uctx.last_activity_ms) >= (long long)cfg.keepalive_sec * 1000LL &&
+            (now_msec - last_ka_try_ms) >= 1000LL) {
             int next_sec = 0;
-            last_ka_try = now_sec;
+            last_ka_try_ms = now_msec;
             tls_begin_libssh2_call(&uctx);
             int ka_rc = libssh2_keepalive_send(session, &next_sec);
             tls_finish_libssh2_call(&uctx, ka_rc == LIBSSH2_ERROR_EAGAIN);
             if (ka_rc == 0) {
-                uctx.last_activity = now_sec;
+                uctx.last_activity_ms = now_msec;
                 if (g_log_backpressure) log_blue("SSH keepalive sent");
             } else if (ka_rc == LIBSSH2_ERROR_EAGAIN) {
                 int ka_dirs = libssh2_session_block_directions(session);
