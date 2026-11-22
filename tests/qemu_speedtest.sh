@@ -110,7 +110,7 @@ net_rate_line() {
 }
 
 run_diag_self_test() {
-    TEST_ROOT="/tmp/r39-speedtest-diag-test.$"
+    TEST_ROOT="/tmp/r39-speedtest-diag-test"
     rm -rf "$TEST_ROOT"
     mkdir -p "$TEST_ROOT/tasks/4242" "$TEST_ROOT/net/testnet/statistics" "$TEST_ROOT/net/lo/statistics" || return 2
 
