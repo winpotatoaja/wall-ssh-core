@@ -6,18 +6,14 @@
 - The benchmark's host sshd log records exactly one successful password authentication and the relay logs exactly one SSH authentication/session-key establishment; four download operations share the same single SSH session. CPU detection selected four auxiliary I/O workers. S2C backpressure reached the 128 KiB buffer ceiling and drained to zero twice; no relay invariant errors were recorded.
 - This is a short-file comparison using two ~10 MB Singapore endpoints (about 40.97 MB total over four transfers). It is not a sustained 100 MB throughput claim. The earlier 100 MB run was cancelled by the user before a complete result was captured.
 
-- **R39 10 MB internet benchmark passed:** run `45023412793`, artifact `14755140496`. Cherry Servers: 10,485,760 bytes direct at 3.00 MiB/s, SOCKS5 at 2.41 MiB/s. NewMedia Express: 10,000,000 bytes direct at 3.06 MiB/s, SOCKS5 at 2.41 MiB/s. Both direct/SOCKS byte counts match exactly and all four responses returned HTTP 200; errors log empty. Combined weighted rate: direct 3.03 MiB/s vs SOCKS5 2.41 MiB/s (79.6% retained, 20.4% lower).
-- The benchmark's host sshd log records exactly one successful password authentication and the relay logs exactly one SSH authentication/session-key establishment; four download operations share the same single SSH session. CPU detection selected four auxiliary I/O workers. S2C backpressure reached the 128 KiB buffer ceiling and drained to zero twice; no relay invariant errors were recorded.
-- This is a short-file comparison using two ~10 MB Singapore endpoints (about 40.97 MB total over four transfers). It is not a sustained 100 MB throughput claim. The earlier 100 MB run was cancelled by the user before a complete result was captured.
-
-- Complete native regressions and OpenWrt 24.10.7 mipsel_24kc SDK build for S2C direct nonblocking r39. SDK run `45020186643` produced the source-matched IPK artifact `14753870688`, version `1.0.0-r39`, architecture `mipsel_24kc`, SHA-256 `702b00fc6c5da703a9fb848f39e0a7418d7766df10746d960e5dca032eba9350`. MT7621 QEMU run `45020754464` passed (`MIPS TEST STATUS: 0`, artifact `14754055916`); only the dedicated Internet bandwidth benchmark remains.
+- Complete native regressions and OpenWrt 24.10.7 mipsel_24kc SDK build for S2C direct nonblocking r39. SDK run `45020186643` produced the source-matched IPK artifact `14753870688`, version `1.0.0-r39`, architecture `mipsel_24kc`, SHA-256 `702b00fc6c5da703a9fb848f39e0a7418d7766df10746d960e5dca032eba9350`. MT7621 QEMU run `45020754464` passed (`MIPS TEST STATUS: 0`, artifact `14754055916`), followed by the 10 MB direct-vs-SOCKS5 Internet benchmark run `45023412793` (artifact `14755140496`), also passed.
 
 
 - Align MT7621 QEMU package-version checks and the dedicated direct-vs-SOCKS bandwidth workflow with r39 so stale r38 artifacts cannot be benchmarked as the new S2C patch.
 
 - Change S2C download forwarding to direct nonblocking `send()` by the single SSH Owner; keep EPOLLOUT active while S2C bytes remain and retain the worker pool only for C2S socket reads. Remove the per-chunk S2C worker submit/completion round-trip and its in-flight state.
 - Preserve exactly one SSH Owner, one upstream and one authenticated SSH session; CPU detection continues to size only the auxiliary I/O worker pool. Bump OpenWrt package release to r39.
-- Native, OpenWrt 24.10.7 mipsel_24kc SDK, and MT7621 QEMU throughput validation required. No speedup is claimed until the matching r39 IPK passes exact-size/SHA-256 tests and a same-endpoint direct-vs-SOCKS benchmark.
+- Native, OpenWrt 24.10.7 mipsel_24kc SDK and MT7621 QEMU validation passed; the capped 10 MB same-endpoint direct-vs-SOCKS benchmark also completed. Measured result: direct 3.03 MiB/s aggregate versus SOCKS5 2.41 MiB/s aggregate. This is a short-file measurement, not a sustained large-file benchmark.
 
 
 - Fix the native SDK gate link command to include `io_worker_pool.c` and `io_worker_completion_tracker.c`, which are now required because the HTTP parser regression compiles the current `ssh-core.c` worker submission path. Retry the r38 SDK gate. [mips-stage=sdk]
