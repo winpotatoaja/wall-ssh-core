@@ -4702,7 +4702,7 @@ static int core_worker_run(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            printf("Usage: %s [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-verify-tls 0|1] [-tls-diag 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log-backpressure 0|1] [-log-perf 0|1] [-log FILE|-]\\n", argv[0]);
+            printf("Usage: %s [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-verify-tls 0|1] [-tls-diag 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log-backpressure 0|1] [-log-perf 0|1] [-log FILE|-]\n", argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-env") == 0 && i + 1 < argc) {
             env_file = argv[++i];
@@ -5826,7 +5826,7 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
         } else if (strcmp(argv[i], "-workers") == 0) {
             if (i + 1 >= argc ||
                 parse_int_range(argv[++i], 1, MAX_WORKERS, &requested_workers) < 0) {
-                fprintf(stderr, "-workers harus 1..%d\\n", MAX_WORKERS);
+                fprintf(stderr, "-workers harus 1..%d\n", MAX_WORKERS);
                 return -1;
             }
             manual_workers = 1;
@@ -5857,7 +5857,7 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
                 if (strcmp(key, "WORKERS") == 0) {
                     if (parse_int_range(value, 1, MAX_WORKERS, &requested_workers) < 0) {
                         fclose(f);
-                        fprintf(stderr, "WORKERS harus 1..%d\\n", MAX_WORKERS);
+                        fprintf(stderr, "WORKERS harus 1..%d\n", MAX_WORKERS);
                         return -1;
                     }
                     manual_workers = 1;
@@ -5876,11 +5876,11 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
      * integration harness; report the auxiliary pool separately. */
     fprintf(stderr,
             "[CPU] detected=%ld SSH_sessions=1 mode=single-session; "
-            "legacy requested workers=%d%s\\n",
+            "legacy requested workers=%d%s\n",
             g_detected_cpu_count, requested_workers,
             manual_workers ? " (ignored to prevent multiple SSH logins)" : "");
     fprintf(stderr,
-            "[IO worker] CPU topology selected=%u/%u auxiliary I/O workers\\n",
+            "[IO worker] CPU topology selected=%u/%u auxiliary I/O workers\n",
             g_io_worker_count, (unsigned int)IO_WORKER_POOL_MAX_WORKERS);
     return 0;
 }
