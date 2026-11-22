@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Fix the native SDK gate link command to include `io_worker_pool.c` and `io_worker_completion_tracker.c`, which are now required because the HTTP parser regression compiles the current `ssh-core.c` worker submission path. Retry the r38 SDK gate. [mips-stage=sdk]
+
 - Prepare package release **1.0.0-r38** with the 16 KiB S2C worker payload fix. Update MIPS SDK/VM version gates and the dedicated direct-vs-SOCKS bandwidth workflow to consume an explicitly selected successful r38 SDK run. [mips-stage=sdk]
 
 - Fix the measured S2C throughput ceiling: the worker payload was only 128 bytes, leaving 120 bytes per socket-write task. Increase worker payload to 16 KiB (16,376-byte socket writes) and add a full-size socket-write integrity regression. Native/MIPS SDK validation and same-endpoint direct-vs-SOCKS bandwidth retest are pending; do not claim a speedup until the rebuilt MIPS IPK is benchmarked.
