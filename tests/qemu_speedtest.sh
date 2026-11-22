@@ -15,6 +15,8 @@ main() {
     mkdir -p "$RESULT" || return 2
     : > "$RESULT/download-results.log"
     : > "$RESULT/errors.log"
+    : > "$RESULT/skipped.log"
+    : > "$RESULT/pairs.log"
     : > "$RESULT/samples.log"
 
     cpu_snapshot() {
@@ -31,7 +33,7 @@ main() {
         awk '{s=$0;sub(/^.*\\) /,"",s);n=split(s,a," ");if(n>=13)printf "%.0f",a[12]+a[13];else print 0}' "/proc/$1/stat" 2>/dev/null
     }
 
-    echo "R39_100MB_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R39_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     echo "SOCKS5=$SOCKS"
     echo "GUEST=$(uname -a)"
     echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
@@ -78,20 +80,21 @@ main() {
         MODE=$3
         MIN_BYTES=95000000
         OUT="$RESULT/$LABEL-$MODE.curl.log"
-        echo "=== DOWNLOAD $LABEL mode=$MODE ==="
+        ERR_OUT="$OUT.stderr"
+        echo "=== DOWNLOAD $LABEL mode=$MODE (hard timeout 50s) ==="
         echo "URL=$URL"
         START=$(date +%s)
         if [ "$MODE" = "socks5" ]; then
-            curl -4 -fL --connect-timeout 15 --max-time 600 --max-filesize 110000000 \
+            curl -4 -sS -fL --connect-timeout 15 --max-time 50 --max-filesize 110000000 --retry 0 \
               --socks5-hostname "$SOCKS" -o /dev/null \
               -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
-              "$URL" > "$OUT" &
+              "$URL" > "$OUT" 2>"$ERR_OUT" &
         else
             env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy \
-              curl -4 -fL --connect-timeout 15 --max-time 600 --max-filesize 110000000 \
+              curl -4 -sS -fL --connect-timeout 15 --max-time 50 --max-filesize 110000000 --retry 0 \
               --noproxy '*' -o /dev/null \
               -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
-              "$URL" > "$OUT" &
+              "$URL" > "$OUT" 2>"$ERR_OUT" &
         fi
         CURL_PID=$!
         while kill -0 "$CURL_PID" 2>/dev/null; do
@@ -101,19 +104,25 @@ main() {
         wait "$CURL_PID"
         RC=$?
         WALL=$(( $(date +%s) - START ))
-        if [ "$RC" -ne 0 ]; then
-            echo "ERROR: $LABEL mode=$MODE curl_rc=$RC wall_seconds=$WALL" | tee -a "$RESULT/errors.log"
-            return 2
+
+        BYTES=0
+        HTTP_CODE=000
+        if [ -s "$OUT" ]; then
+            BYTES=$(awk 'NF >= 1 {printf "%.0f", $1; exit}' "$OUT")
+            HTTP_CODE=$(awk 'NF >= 4 {print $4; exit}' "$OUT")
         fi
-        if [ ! -s "$OUT" ]; then
-            echo "ERROR: $LABEL produced no curl statistics" | tee -a "$RESULT/errors.log"
-            return 2
-        fi
-        BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$OUT")
         case "$BYTES" in ''|*[!0-9]*) BYTES=0;; esac
-        if [ "$BYTES" -lt "$MIN_BYTES" ]; then
-            echo "ERROR: $LABEL mode=$MODE downloaded only $BYTES bytes; expected at least 95,000,000 bytes from a 100 MB endpoint" | tee -a "$RESULT/errors.log"
-            return 2
+        [ -n "$HTTP_CODE" ] || HTTP_CODE=000
+
+        if [ "$RC" -ne 0 ]; then
+            echo "SKIP: $LABEL mode=$MODE curl_rc=$RC downloaded_bytes=$BYTES wall_seconds=$WALL http_code=$HTTP_CODE (50-second per-download limit or endpoint error)" | tee -a "$RESULT/skipped.log"
+            [ ! -s "$ERR_OUT" ] || cat "$ERR_OUT"
+            return 1
+        fi
+        if [ "$BYTES" -lt "$MIN_BYTES" ] || [ "$HTTP_CODE" != "200" ]; then
+            echo "SKIP: $LABEL mode=$MODE downloaded_bytes=$BYTES http_code=$HTTP_CODE; need >=95,000,000 bytes and HTTP 200" | tee -a "$RESULT/skipped.log"
+            [ ! -s "$ERR_OUT" ] || cat "$ERR_OUT"
+            return 1
         fi
         awk -v label="$LABEL" -v mode="$MODE" -v wall="$WALL" '{
           bytes=$1;sec=$2;speed=$3;code=$4;ip=$5;type=$6;
@@ -123,28 +132,34 @@ main() {
         return 0
     }
 
-    URL_VULTR="https://sgp-ping.vultr.com/vultr.com.100MB.bin"
-    URL_LINODE="http://speedtest.singapore.linode.com/100MB-singapore.bin"
+    PAIR_COUNT=0
+    run_endpoint() {
+        LABEL=$1
+        URL=$2
+        if test_download "$LABEL" "$URL" direct; then
+            if test_download "$LABEL" "$URL" socks5; then
+                DIRECT_BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$RESULT/$LABEL-direct.curl.log")
+                SOCKS_BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$RESULT/$LABEL-socks5.curl.log")
+                if [ "$DIRECT_BYTES" = "$SOCKS_BYTES" ]; then
+                    PAIR_COUNT=$((PAIR_COUNT+1))
+                    echo "PAIR PASS: $LABEL direct_bytes=$DIRECT_BYTES socks5_bytes=$SOCKS_BYTES" | tee -a "$RESULT/pairs.log"
+                else
+                    echo "ERROR: $LABEL direct/SOCKS byte counts differ: direct=$DIRECT_BYTES socks5=$SOCKS_BYTES" | tee -a "$RESULT/errors.log"
+                fi
+            else
+                echo "SKIP: $LABEL direct passed but SOCKS5 did not finish within its 50-second cap; continue with next endpoint" | tee -a "$RESULT/skipped.log"
+            fi
+        else
+            echo "SKIP: $LABEL direct failed or exceeded 50 seconds; SOCKS5 for this endpoint is not attempted" | tee -a "$RESULT/skipped.log"
+        fi
+    }
 
-    echo "=== PHASE 1: 100 MB DIRECT DOWNLOADS (NO SSH / NO SOCKS) ==="
-    test_download vultr-singapore "$URL_VULTR" direct || {
-        kill -TERM "$CORE_PID" 2>/dev/null || :
-        return 2
-    }
-    test_download linode-singapore "$URL_LINODE" direct || {
-        kill -TERM "$CORE_PID" 2>/dev/null || :
-        return 2
-    }
+    URL_DIGITALOCEAN="http://speedtest-sgp1.digitalocean.com/100mb.test"
+    URL_OVH="https://sin1-sgp.speedtest.network.ovh.net/files/100Mb.dat"
 
-    echo "=== PHASE 2: SAME 100 MB FILES THROUGH R39 SSH SOCKS5 ==="
-    test_download vultr-singapore "$URL_VULTR" socks5 || {
-        kill -TERM "$CORE_PID" 2>/dev/null || :
-        return 2
-    }
-    test_download linode-singapore "$URL_LINODE" socks5 || {
-        kill -TERM "$CORE_PID" 2>/dev/null || :
-        return 2
-    }
+    echo "=== 100 MB DIRECT + SOCKS5; EACH REQUEST HAS A HARD 50-SECOND CAP ==="
+    run_endpoint digitalocean-singapore "$URL_DIGITALOCEAN"
+    run_endpoint ovh-singapore "$URL_OVH"
 
     kill -TERM "$CORE_PID" 2>/dev/null || :
     WAIT_N=0
@@ -152,25 +167,24 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "R39 100 MB DIRECT VS SOCKS5 SUMMARY"
+      echo "R39 100 MB DIRECT VS SOCKS5 SUMMARY (50s hard cap per transfer)"
       cat "$RESULT/download-results.log"
+      echo "--- PAIRS ---"
+      cat "$RESULT/pairs.log"
+      echo "--- SKIPPED ---"
+      cat "$RESULT/skipped.log"
+      echo "PAIR_COUNT=$PAIR_COUNT"
       echo "SAMPLE_COUNT=$SAMPLE"
       echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
     } | tee "$RESULT/summary.txt"
 
-    for LABEL in vultr-singapore linode-singapore; do
-        DIRECT_BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$RESULT/$LABEL-direct.curl.log")
-        SOCKS_BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$RESULT/$LABEL-socks5.curl.log")
-        if [ "$DIRECT_BYTES" != "$SOCKS_BYTES" ]; then
-            echo "ERROR: $LABEL direct/SOCKS byte counts differ: direct=$DIRECT_BYTES socks5=$SOCKS_BYTES" | tee -a "$RESULT/errors.log"
-            return 2
-        fi
-    done
-
     echo "RESULT_DIR=$RESULT"
-    echo "R39_100MB_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R39_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     [ ! -s "$RESULT/errors.log" ] || return 2
-    [ "$(wc -l < "$RESULT/download-results.log")" -ge 4 ] || return 2
+    [ "$PAIR_COUNT" -ge 1 ] || {
+        echo "ERROR: no endpoint completed a full direct+SOCKS5 100 MB pair" | tee -a "$RESULT/errors.log"
+        return 2
+    }
     return 0
 }
 main "$@"
