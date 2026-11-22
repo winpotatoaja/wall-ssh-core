@@ -239,7 +239,7 @@ jobs:
               target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
   vm:
-    if: ${{ github.event_name == 'workflow_call' || contains(github.event.head_commit.message, '[mips-stage=vm]') }}
+    if: ${{ inputs.sdk_run_id != '' || contains(github.event.head_commit.message, '[mips-stage=vm]') }}
     runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
@@ -259,7 +259,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$GITHUB_EVENT_NAME" = "workflow_call" ]; then
+          if [ -n "${{ inputs.sdk_run_id }}" ]; then
             SDK_RUN_ID="${{ inputs.sdk_run_id }}"
           else
             MESSAGE="$(jq -r '.head_commit.message // empty' "$GITHUB_EVENT_PATH")"
