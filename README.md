@@ -188,13 +188,19 @@ Implementasi yang sudah ada pada branch ini:
 
 <badge color="warning">VALIDASI FUNGSIONAL LULUS — RETEST THROUGHPUT TERBUKA</badge>
 
-### Retest r39 S2C direct-send — SDK dan MT7621 QEMU lulus; internet benchmark 10 MB
+### Retest r39 S2C direct-send — SDK, MT7621 QEMU, dan internet benchmark 10 MB lulus (uji berkelanjutan masih terbuka)
 
 - Native regression dan OpenWrt 24.10.7 `mipsel_24kc` SDK lulus pada run `45020186643`; IPK artifact `14753870688`, versi `1.0.0-r39`, source SHA `0d48d4e5d5d2298ed057d3e5af7fc147fec5f7a0`, SHA-256 `702b00fc6c5da703a9fb848f39e0a7418d7766df10746d960e5dca032eba9350`.
 - MT7621 QEMU run `45020754464` berhasil; workflow artifact `14754055916`. Guest melaporkan `MIPS TEST STATUS: 0` dan menggunakan IPK r39 tersebut.
 - CPU guest terdeteksi 4; log startup menegaskan `SSH_sessions=1`. Pool I/O lokal berisi 4 worker, tetapi setiap proses relay tetap hanya memakai satu upstream/session SSH.
 - Empat client TCP menerima 128 MiB dengan checksum cocok, agregat `5.670 MiB/s`; empat client TLS juga menerima 128 MiB dengan checksum cocok, agregat `5.848 MiB/s`. Half-close dan full-duplex (8 MiB upload/32 MiB download) juga lulus.
-- Angka transfer di atas memakai fixture lokal QEMU, bukan internet. Klaim peningkatan throughput internet masih ditahan sampai benchmark internet direct-versus-SOCKS5 selesai.
+- **Internet benchmark r39 10 MB lulus:** Actions run `45023412793` berstatus success; artifact `14755140496`. Keempat unduhan mendapat HTTP 200 dan ukuran penuh, tanpa retry; `errors.log` kosong.
+- Cherry Servers `10.485.760` byte: direct `3,332163 s / 3,00 MiB/s`; lewat SOCKS5 `4,145460 s / 2,41 MiB/s`.
+- NewMedia Express `10.000.000` byte: direct `3,123224 s / 3,06 MiB/s`; lewat SOCKS5 `3,959693 s / 2,41 MiB/s`.
+- Rata-rata berbobot dari dua transfer: direct `3,03 MiB/s`; SOCKS5 `2,41 MiB/s`. SOCKS5 mencapai sekitar `79,6%` dari direct (selisih sekitar `20,4%`). Ini adalah pengukuran file pendek 10 MB, bukan klaim throughput berkelanjutan untuk transfer 100 MB atau lebih.
+- Validasi session: startup core mencatat `SSH_sessions=1`; log core mencatat tepat satu `authentication accepted` dan satu `Session Keys Established`; host sshd mencatat satu autentikasi password sukses. Dua request SOCKS diproses berurutan di sesi yang sama. CPU guest terdeteksi 4 dan memilih 4 auxiliary I/O workers.
+- S2C backpressure sempat memenuhi buffer 128 KiB dan kemudian terkuras sampai 0 pada kedua koneksi; tidak ada log ERROR/FATAL/invariant dan `errors.log` kosong.
+- Hasil ini membuktikan peningkatan hasil uji pendek dibanding sekitar 300 KB/s yang dilaporkan pada percobaan 100 MB sebelumnya, tetapi angka lama tidak memiliki hasil akhir lengkap karena run dibatalkan. Jangan menganggap perbandingannya sebagai A/B identik; server, ukuran, dan sesi pengujian berbeda.
 - Benchmark internet memakai dua file sekitar 10 MB dari server Singapura: Cherry Servers `https://speedtest.sg.cherryservers.com/test-10mb` (10.485.760 byte) dan NewMedia Express `https://sg1.newmediaexpress.com/10MB.test` (10.000.000 byte). Setiap file diunduh sekali direct dan sekali lewat SOCKS5, sehingga total payload target sekitar 40 MB untuk empat transfer.
 - Batas pengaman benchmark: curl `--max-filesize 11000000`, `--max-time 120`, `--connect-timeout 15`, tanpa retry otomatis. Setiap transfer harus menerima minimal 9.500.000 byte dan jumlah byte direct/SOCKS5 untuk endpoint yang sama harus identik.
 
