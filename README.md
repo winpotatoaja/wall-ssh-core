@@ -186,7 +186,7 @@ Implementasi yang sudah ada pada branch ini:
 
 ## Tahap 4 — Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU
 
-<badge color="warning">BERJALAN — BASELINE VALID, DIAGNOSTIK/TUNING DILANJUTKAN</badge>
+<badge color="warning">BERJALAN — BASELINE MIPS LULUS; ANALISIS/TUNING BELUM DITUTUP</badge>
 
 **Tujuan:** membuktikan implementasi akhir pada target arsitektur, memperbaiki
 regresi yang ditemukan, lalu melakukan tuning berdasarkan pengukuran.
@@ -216,7 +216,18 @@ Urutan kerja:
 
 **Perbaikan diagnostik Tahap 4:** source commit `852c6f5dc8c4be9179e56f9cd1a47ec33fdf9068` mengecualikan client dengan `s2c_worker_inflight` dari hitungan `s2c_epollout_missing`, karena EPOLLOUT memang sengaja dilepas selama worker menulis. Perubahan ini mencegah false positive pada metrik, bukan mengubah jalur data.
 
-**Status saat ini:** baseline Tahap 3 telah lulus. Koreksi diagnostik Tahap 4 masih menunggu regression native + MIPS SDK + MT7621 QEMU yang dijalankan ulang pada source terkini. Setelah itu, pengukuran performa dilakukan pada beban dan konfigurasi identik sebelum memutuskan tuning. Benchmark beberapa proses/SSH session di `tests/MIPS-MT-BENCHMARK.md` hanya menjadi pembanding kapasitas; hasilnya tidak boleh dianggap sebagai bukti worker pool satu-session lebih cepat.
+**Validasi baseline Tahap 4 — lulus pada source code `e2f150f27b3218022559f15a59a4a6fd59de70c0`:**
+- Native regression/parser: Actions run `44984703377`, berhasil.
+- OpenWrt 24.10.7 `mipsel_24kc` SDK: run `44984703379`, berhasil; IPK artifact `14739159030`, SHA-256 `3f06e0e58bc654bef90bcbffd946b956d20a7755d28ad86bf45d5d813a2154f1`.
+- MT7621 QEMU: run `44985100177`, workflow checkout `74bc19850024605d4f8d737f5cfbd57233744cfd` (perubahan setelah source code hanya dokumentasi); memakai SDK artifact di atas. Workflow `success`, guest `MIPS TEST STATUS: 0`; hasil artifact `14739727217`, SHA-256 `dd72bfa741231f69aa21ce9cce428aa47f4c67e6885255a777f00dfe9132a42a`.
+- Empat client TCP masing-masing mengunduh 32 MiB: 128 MiB total, empat checksum identik dan benar, `workers=1`, `failures=0`, agregat `1.455 MiB/s` selama 87.952 s.
+- Empat client TLS/SNI masing-masing mengunduh 32 MiB: 128 MiB total, empat checksum identik dan benar, `workers=1`, `failures=0`, agregat `1.554 MiB/s` selama 82.386 s.
+- Satu autentikasi password SSH diterima pada setiap proses relay; worker log menunjukkan satu worker process (`Worker 1/1`). Nilai konfigurasi `WORKERS=2` bukan jumlah I/O worker; pool aktif tetap satu worker sesuai invariant implementasi.
+- Sampel TCP (73 sampel): proses relay 2 thread, RSS 4,956–14,784 KiB; CPU process delta sekitar 136.6 CPU-second selama transfer 87.95 s (sekitar 1.55 core). Sampel TLS (70 sampel): 3 thread, RSS 5,876–15,532 KiB; CPU delta sekitar 132.4 CPU-second selama 82.39 s (sekitar 1.61 core). Angka CPU merupakan estimasi dari tick `/proc` 100 Hz, bukan pengukuran perf hardware.
+- Metrik `s2c_epollout_missing=0` pada seluruh 392 interval PERF TCP. TCP retransmit counter: 8 segmen pada TCP dan 9 pada TLS. Backpressure S2C mengisi buffer 131,072/131,072 byte dan kemudian kembali ke 0; log TCP mencatat 15 kejadian penuh dan 14 drain, TLS 2 penuh dan 1 drain selama sampel.
+- Ini adalah baseline pengukuran pertama pada beban empat client yang sama, bukan bukti peningkatan dibanding baseline lama yang memakai beban berbeda. Tidak ada tuning datapath yang diklaim atau dilakukan. Tidak ada dasar terukur untuk mengubah worker count/buffer saat ini; pertahankan satu worker dan gunakan angka ini sebagai baseline pembanding.
+
+**Pekerjaan Tahap 4 yang masih terbuka:** audit sumber metrik dan interpretasi CPU/epoll/backpressure, tentukan apakah ada perubahan tuning yang didukung pengukuran, lalu jalankan regression native + SDK + QEMU baru jika source/datapath berubah. Benchmark beberapa proses/SSH session di `tests/MIPS-MT-BENCHMARK.md` hanya pembanding kapasitas dan bukan bukti worker pool satu-session lebih cepat.
 
 ## Tahap 5 — Validasi perangkat OpenWrt MT7621 fisik
 
@@ -252,9 +263,9 @@ tahap ini.
 
 | Target | Status | Keterangan |
 |---|---|---|
-| Native regression | Perlu konsolidasi akhir | Helper worker/lifetime/token/tracker telah memiliki test tersendiri; jalankan kembali sebagai satu suite setelah batch final |
-| OpenWrt 24.10.7 MIPS SDK | **Lulus** | Run `44964541444`; artifact dipakai untuk baseline QEMU. Build bukan bukti runtime dengan sendirinya |
-| MT7621 QEMU | **Baseline lulus** | Run `44965112117` berhasil; source SHA `0f1d484604fb2d2f1d0e53ee5603f90fe71995f2`; Stage 3/4 masih membutuhkan audit edge case dan rerun pada perubahan code terbaru |
+| Native regression | **Lulus** | Run `44984703377`, source `e2f150f27b3218022559f15a59a4a6fd59de70c0` |
+| OpenWrt 24.10.7 MIPS SDK | **Lulus** | Run `44984703379`, artifact `14739159030`, source `e2f150f27b3218022559f15a59a4a6fd59de70c0` |
+| MT7621 QEMU | **Baseline lulus** | Run `44985100177`, artifact `14739727217`; SDK artifact `14739159030`; guest `MIPS TEST STATUS: 0`; code SHA `e2f150f27b3218022559f15a59a4a6fd59de70c0` |
 | OpenWrt 25.12.5 x86_64 QEMU | Pembanding | Tidak menggantikan target MIPS maupun router fisik |
 | Router MT7621 fisik | Belum diuji pada tahap ini | Tahap 5 |
 
@@ -272,4 +283,4 @@ Hasil lama tidak boleh dianggap mewakili source terbaru jika ada perubahan sesud
   **LULUS**.
 - Tahap 5 hanya dapat dinyatakan lulus setelah pengujian pada router MT7621 fisik.
 
-**Validasi SDK Tahap 4:** native regression dan OpenWrt 24.10.7 MIPS SDK lulus pada source `e2f150f27b3218022559f15a59a4a6fd59de70c0` (run `44984703379`, artifact `14739159030`). MT7621 QEMU pada source yang sama masih menunggu.
+**Validasi baseline Tahap 4:** native regression run `44984703377`, OpenWrt 24.10.7 MIPS SDK run `44984703379` (artifact `14739159030`), dan MT7621 QEMU run `44985100177` (artifact `14739727217`) lulus. Kode yang diuji: `e2f150f27b3218022559f15a59a4a6fd59de70c0`; QEMU checkout `74bc19850024605d4f8d737f5cfbd57233744cfd` hanya menambahkan catatan dokumentasi. Hasil empat client TCP dan empat client TLS/SNI serta pengukuran CPU/RSS/backpressure dicatat pada bagian Tahap 4. Analisis/tuning tetap terbuka; belum ada klaim peningkatan performa.
