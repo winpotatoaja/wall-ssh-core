@@ -201,3 +201,6 @@ Implementasi yang sudah ada pada branch ini:
 
 
 Catatan r41: perubahan cipher AES-GCM-first dan S2C ring 256 KiB sudah masuk. Regresi native kapasitas buffer kini mengunci C2S 32 KiB dan S2C 256 KiB. Build SDK MIPS akan dijalankan ulang menggunakan gate native yang sudah diperbarui.
+
+
+r41 retry: native assertion has been aligned with the 256 KiB S2C ring. Re-run the MIPS SDK gate, then automatically benchmark the exact matching IPK against Datapacket.
