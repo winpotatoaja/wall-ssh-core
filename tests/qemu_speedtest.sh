@@ -135,7 +135,7 @@ net_rate_line() {
 }
 
 run_diag_self_test() {
-    TEST_ROOT="/tmp/r40-speedtest-diag-test"
+    TEST_ROOT="/tmp/r41-speedtest-diag-test"
     rm -rf "$TEST_ROOT"
     mkdir -p "$TEST_ROOT/tasks/4242" "$TEST_ROOT/net/testnet/statistics" "$TEST_ROOT/net/lo/statistics" || return 2
 
@@ -201,7 +201,7 @@ run_diag_self_test() {
     return 0
 }
 
-# Focused Datapacket direct-vs-r40-SOCKS5 diagnostic retest (100 MB).
+# Focused Datapacket direct-vs-r41-SOCKS5 diagnostic retest (100 MB).
 # Each endpoint is downloaded once direct and once through the single SSH SOCKS5 session.
 set -u
 
@@ -226,7 +226,7 @@ main() {
     cpu_snapshot() {
         awk '/^cpu[0-9]*[ \t]/ {t=0;for(i=2;i<=NF;i++)t+=$i;idle=$5+$6;print $1,t-idle,t}' /proc/stat
     }
-    echo "R40_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R41_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     echo "SOCKS5=$SOCKS"
     echo "GUEST=$(uname -a)"
     echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
@@ -380,7 +380,7 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "R40 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
+      echo "R41 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
       cat "$RESULT/download-results.log"
       echo "--- PAIRS ---"
       cat "$RESULT/pairs.log"
@@ -392,7 +392,7 @@ main() {
     } | tee "$RESULT/summary.txt"
 
     echo "RESULT_DIR=$RESULT"
-    echo "R40_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R41_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     [ ! -s "$RESULT/errors.log" ] || return 2
     [ "$PAIR_COUNT" -ge 1 ] || {
         echo "ERROR: no endpoint completed a full direct+SOCKS5 100 MB pair" | tee -a "$RESULT/errors.log"
