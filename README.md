@@ -188,6 +188,15 @@ Implementasi yang sudah ada pada branch ini:
 
 <badge color="warning">VALIDASI FUNGSIONAL LULUS — RETEST THROUGHPUT TERBUKA</badge>
 
+### Retest internet 100 MiB dengan batas 50 detik — hasil terverifikasi
+
+- Actions run `45067089485` selesai `success`; artifact `14771936584`.
+- OVHcloud Singapore `https://sin1-sgp.speedtest.network.ovh.net/files/100Mb.dat`: direct menerima tepat `104.857.600` byte (100 MiB) dalam `37,297 s`, rata-rata curl `2,63 MiB/s`; SOCKS5 menerima tepat `104.857.600` byte dalam `30,494 s`, rata-rata curl `3,12 MiB/s`. Keduanya HTTP 200 dan pasangan byte identik.
+- DigitalOcean endpoint `speedtest-sgp1.digitalocean.com` gagal resolusi DNS (`curl_rc=6`, 0 byte); bukan timeout 50 detik. Endpoint tersebut dihapus dari skrip dan diganti dengan Datapacket Singapore `http://sgp.download.datapacket.com/100mb.bin` untuk run berikutnya.
+- Benchmark dijalankan dengan hard timeout 50 detik per request, connect timeout 15 detik, tanpa retry; endpoint direct yang gagal tidak dilanjutkan ke SOCKS5.
+- Log core menunjukkan satu autentikasi password dan satu `Session Keys Established`; startup menegaskan `SSH_sessions=1`. Empat worker I/O tambahan tidak membuat sesi SSH tambahan. `errors.log` kosong.
+- Ringkasan aktual disimpan dalam artifact; hasil OVH adalah bukti 100 MiB yang selesai, bukan proyeksi. Hasil Datapacket masih menunggu run setelah penggantian URL.
+
 ### Retest r39 S2C direct-send — SDK, MT7621 QEMU, dan benchmark 10 MB lulus; retest 100 MB disiapkan
 
 - Native regression dan OpenWrt 24.10.7 `mipsel_24kc` SDK lulus pada run `45020186643`; IPK artifact `14753870688`, versi `1.0.0-r39`, source SHA `0d48d4e5d5d2298ed057d3e5af7fc147fec5f7a0`, SHA-256 `702b00fc6c5da703a9fb848f39e0a7418d7766df10746d960e5dca032eba9350`.
