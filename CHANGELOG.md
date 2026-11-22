@@ -1,3 +1,8 @@
+## Unreleased
+
+- Replace payload-expansion allocation aborts with checked buffer growth and error propagation; reject size overflow and fail the payload cleanly on allocation failure.
+- Use CLOCK_MONOTONIC-backed millisecond deadlines for upstream inactivity/keepalive, SOCKS handshake timeout, and EMFILE log throttling so wall-clock adjustments cannot extend or prematurely expire timers.
+- Correct CLI/startup diagnostics that previously printed literal `\\n` text instead of line breaks.
 - CPU-aware I/O worker validation **PASS**: native regression + OpenWrt 24.10.7 MIPS SDK run `44987910879` (IPK `14740154895`, SHA-256 `ef506b22d3453b6ef51175adada0d6a4a70dc7d566de793d8e5f285e885535c3`); MT7621 QEMU run `44988206417` on matching SDK artifact (VM result artifact `14741740494`, SHA-256 `9a85658ebddac7927c6d9ab5b3d5e4b4fe9dc9b4ddea3a62a5963a73f5606eda`). Guest confirmed `CPU detected=4`, `4 I/O workers`, `one SSH session`, and `MIPS TEST STATUS: 0`; 8 MiB/32 MiB full-duplex checksums matched and S2C backpressure drained. Physical MT7621 validation remains in Stage 5.
 - Native regression and OpenWrt 24.10.7 mipsel_24kc SDK passed for CPU-scaled I/O workers in run `44987910879`; IPK artifact `14740154895`, SHA-256 `ef506b22d3453b6ef51175adada0d6a4a70dc7d566de793d8e5f285e885535c3`. Queue matching MT7621 QEMU using this exact SDK artifact. [mips-stage=vm] [mips_sdk_run_id=44987910879]
 - Preserve the established `[CPU] ... SSH_sessions=1 mode=single-session` startup line for integration compatibility and report selected auxiliary I/O worker count on a separate `[IO worker]` line. Latest source commit `eea27d66c848067dffadd4cb66ef66ae5ee7ca28` requires a fresh native/MIPS SDK/QEMU gate. [mips-stage=sdk]
