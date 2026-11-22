@@ -421,6 +421,7 @@ static int test_socket_io_primitives(void)
         (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]); return -1;
     }
 
+    /* Exercise the full S2C worker payload, not only a short control-sized write. */
     uint8_t large_out[IO_WORKER_SOCKET_WRITE_MAX];
     uint8_t large_received[IO_WORKER_SOCKET_WRITE_MAX];
     for (size_t i = 0; i < sizeof(large_out); i++)
