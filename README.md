@@ -353,3 +353,17 @@ Status: **retet belum lulus**. Hasil baru harus menunjukkan throughput direct
 baseline dan TCP/TLS relay dengan checksum cocok sebelum angka performa dapat
 dinilai. Jangan memakai angka 1.59–1.61 Mbps dari fixture lama sebagai hasil
 throughput normal atau klaim performa relay.
+
+
+## Audit hardening batch — 2026-11-22
+
+Patch batch on `phase3/io-worker-pool-foundation`:
+- Payload `[rotate=...]` and `[random=...]` expansion now handles empty selectors without dereferencing a null buffer and advances past inserted replacement text rather than recursively parsing it.
+- C2S worker completion treats `EAGAIN` with a pending HUP/RDHUP as the terminal client EOF, preventing immediate re-submission/re-arm loops. Queued C2S bytes remain owned by the SSH Owner and are drained before sending channel EOF.
+- Client teardown consistently uses `detach_client_fd()`, so a descriptor held by either direction's worker is marked for deferred close instead of only being removed from epoll.
+- TCP connect completion rejects `POLLERR`, `POLLHUP`, and `POLLNVAL` even if `POLLOUT` is also present.
+- Normal shutdown guards the upstream descriptor before closing it.
+- Added native regressions for empty/populated rotate/random selectors and HUP/RDHUP worker-EAGAIN handling.
+- Package release bumped to r37.
+
+**Validation status:** pending fresh native + OpenWrt 24.10.7 `mipsel_24kc` SDK and matching MT7621 QEMU runs. This patch does not change the one-SSH-session architecture. Physical MT7621 router validation remains separate and is not claimed here.
