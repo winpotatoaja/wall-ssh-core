@@ -1003,12 +1003,14 @@ static char *translate_payload(const char *raw, const app_cfg_t *cfg, int is_tls
 
     char *cur = NULL;
     if (cfg->fix_crlf) {
-        char *tmp = replace_all_str(raw, "\r\n", "\n");
-        cur = replace_all_str(tmp, "\n", "\r\n");
+        char *tmp = replace_all_str(raw, "\\r\\n", "\\n");
+        if (!tmp) return NULL;
+        cur = replace_all_str(tmp, "\\n", "\\r\\n");
         free(tmp);
     } else {
         cur = strdup(raw);
     }
+    if (!cur) return NULL;
 
     sbuf_t exp_sb = {0};
     const char *p = cur;
