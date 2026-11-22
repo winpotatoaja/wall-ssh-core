@@ -4951,11 +4951,11 @@ static int core_worker_run(int argc, char **argv) {
 
 #ifdef SSH_CORE_MIPSEL_24KC
     /*
-     * MT7621/MIPS24K has no AES-GCM acceleration. The previous preference
-     * negotiated aes128-gcm@openssh.com and saturated the single SSH Owner
-     * while decrypting S2C packets. Prefer AES-128-CTR on this target so the
-     * server can pair it with an independent SHA-2 MAC; retain GCM/ChaCha as
-     * compatibility fallbacks. Other architectures keep the existing order.
+     * MT7621 QEMU profiling showed aes128-gcm@openssh.com negotiated while the
+     * single SSH Owner saturated one vCPU during S2C decryption. Test AES-128-CTR
+     * first on this target so the server pairs it with an independent SHA-2 MAC;
+     * retain GCM/ChaCha as compatibility fallbacks. Other architectures keep
+     * the existing cipher preference order.
      */
     const char *ssh_cipher_pref =
         "aes128-ctr,aes128-gcm@openssh.com,aes256-ctr,chacha20-poly1305@openssh.com";
