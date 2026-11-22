@@ -14,7 +14,7 @@ on:
           - "120"
           - "180"
       sdk_run_id:
-        description: "Successful r38 MIPS SDK workflow run ID"
+        description: "Successful r39 MIPS SDK workflow run ID"
         required: true
         type: string
 
@@ -23,12 +23,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: r38-internet-bandwidth-qemu
+  group: r39-internet-bandwidth-qemu
   cancel-in-progress: true
 
 jobs:
   internet-bandwidth:
-    name: Download direct vs r38 SOCKS5
+    name: Download direct vs r39 SOCKS5
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
@@ -47,7 +47,7 @@ jobs:
             curl unzip zstd python3 openssh-client openssh-server \
             socat mtd-utils gdisk wget ca-certificates binutils file
 
-      - name: Download the prebuilt r38 MIPS package
+      - name: Download the prebuilt r39 MIPS package
         uses: actions/download-artifact@v4
         with:
           name: passwall-ssh-core-openwrt-24.10.7-mipsel-ipk
@@ -63,7 +63,7 @@ jobs:
           IPK="$(find package -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
           test -n "$IPK"
           CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
-          printf '%s\n' "$CONTROL" | grep -q '^Version: 1.0.0-r38$'
+          printf '%s\n' "$CONTROL" | grep -q '^Version: 1.0.0-r39$'
           printf '%s\n' "$CONTROL" | grep -q '^Architecture: mipsel_24kc$'
 
           mkdir -p emulator
@@ -287,12 +287,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r38-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r39-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r38-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r38-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r38-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r39-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r39-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r39-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -308,7 +308,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r38-qemu-internet-bandwidth
+          name: r39-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14

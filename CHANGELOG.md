@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Align MT7621 QEMU package-version checks and the dedicated direct-vs-SOCKS bandwidth workflow with r39 so stale r38 artifacts cannot be benchmarked as the new S2C patch.
+
 - Change S2C download forwarding to direct nonblocking `send()` by the single SSH Owner; keep EPOLLOUT active while S2C bytes remain and retain the worker pool only for C2S socket reads. Remove the per-chunk S2C worker submit/completion round-trip and its in-flight state.
 - Preserve exactly one SSH Owner, one upstream and one authenticated SSH session; CPU detection continues to size only the auxiliary I/O worker pool. Bump OpenWrt package release to r39.
 - Native, OpenWrt 24.10.7 mipsel_24kc SDK, and MT7621 QEMU throughput validation required. No speedup is claimed until the matching r39 IPK passes exact-size/SHA-256 tests and a same-endpoint direct-vs-SOCKS benchmark.

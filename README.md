@@ -453,3 +453,6 @@ harus diuji pada MT7621 QEMU. Kecepatan hanya boleh dinyatakan membaik setelah
 benchmark download langsung dan melalui SOCKS memakai endpoint serta durasi
 yang sama, disertai pemeriksaan ukuran dan SHA-256. Patch ini belum diklaim
 lulus benchmark bandwidth.
+
+
+- Workflow alignment: the MT7621 SDK/QEMU version guard and the separate direct-vs-SOCKS bandwidth workflow now target r39, preventing an r38 IPK from being mistaken for the S2C direct-send patch.
