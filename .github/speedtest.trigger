@@ -1,11 +1,1 @@
-r39 internet bandwidth benchmark
-sdk_run_id=45020186643
-qemu_run_id=45020754464
-download_size=100MB
-endpoints=digitalocean-singapore,ovh-singapore
-per_transfer_max_time=50_seconds
-connect_timeout=15_seconds
-transfer_cap=110000000_bytes
-minimum_payload=95000000_bytes
-retries=0
-skip_failed_endpoint_pair=yes
+r39 100MiB benchmark rerun: Singapore Datapacket replacement for failed DigitalOcean DNS; 50-second per-transfer hard cap; publish results to Actions summary.
