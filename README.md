@@ -276,11 +276,12 @@ Implementasi pada source:
 - Worker tetap hanya menjalankan operasi socket client; libssh2 dan TLS Engine
   tetap berada pada owner masing-masing.
 
-Status implementasi: **sudah diterapkan pada source**, tetapi belum dinyatakan
-lulus. Gerbang berikutnya adalah native regression, OpenWrt 24.10.7 MIPS SDK,
-dan MT7621 QEMU pada source yang sama. Pengujian harus membuktikan konfigurasi
-1/2/4 CPU menghasilkan 1/2/4 I/O worker (dengan cap 4), seluruh completion
-terlayani, dan jumlah sesi SSH tetap satu. Hasil QEMU tidak menggantikan validasi
+Status implementasi: **sudah diterapkan pada source** dan regression mapping
+CPU→I/O worker telah ditambahkan untuk input 1/2/4 serta nilai di luar rentang;
+validasi build/runtime tetap pending. Gerbang berikutnya adalah native regression,
+OpenWrt 24.10.7 MIPS SDK, dan MT7621 QEMU pada source yang sama. Pengujian harus
+membuktikan konfigurasi 1/2/4 CPU menghasilkan 1/2/4 I/O worker (dengan cap 4),
+seluruh completion terlayani, dan jumlah sesi SSH tetap satu. Hasil QEMU tidak menggantikan validasi
 router fisik Tahap 5.
 
 **Gerbang kelulusan:** seluruh skenario wajib lulus pada router fisik dan tidak ada
