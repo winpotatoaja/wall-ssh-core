@@ -370,3 +370,15 @@ Patch batch on `phase3/io-worker-pool-foundation`:
 - Package release bumped to r37.
 
 **Validation status:** pending fresh native + OpenWrt 24.10.7 `mipsel_24kc` SDK and matching MT7621 QEMU runs. This patch does not change the one-SSH-session architecture. Physical MT7621 router validation remains separate and is not claimed here.
+
+
+## Perbaikan workflow benchmark internet MT7621 QEMU — 2026-11-22
+
+Audit GitHub Actions run [45011761935](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/45011761935):
+
+- Artifact IPK r37 berhasil diunduh dan validasi versi `1.0.0-r37` serta arsitektur `mipsel_24kc` lolos.
+- ImageBuilder menyelesaikan finalisasi root filesystem, pembuatan SquashFS, dan padding image.
+- Job berhenti pada target terakhir ImageBuilder, `checksum`, tepat setelah log `Calculating checksums...` (exit code 1). Langkah boot QEMU, SSH forwarding, dan benchmark internet belum dijalankan. Run ini **bukan** hasil benchmark bandwidth.
+- Perbaikan workflow membuat target manifest checksum tetap dicoba, tetapi kegagalannya tidak lagi menggagalkan build QEMU karena manifest tersebut bukan input emulator. File sysupgrade tetap wajib ditemukan, tidak kosong, dan SHA-256-nya dicatat sebelum firmware diserahkan ke pembuat flash NAND.
+- Validasi ulang QEMU/bandwidth masih menunggu hasil run setelah patch ini. Status Tahap 4/5 tidak dinaikkan berdasarkan run yang gagal ini.
+
