@@ -15,7 +15,7 @@ Branch pengerjaan: `phase3/io-worker-pool-foundation`
 | 1 | Fondasi koneksi dan arsitektur single SSH session | **LULUS** |
 | 2 | TLS Engine, pemisahan kepemilikan TLS/SSH, dan fondasi antrean | **LULUS** |
 | 3 | Integrasi local socket I/O worker ke relay aktif | **LULUS** |
-| 4 | Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU | **LULUS FINAL** |
+| 4 | Validasi terpadu, perbaikan, tuning, dan retest throughput | **PERLU RETEST PERFORMA** |
 | 5 | Validasi perangkat OpenWrt MT7621 fisik | **BELUM DIMULAI** |
 
 > Status di atas menggambarkan keadaan source dan catatan pengujian yang tersedia.
@@ -186,7 +186,7 @@ Implementasi yang sudah ada pada branch ini:
 
 ## Tahap 4 — Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU
 
-<badge color="success">LULUS FINAL — VALIDASI DAN AUDIT SELESAI</badge>
+<badge color="warning">VALIDASI FUNGSIONAL LULUS — RETEST THROUGHPUT TERBUKA</badge>
 
 **Tujuan:** membuktikan implementasi akhir pada target arsitektur, memperbaiki
 regresi yang ditemukan, lalu melakukan tuning berdasarkan pengukuran.
@@ -234,7 +234,7 @@ Urutan kerja:
 - Keputusan: **tidak melakukan tuning datapath**. Pengukuran ini adalah baseline pertama untuk empat client pada satu SSH session; tidak ada A/B yang sebanding untuk membuktikan bahwa perubahan buffer, worker count, atau scheduler akan meningkatkan hasil. Mengubah parameter tanpa pembanding akan menjadi tebakan. Pertahankan satu I/O worker dan kapasitas queue saat ini sebagai baseline.
 - QEMU TCG adalah validasi fungsional dan perbandingan relatif; throughput di emulator bukan prediksi throughput router MT7621 fisik.
 
-**Status akhir Tahap 4:** seluruh gerbang native, OpenWrt 24.10.7 MIPS SDK, MT7621 QEMU, pemeriksaan source metrik, dan analisis baseline telah selesai. Tidak ada tuning yang terbukti perlu dilakukan, sehingga Tahap 4 ditutup **LULUS FINAL** tanpa klaim speedup. Tahap 5 membutuhkan pengujian pada router MT7621 fisik. Benchmark beberapa proses/SSH session di `tests/MIPS-MT-BENCHMARK.md` tetap hanya pembanding kapasitas dan bukan bukti worker pool satu-session lebih cepat.
+**Status Tahap 4 diperbarui:** gerbang fungsional native, OpenWrt 24.10.7 MIPS SDK, dan MT7621 QEMU yang tercatat tetap lulus untuk source lama. Audit bandwidth internet kemudian menemukan batas payload S2C worker 120 byte/task yang menjelaskan throughput sekitar 500 KB/s. Karena itu validasi performa Tahap 4 dibuka kembali; status LULUS FINAL belum berlaku untuk datapath setelah temuan ini. Tahap 5 tetap membutuhkan pengujian pada router MT7621 fisik.
 
 ## Tahap 5 — Validasi perangkat OpenWrt MT7621 fisik
 
@@ -244,7 +244,7 @@ Urutan kerja:
 bukan hanya pada emulator.
 
 Prasyarat:
-- Tahap 3 dan Tahap 4 berstatus LULUS.
+- Tahap 3 berstatus LULUS dan retest throughput Tahap 4 harus selesai sebelum Tahap 5.
 - Paket IPK dibangun dari source SHA final yang telah divalidasi.
 - Konfigurasi, akun/endpoint SSH, dan prosedur pemulihan router siap.
 
@@ -382,3 +382,33 @@ Audit GitHub Actions run [45011761935](https://github.com/winpotatoaja/wall-ssh-
 - Perbaikan workflow membuat target manifest checksum tetap dicoba, tetapi kegagalannya tidak lagi menggagalkan build QEMU karena manifest tersebut bukan input emulator. File sysupgrade tetap wajib ditemukan, tidak kosong, dan SHA-256-nya dicatat sebelum firmware diserahkan ke pembuat flash NAND.
 - Validasi ulang QEMU/bandwidth masih menunggu hasil run setelah patch ini. Status Tahap 4/5 tidak dinaikkan berdasarkan run yang gagal ini.
 
+
+
+## Audit bottleneck throughput SSH/SOCKS — 2026-11-22
+
+**Penyebab teridentifikasi pada source r37:** `io_worker_pool.h` menetapkan
+`IO_WORKER_POOL_PAYLOAD_SIZE=128`. Delapan byte payload dipakai untuk FD dan
+panjang data, sehingga `IO_WORKER_SOCKET_WRITE_MAX` hanya **120 byte per task**.
+Jalur S2C di `ssh-core.c:submit_s2c_worker_write()` membatasi setiap pengiriman
+sesuai nilai tersebut; worker melakukan satu `send()` nonblocking, lalu Owner
+harus menunggu completion sebelum mengirim task berikutnya.
+
+Batas itu cocok secara kuantitatif dengan benchmark lama: sekitar 4.000–4.900
+task/event per detik dikalikan maksimum 120 byte menghasilkan sekitar 0,46–0,56
+MB/s, dekat dengan hasil SOCKS sekitar 500 KB/s. Log juga menunjukkan
+`socks_tx_eagain=0` dan `pend_blk=0`; ini bukan gejala socket lokal sering
+menolak data. Backpressure dari worker kecil tersebut dapat merambat ke ring S2C
+dan window SSH sehingga turut membatasi data yang diterima dari upstream.
+
+**Perbaikan source yang diterapkan:** ukuran payload worker dinaikkan menjadi
+16 KiB, sehingga satu task socket write dapat membawa 16,376 byte, bukan 120 byte.
+Worst-case ruang antrean task+completion untuk empat worker dan 64 slot per worker
+sekitar 8 MiB. Regression socket worker ditambah untuk mengirim dan memverifikasi
+satu payload penuh 16 KiB.
+
+**Validasi masih terbuka:** perubahan harus lulus native regression dan OpenWrt
+24.10.7 `mipsel_24kc` SDK build, lalu benchmark MT7621 QEMU harus memakai IPK
+yang dibangun dari source SHA perubahan ini. Workflow bandwidth khusus juga
+dibandingkan pada URL identik secara langsung dari guest dan melalui r37 SOCKS5:
+Vultr 100 MB serta Linode 100 MB. Jangan memakai hasil run lama atau artifact
+sebelum patch sebagai bukti throughput perbaikan.
