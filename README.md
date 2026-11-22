@@ -14,8 +14,8 @@ Branch pengerjaan: `phase3/io-worker-pool-foundation`
 |---|---|---|
 | 1 | Fondasi koneksi dan arsitektur single SSH session | **LULUS** |
 | 2 | TLS Engine, pemisahan kepemilikan TLS/SSH, dan fondasi antrean | **LULUS** |
-| 3 | Integrasi local socket I/O worker ke relay aktif | **IMPLEMENTASI ADA — VALIDASI AKHIR BELUM LULUS** |
-| 4 | Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU | **BERJALAN — QEMU BELUM LULUS** |
+| 3 | Integrasi local socket I/O worker ke relay aktif | **IMPLEMENTASI ADA — QEMU LULUS, AUDIT EDGE CASE TERBUKA** |
+| 4 | Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU | **BERJALAN — BASELINE QEMU LULUS, TUNING LANJUT** |
 | 5 | Validasi perangkat OpenWrt MT7621 fisik | **BELUM DIMULAI** |
 
 > Status di atas menggambarkan keadaan source dan catatan pengujian yang tersedia.
@@ -113,7 +113,7 @@ Perubahan pada TLS Engine atau queue tetap harus menjalankan regression terkait.
 
 ## Tahap 3 — Integrasi local socket I/O worker ke relay aktif
 
-<badge color="warning">IMPLEMENTASI ADA — VALIDASI AKHIR TERBUKA</badge>
+<badge color="warning">IMPLEMENTASI ADA — QEMU LULUS, AUDIT EDGE CASE TERBUKA</badge>
 
 **Tujuan:** memindahkan operasi socket lokal C2S dan S2C ke worker terbatas,
 sementara SSH Owner tetap mengendalikan seluruh state client dan ring buffer.
@@ -134,12 +134,13 @@ Implementasi yang sudah ada pada branch ini:
 - Pool awal menggunakan **1 I/O worker** sebagai baseline. Ini berbeda dari
   konfigurasi worker proses lama dan bukan berarti empat I/O worker sudah aktif.
 
-**Perbaikan source terbaru (validasi masih menunggu):**
+**Perbaikan source terbaru (native, SDK, dan QEMU tervalidasi):**
 - Completion yang ditolak tracker karena task tidak dikenal (`ENOENT`) diperlakukan sebagai duplikat/stale dan diabaikan tanpa melepas reference lagi.
 - Completion dengan identitas yang tidak cocok (`EPROTO`/error tracker lain), client-generation yang tidak ditemukan setelah tracker menerima task, kegagalan release lifetime, atau task tanpa arah in-flight yang cocok kini menjadi invariant failure. Drain mengembalikan error; SSH Owner menghentikan relay dengan exit status gagal, bukan melanjutkan dengan state yang tidak konsisten.
 - Fallback socket I/O sinkron pada Owner hanya diizinkan ketika submit worker mengembalikan status antrean sementara (`1`/`EAGAIN`). Kegagalan submit internal (`-1`) tidak lagi disamarkan sebagai queue-full; client ditutup secara aman dan jalur flush S2C mengembalikan error ke pemanggil.
-- Jalur drain saat shutdown/startup juga memeriksa hasil invariant. Native regression dan build OpenWrt 24.10.7 `mipsel_24kc` untuk batch ini telah lulus pada Actions run `44964541444` (artifact `14730609580`); runtime MT7621 QEMU masih wajib lulus sebelum Tahap 3 ditutup.
+- Jalur drain saat shutdown/startup juga memeriksa hasil invariant. Native regression dan build OpenWrt 24.10.7 `mipsel_24kc` lulus pada Actions run `44964541444`; runtime MT7621 QEMU untuk source SHA `0f1d484604fb2d2f1d0e53ee5603f90fe71995f2` juga lulus pada run `44965112117` (artifact `14730729725`).
 - Pemeriksaan workflow TLS kini memakai path eksplisit `$GITHUB_WORKSPACE/ssh-core.c` dan memverifikasi file ada, sehingga pemeriksaan tidak lagi dapat memberi PASS palsu ketika dijalankan dari direktori SDK.
+- QEMU MIPS membuktikan transfer TCP 1 MiB, half-close 8 MiB, full-duplex 8 MiB upload/32 MiB download, upload C2S 32 MiB SHA-256, empat client download bersamaan masing-masing 32 MiB dalam satu SSH session, TLS/SNI dengan empat client download bersamaan, ChaCha20-Poly1305 TLS 1.3, TLS keepalive, half-close/full-duplex TLS, serta graceful SIGTERM/shutdown. Semua helper regression MIPS termasuk worker pool 50.000 task, eventfd re-arm, backpressure, lifetime, completion tracker, SPSC rollover, dan TLS Engine lulus; `MIPS TEST STATUS: 0`.
 
 **Audit dan validasi yang masih wajib:**
 - Menuntaskan audit semua jalur completion: sukses, partial write, EAGAIN,
@@ -151,8 +152,7 @@ Implementasi yang sudah ada pada branch ini:
   tepat satu kali, termasuk jalur shutdown dan invariant failure.
 - Memastikan timeout join tidak menyebabkan worker mengakses storage yang sudah
   dibebaskan atau FD yang sudah dipakai ulang.
-- Menambahkan/menegaskan regresi untuk full-duplex, half-close dua arah, RST,
-  reconnect, FD reuse, backpressure, dan shutdown saat task masih aktif.
+- Menambahkan/menegaskan regresi eksplisit untuk RST, reconnect, dan FD reuse (belum ada assertion khusus yang terverifikasi di QEMU run ini).
 - Menyamakan cakupan assertion native, MIPS, dan QEMU.
 
 **Gerbang kelulusan tahap 3:**
@@ -170,7 +170,7 @@ dan dispatch sudah terhubung.
 
 ## Tahap 4 — Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU
 
-<badge color="warning">BERJALAN — QEMU BELUM LULUS</badge>
+<badge color="warning">BERJALAN — BASELINE QEMU LULUS, TUNING LANJUT</badge>
 
 **Tujuan:** membuktikan implementasi akhir pada target arsitektur, memperbaiki
 regresi yang ditemukan, lalu melakukan tuning berdasarkan pengukuran.
