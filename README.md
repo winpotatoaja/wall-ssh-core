@@ -260,6 +260,29 @@ Rencana validasi perangkat:
 - Catat log, throughput, checksum, suhu/performa perangkat bila tersedia,
   serta seluruh kendala yang hanya muncul pada perangkat fisik.
 
+### Sub-tahap: penskalaan I/O worker berdasarkan CPU (implementasi, validasi pending)
+
+Tujuan tambahan sebelum validasi perangkat fisik adalah memakai kapasitas CPU yang
+tersedia untuk operasi socket client tanpa menggandakan sesi SSH.
+
+Implementasi pada source:
+- Deteksi CPU memakai affinity/cpuset proses terlebih dahulu, lalu fallback ke
+  jumlah CPU online melalui `sysconf`.
+- Jumlah I/O worker otomatis = jumlah CPU yang terdeteksi, dibatasi 1–4 worker.
+- Pool dan completion tracker memakai jumlah worker runtime yang sama; seluruh
+  completion eventfd didaftarkan ke epoll dan semua worker dipantau saat idle.
+- Tetap hanya ada satu SSH Owner, satu upstream TCP/TLS, dan satu autentikasi/
+  sesi SSH. Opsi legacy `-workers` tidak mengubah jumlah sesi SSH.
+- Worker tetap hanya menjalankan operasi socket client; libssh2 dan TLS Engine
+  tetap berada pada owner masing-masing.
+
+Status implementasi: **sudah diterapkan pada source**, tetapi belum dinyatakan
+lulus. Gerbang berikutnya adalah native regression, OpenWrt 24.10.7 MIPS SDK,
+dan MT7621 QEMU pada source yang sama. Pengujian harus membuktikan konfigurasi
+1/2/4 CPU menghasilkan 1/2/4 I/O worker (dengan cap 4), seluruh completion
+terlayani, dan jumlah sesi SSH tetap satu. Hasil QEMU tidak menggantikan validasi
+router fisik Tahap 5.
+
 **Gerbang kelulusan:** seluruh skenario wajib lulus pada router fisik dan tidak ada
 regresi stabilitas atau integritas data. Hasil QEMU saja tidak cukup untuk meluluskan
 tahap ini.
