@@ -2750,6 +2750,32 @@ static uint64_t allocate_io_task_id(void) {
 }
 
 /* Owner pins the FD/client lifetime before publishing a copied socket-read task. */
+/* Roll back the Owner-side task/lifetime transaction when publication
+ * fails. Never silently discard either invariant failure: retaining a
+ * reference is safer than freeing a client that may still be referenced. */
+static int rollback_io_worker_registration(
+    client_conn_t *c,
+    io_worker_completion_tracker_t *tracker,
+    const io_worker_task_ref_t *ref)
+{
+    if (io_worker_completion_tracker_cancel(tracker, ref) < 0) {
+        int saved_errno = errno;
+        log_red("[IO worker] task registration rollback failed task=%llu: %s",
+                (unsigned long long)ref->task_id, strerror(saved_errno));
+        errno = saved_errno;
+        return -1;
+    }
+    if (client_lifetime_release(&c->lifetime, ref->client_id,
+                                ref->generation) < 0) {
+        int saved_errno = errno;
+        log_red("[IO worker] lifetime rollback failed task=%llu: %s",
+                (unsigned long long)ref->task_id, strerror(saved_errno));
+        errno = saved_errno;
+        return -1;
+    }
+    return 0;
+}
+
 static int submit_c2s_worker_read(io_worker_pool_t *pool,
                                   io_worker_completion_tracker_t *tracker,
                                   client_conn_t *c) {
@@ -2789,13 +2815,15 @@ static int submit_c2s_worker_read(io_worker_pool_t *pool,
     if (client_lifetime_acquire(&c->lifetime, c->client_id, c->generation) < 0)
         return -1;
     if (io_worker_completion_tracker_register(tracker, &ref) < 0) {
-        (void)client_lifetime_release(&c->lifetime, c->client_id, c->generation);
+        if (client_lifetime_release(&c->lifetime, ref.client_id, ref.generation) < 0)
+            log_red("[IO worker] lifetime release after tracker registration failure: %s",
+                    strerror(errno));
         return -1;
     }
     if (io_worker_pool_submit_to_worker(pool, &task, worker_id) < 0) {
         int saved_errno = errno;
-        (void)io_worker_completion_tracker_cancel(tracker, &ref);
-        (void)client_lifetime_release(&c->lifetime, c->client_id, c->generation);
+        if (rollback_io_worker_registration(c, tracker, &ref) < 0)
+            return -1;
         errno = saved_errno;
         return saved_errno == EAGAIN ? 1 : -1;
     }
