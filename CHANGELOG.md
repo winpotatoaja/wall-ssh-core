@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Centralize the client EPOLLIN eligibility gate so completion and relay paths cannot re-arm reads while HUP/RDHUP is pending, EOF is known, a C2S worker is in flight, or the C2S buffer is full; add a native regression for each blocked state.
 - Replace payload-expansion allocation aborts with checked buffer growth and error propagation; reject size overflow and fail the payload cleanly on allocation failure.
 - Use CLOCK_MONOTONIC-backed millisecond deadlines for upstream inactivity/keepalive, SOCKS handshake timeout, and EMFILE log throttling so wall-clock adjustments cannot extend or prematurely expire timers.
 - Correct CLI/startup diagnostics that previously printed literal `\\n` text instead of line breaks.
