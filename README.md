@@ -195,7 +195,9 @@ Implementasi yang sudah ada pada branch ini:
 - r41 mengembalikan AES-128-GCM sebagai preferensi MIPS pertama (CTR tetap fallback) dan menggandakan `S2C_RELAY_BUF_SIZE` menjadi 256 KiB. Tujuan perubahan buffer adalah mengurangi overhead per batch; pekerjaan kriptografi libssh2 tetap serial dan belum diklaim teratasi.
 - Benchmark r41 tetap hanya satu URL Datapacket, satu direct dan satu SOCKS5, batas 50 detik per transfer, tanpa retry, dan pemeriksaan satu sesi SSH serta cipher AES-GCM aktual.
 
+**Catatan validasi pertama:** SDK r41 berhenti pada regresi native yang masih mengharapkan S2C 128 KiB. Assertion diperbarui agar mengharapkan 256 KiB; kode produksi tidak menyebabkan kegagalan tersebut.
+
 **Status: eksperimen retune r41 menunggu validasi speed.** Kecepatan harus dibandingkan dengan r39 menggunakan hasil benchmark aktual; hasil QEMU bukan bukti performa perangkat MT7621 fisik.
 
 
-Catatan r41: perubahan cipher AES-GCM-first dan S2C ring 256 KiB sudah masuk. Build SDK MIPS dan satu benchmark Datapacket direct/SOCKS5 dijalankan dari commit ini; hasil throughput belum tersedia sampai workflow benchmark selesai.
+Catatan r41: perubahan cipher AES-GCM-first dan S2C ring 256 KiB sudah masuk. Regresi native kapasitas buffer kini mengunci C2S 32 KiB dan S2C 256 KiB. Build SDK MIPS akan dijalankan ulang menggunakan gate native yang sudah diperbarui.
