@@ -2038,11 +2038,43 @@ static int run_worker_hup_eagain_regression(void) {
     return 0;
 }
 
+static int run_client_read_epoll_gate_regression(void) {
+    client_conn_t c = {.fd = 10, .state = ST_RELAY};
+    int failed = rb_init(&c.c2s, 8U) < 0;
+    if (!failed && !client_read_epoll_allowed(&c)) failed = 1;
+    c.rdhup_pending = 1;
+    if (!failed && client_read_epoll_allowed(&c)) failed = 1;
+    c.rdhup_pending = 0;
+    c.hup_pending = 1;
+    if (!failed && client_read_epoll_allowed(&c)) failed = 1;
+    c.hup_pending = 0;
+    c.client_dead = 1;
+    if (!failed && client_read_epoll_allowed(&c)) failed = 1;
+    c.client_dead = 0;
+    c.client_eof = 1;
+    if (!failed && client_read_epoll_allowed(&c)) failed = 1;
+    c.client_eof = 0;
+    c.c2s_worker_inflight = 1;
+    if (!failed && client_read_epoll_allowed(&c)) failed = 1;
+    c.c2s_worker_inflight = 0;
+    if (!failed && rb_push(&c.c2s, (const uint8_t *)"12345678", 8U) < 0)
+        failed = 1;
+    if (!failed && client_read_epoll_allowed(&c)) failed = 1;
+    rb_free(&c.c2s);
+    if (failed) {
+        fprintf(stderr, "[FAIL] client EPOLLIN gate suppresses reads during HUP/RDHUP, EOF, in-flight and full-buffer states\\n");
+        return 1;
+    }
+    puts("[PASS] client EPOLLIN gate suppresses reads during HUP/RDHUP, EOF, in-flight and full-buffer states");
+    return 0;
+}
+
 int main(void) {
     g_log_path = "-";
     int failures = run_core_state_regressions();
     failures += run_payload_selector_regressions();
     failures += run_worker_hup_eagain_regression();
+    failures += run_client_read_epoll_gate_regression();
     failures += run_perf_metrics_regression();
     failures += run_worker_count_regressions();
 
