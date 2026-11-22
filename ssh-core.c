@@ -1353,10 +1353,18 @@ static void perf_log_interval(long long now) {
         if (c->s2c.used > s2c_used_max) s2c_used_max = c->s2c.used;
         if (c->s2c.used > 0) {
             s2c_nonempty_clients++;
-            if (c->fd >= 0 && (c->epoll_events & EPOLLOUT))
+            /*
+             * A pending async worker write deliberately disarms EPOLLOUT.
+             * Do not classify it as a missing epoll wakeup: completion
+             * will resume flushing from the SSH Owner.
+             */
+            if (c->s2c_worker_inflight) {
+                /* Expected owner/worker state: no EPOLLOUT required. */
+            } else if (c->fd >= 0 && (c->epoll_events & EPOLLOUT)) {
                 epollout_armed_clients++;
-            else if (c->fd >= 0 && !c->hup_pending && !c->client_dead)
+            } else if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
                 s2c_epollout_missing++;
+            }
         }
     }
 
