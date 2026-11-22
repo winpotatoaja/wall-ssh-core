@@ -1,26 +1,19 @@
 #!/bin/sh
-# Real Internet bandwidth benchmark through passwall-ssh-core SOCKS5.
-# Uses Cloudflare public speed-test endpoints; no local fixture traffic.
-# Usage: sh qemu_speedtest.sh [duration_seconds]
+# Download exactly one test file from each public endpoint through r37 SOCKS5.
+# No upload test and no local fixture benchmark.
 set -u
 
 main() {
-    DURATION=${1:-60}
     SOCKS=${SOCKS:-127.0.0.1:1080}
-    DOWN_URL=${DOWN_URL:-https://speed.cloudflare.com/__down?bytes=100000000}
-    UP_URL=${UP_URL:-https://speed.cloudflare.com/__up}
     LOG=/tmp/mips-test
     RESULT="$LOG/qemu-speedtest"
     BIN=/usr/bin/passwall-ssh-core
     HZ=$(getconf CLK_TCK 2>/dev/null)
     case "$HZ" in ''|*[!0-9]*) HZ=100;; esac
-    case "$DURATION" in ''|*[!0-9]*) echo "ERROR: duration must be integer seconds"; return 2;; esac
-    [ "$DURATION" -ge 10 ] || { echo "ERROR: duration must be at least 10 seconds"; return 2; }
     [ -x "$BIN" ] || { echo "ERROR: core binary missing"; return 2; }
     command -v curl >/dev/null 2>&1 || { echo "ERROR: curl missing"; return 2; }
     mkdir -p "$RESULT" || return 2
     : > "$RESULT/download-results.log"
-    : > "$RESULT/upload-results.log"
     : > "$RESULT/errors.log"
     : > "$RESULT/samples.log"
 
@@ -35,13 +28,11 @@ main() {
         }'
     }
     proc_ticks() {
-        awk '{s=$0;sub(/^.*\) /,"",s);n=split(s,a," ");if(n>=13)printf "%.0f",a[12]+a[13];else print 0}' "/proc/$1/stat" 2>/dev/null
+        awk '{s=$0;sub(/^.*\\) /,"",s);n=split(s,a," ");if(n>=13)printf "%.0f",a[12]+a[13];else print 0}' "/proc/$1/stat" 2>/dev/null
     }
 
-    echo "QEMU_INTERNET_SPEEDTEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
-    echo "DOWNLOAD_URL=$DOWN_URL"
-    echo "UPLOAD_URL=$UP_URL"
-    echo "SOCKS5=$SOCKS DURATION_PER_DIRECTION=${DURATION}s HZ=$HZ"
+    echo "R37_TWO_ENDPOINT_DOWNLOAD_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "SOCKS5=$SOCKS"
     echo "GUEST=$(uname -a)"
     echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
 
@@ -62,21 +53,6 @@ main() {
         return 2
     fi
 
-    PREFLIGHT_URL=${PREFLIGHT_URL:-https://speed.cloudflare.com/__down?bytes=1024}
-    if ! curl -4 -fsS --socks5-hostname "$SOCKS" --connect-timeout 15 --max-time 45 "$PREFLIGHT_URL" -o /dev/null >/dev/null 2>&1; then
-        echo "ERROR: Internet download preflight through SOCKS5 failed"
-        echo "Check guest WAN/DNS, SSH tunnel and Cloudflare speed-test reachability."
-        kill -TERM "$CORE_PID" 2>/dev/null || :
-        return 2
-    fi
-    dd if=/dev/zero of="$RESULT/upload-64MiB.bin" bs=1M count=64 2>/dev/null || {
-        echo "ERROR: could not create upload payload"
-        kill -TERM "$CORE_PID" 2>/dev/null || :
-        return 2
-    }
-
-    cpu_snapshot > "$RESULT/cpu.prev"
-    net_snapshot > "$RESULT/net.prev"
     PREV_TICKS=$(proc_ticks "$CORE_PID")
     SAMPLE=0
     sample_metrics() {
@@ -93,30 +69,52 @@ main() {
         PREV_TICKS=$CUR_TICKS
     }
 
-    echo "=== DOWNLOAD TEST: ${DURATION}s, 100 MB per request ==="
-    DOWN_START=$(date +%s)
-    DOWN_END=$((DOWN_START + DURATION))
-    while [ "$(date +%s)" -lt "$DOWN_END" ]; do
-        curl -4 -fsS --socks5-hostname "$SOCKS" --connect-timeout 15 --max-time 180 \
-          -o /dev/null -w '%{size_download} %{time_total} %{speed_download} %{http_code}\n' "$DOWN_URL" >> "$RESULT/download-results.log" &
-        CURL_PID=$!
-        while kill -0 "$CURL_PID" 2>/dev/null; do sample_metrics; sleep 1; done
-        wait "$CURL_PID" || { RC=$?; echo "download curl_rc=$RC" >> "$RESULT/errors.log"; break; }
-    done
-    DOWN_WALL=$(( $(date +%s) - DOWN_START ))
+    cpu_snapshot > "$RESULT/cpu.prev"
+    net_snapshot > "$RESULT/net.prev"
 
-    echo "=== UPLOAD TEST: ${DURATION}s, 64 MiB per request ==="
-    UP_START=$(date +%s)
-    UP_END=$((UP_START + DURATION))
-    while [ "$(date +%s)" -lt "$UP_END" ]; do
-        curl -4 -fsS --socks5-hostname "$SOCKS" --connect-timeout 15 --max-time 180 \
-          -X POST --data-binary "@$RESULT/upload-64MiB.bin" -o /dev/null \
-          -w '%{size_upload} %{time_total} %{speed_upload} %{http_code}\n' "$UP_URL" >> "$RESULT/upload-results.log" &
+    test_download() {
+        LABEL=$1
+        URL=$2
+        OUT="$RESULT/$LABEL.curl.log"
+        echo "=== DOWNLOAD $LABEL ==="
+        echo "URL=$URL"
+        START=$(date +%s)
+        curl -4 -fL --retry 2 --retry-delay 2 --connect-timeout 20 --max-time 900 \
+          --socks5-hostname "$SOCKS" -o /dev/null \
+          -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
+          "$URL" > "$OUT" &
         CURL_PID=$!
-        while kill -0 "$CURL_PID" 2>/dev/null; do sample_metrics; sleep 1; done
-        wait "$CURL_PID" || { RC=$?; echo "upload curl_rc=$RC" >> "$RESULT/errors.log"; break; }
-    done
-    UP_WALL=$(( $(date +%s) - UP_START ))
+        while kill -0 "$CURL_PID" 2>/dev/null; do
+            sample_metrics
+            sleep 1
+        done
+        wait "$CURL_PID"
+        RC=$?
+        WALL=$(( $(date +%s) - START ))
+        if [ "$RC" -ne 0 ]; then
+            echo "ERROR: $LABEL curl_rc=$RC wall_seconds=$WALL" | tee -a "$RESULT/errors.log"
+            return 2
+        fi
+        if [ ! -s "$OUT" ]; then
+            echo "ERROR: $LABEL produced no curl statistics" | tee -a "$RESULT/errors.log"
+            return 2
+        fi
+        awk -v label="$LABEL" -v wall="$WALL" '{
+          bytes=$1;sec=$2;speed=$3;code=$4;ip=$5;type=$6;
+          printf "%s bytes=%.0f (%.2f MiB) wall_seconds=%d curl_seconds=%.3f average_mbps=%.2f http_code=%s remote_ip=%s content_type=%s\n",
+            label,bytes,bytes/1048576,wall,sec,(wall>0?bytes*8/wall/1000000:0),code,ip,type
+        }' "$OUT" | tee -a "$RESULT/download-results.log"
+        return 0
+    }
+
+    test_download vultr-singapore "https://sgp-ping.vultr.com/vultr.com.100MB.bin" || {
+        kill -TERM "$CORE_PID" 2>/dev/null || :
+        return 2
+    }
+    test_download ovh "https://proof.ovh.net/files/100Mb.dat" || {
+        kill -TERM "$CORE_PID" 2>/dev/null || :
+        return 2
+    }
 
     kill -TERM "$CORE_PID" 2>/dev/null || :
     WAIT_N=0
@@ -124,17 +122,16 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "DOWNLOAD"
-      awk -v wall="$DOWN_WALL" '{bytes+=$1;sec+=$2;if($3>peak)peak=$3;n++}END{printf "requests=%d bytes=%.0f wall_seconds=%d average_mbps=%.2f active_average_mbps=%.2f peak_mbps=%.2f\n",n,bytes,wall,(wall>0?bytes*8/wall/1000000:0),(sec>0?bytes*8/sec/1000000:0),peak*8/1000000}' "$RESULT/download-results.log"
-      echo "UPLOAD"
-      awk -v wall="$UP_WALL" '{bytes+=$1;sec+=$2;if($3>peak)peak=$3;n++}END{printf "requests=%d bytes=%.0f wall_seconds=%d average_mbps=%.2f active_average_mbps=%.2f peak_mbps=%.2f\n",n,bytes,wall,(wall>0?bytes*8/wall/1000000:0),(sec>0?bytes*8/sec/1000000:0),peak*8/1000000}' "$RESULT/upload-results.log"
+      echo "R37 DOWNLOAD SUMMARY"
+      cat "$RESULT/download-results.log"
+      echo "SAMPLE_COUNT=$SAMPLE"
+      echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
     } | tee "$RESULT/summary.txt"
 
-    echo "SAMPLE_COUNT=$SAMPLE"
     echo "RESULT_DIR=$RESULT"
-    echo "QEMU_INTERNET_SPEEDTEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R37_TWO_ENDPOINT_DOWNLOAD_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     [ ! -s "$RESULT/errors.log" ] || return 2
-    [ -s "$RESULT/download-results.log" ] && [ -s "$RESULT/upload-results.log" ] || return 2
+    [ "$(wc -l < "$RESULT/download-results.log")" -ge 2 ] || return 2
     return 0
 }
 main "$@"
