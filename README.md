@@ -331,3 +331,25 @@ Hasil lama tidak boleh dianggap mewakili source terbaru jika ada perubahan sesud
 - Tahap 5 hanya dapat dinyatakan lulus setelah pengujian pada router MT7621 fisik.
 
 **Tahap 4 LULUS FINAL:** native regression run `44984703377`, OpenWrt 24.10.7 MIPS SDK run `44984703379` (artifact `14739159030`), dan MT7621 QEMU run `44985100177` (artifact `14739727217`) lulus. Kode yang diuji: `e2f150f27b3218022559f15a59a4a6fd59de70c0`; QEMU checkout `74bc19850024605d4f8d737f5cfbd57233744cfd` hanya menambahkan catatan dokumentasi. Pengukuran CPU/RSS/backpressure serta keputusan tidak melakukan tuning tanpa A/B yang sebanding dicatat pada bagian Tahap 4. Tidak ada klaim speedup. Tahap 5 adalah validasi pada router MT7621 fisik.
+
+
+### Audit performa download GitHub Actions — retest diperlukan
+
+Audit artifact MT7621 QEMU run `44988206417` menemukan bahwa benchmark empat klien
+TCP dan TLS hanya mencatat sekitar 1.59–1.61 Mbps per klien (sekitar 0.76 MiB/s
+agregat). Penyebab yang ditemukan berada pada fixture HTTP CI, bukan bukti bahwa
+relay telah mencapai batas performanya: endpoint `/slow-download` memasang
+`SO_SNDBUF=32768` pada socket server dan mengirim data per 16 KiB disertai
+`flush()`. Dengan demikian angka tersebut mengukur jalur dengan send-buffer
+sengaja dipersempit, bukan throughput normal.
+
+Perbaikan fixture pada commit `081c4bc8a120f0fd0e896b2d3ee05377f3408da8`:
+- Menghapus batas socket send-buffer dari endpoint throughput.
+- Mengubah chunk pengiriman menjadi 256 KiB dan menghapus flush per chunk.
+- Skenario backpressure khusus tetap memakai buffer kecil pada endpoint
+  `/duplex-backpressure`, sehingga pengujian tekanan tidak hilang.
+
+Status: **retet belum lulus**. Hasil baru harus menunjukkan throughput direct
+baseline dan TCP/TLS relay dengan checksum cocok sebelum angka performa dapat
+dinilai. Jangan memakai angka 1.59–1.61 Mbps dari fixture lama sebagai hasil
+throughput normal atau klaim performa relay.
