@@ -456,6 +456,22 @@ jobs:
                               self.wfile.flush()
                       self.close_connection = True
                       return
+                  if self.path == "/idle":
+                      body = b"idle-rst-fixture-body-64-bytes-padded-------------------------"
+                      if len(body) != 64:
+                          body = body[:64].ljust(64, b"-")
+                      self.send_response(200)
+                      self.send_header("Content-Length", str(len(body)))
+                      self.send_header("Connection", "close")
+                      self.end_headers()
+                      time.sleep(25)
+                      try:
+                          self.wfile.write(body)
+                          self.wfile.flush()
+                      except OSError:
+                          pass
+                      self.close_connection = True
+                      return
                   if self.path == "/half-close-server-eof":
                       body = b"server-half-close-ok\n"
                       self.send_response(200)
@@ -1024,6 +1040,38 @@ jobs:
               fi
             else
               fail "TCP SOCKS download failed"
+            fi
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== TCP IDLE CLIENT RST + RECONNECT / FD REUSE =========="
+            if /usr/bin/socks-halfclose --rst-idle 1080; then
+              pass "idle client RST delivered while remote response body was delayed"
+              RST_RECONNECT_OK=1
+              N=1
+              while [ "$N" -le 8 ]; do
+                if curl -4 -fsS --socks5-hostname 127.0.0.1:1080 --connect-timeout 20 --max-time 120 \
+                  http://127.0.0.1:18080/payload -o "$LOG/rst-reconnect-$N.bin"; then
+                  SIZE="$(wc -c < "$LOG/rst-reconnect-$N.bin" | tr -d ' ')"
+                  ACTUAL="$(sha256sum "$LOG/rst-reconnect-$N.bin" | awk '{print $1}')"
+                  EXPECTED="$(sha256sum /tmp/mips-test/payload-1MiB.bin | awk '{print $1}')"
+                  if [ "$SIZE" != 1048576 ] || [ "$ACTUAL" != "$EXPECTED" ]; then
+                    RST_RECONNECT_OK=0
+                    break
+                  fi
+                else
+                  RST_RECONNECT_OK=0
+                  break
+                fi
+                N=$((N + 1))
+              done
+              if [ "$RST_RECONNECT_OK" -eq 1 ] && [ "$N" -eq 9 ]; then
+                pass "8 fresh SOCKS reconnects after RST with exact payload SHA-256 (FD reuse stress)"
+              else
+                fail "reconnect/FD-reuse transfer failed after RST"
+              fi
+            else
+              fail "idle RST helper failed"
             fi
           fi
 
