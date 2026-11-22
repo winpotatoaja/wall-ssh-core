@@ -1,16 +1,5 @@
 name: Passwall SSH core - OpenWrt 24.10.7 mipsel_24kc
 on:
-  workflow_call:
-    inputs:
-      sdk_run_id:
-        description: "Successful OpenWrt 24.10.7 MIPS SDK workflow run ID"
-        required: true
-        type: string
-      benchmark_duration:
-        description: "QEMU sustained download benchmark duration in seconds"
-        required: false
-        default: 60
-        type: number
   push:
     branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration, phase2/tls-engine-integration-rxfix, phase3/io-worker-pool-foundation]
 permissions:
@@ -239,7 +228,7 @@ jobs:
               target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
   vm:
-    if: ${{ inputs.sdk_run_id != '' || contains(github.event.head_commit.message, '[mips-stage=vm]') }}
+    if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
     runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
@@ -259,14 +248,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.sdk_run_id }}" ]; then
-            SDK_RUN_ID="${{ inputs.sdk_run_id }}"
-          else
-            MESSAGE="$(jq -r '.head_commit.message // empty' "$GITHUB_EVENT_PATH")"
-            SDK_RUN_ID="$(printf '%s\n' "$MESSAGE" | sed -n 's/.*\[mips_sdk_run_id=\([0-9][0-9]*\)\].*/\1/p')"
-            if [ -z "$SDK_RUN_ID" ]; then
-              SDK_RUN_ID="$(printf '%s\n' "$MESSAGE" | sed -n 's/.*\[sdk_run_id=\([0-9][0-9]*\)\].*/\1/p')"
-            fi
+          MESSAGE="$(jq -r '.head_commit.message // empty' "$GITHUB_EVENT_PATH")"
+          SDK_RUN_ID="$(printf '%s\n' "$MESSAGE" | sed -n 's/.*\[mips_sdk_run_id=\([0-9][0-9]*\)\].*/\1/p')"
+          if [ -z "$SDK_RUN_ID" ]; then
+            SDK_RUN_ID="$(printf '%s\n' "$MESSAGE" | sed -n 's/.*\[sdk_run_id=\([0-9][0-9]*\)\].*/\1/p')"
           fi
           case "$SDK_RUN_ID" in
             ""|*[!0-9]*) echo "Missing [mips_sdk_run_id=RUN_ID] in commit message."; false ;;
@@ -1348,13 +1333,6 @@ jobs:
           ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 'sh /tmp/mips-test/run-tests.sh'
 
-          echo "========== QEMU SUSTAINED SOCKS5 SPEEDTEST =========="
-          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            "$GITHUB_WORKSPACE/tests/qemu_speedtest.sh" root@127.0.0.1:/tmp/mips-test/qemu_speedtest.sh
-          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-            'chmod 0700 /tmp/mips-test/qemu_speedtest.sh && /tmp/mips-test/qemu_speedtest.sh "${{ inputs.benchmark_duration || 60 }}"'
-
           echo "========== VERIFY HOST OBSERVED TCP AND TLS HALF-CLOSE =========="
           cat /tmp/mips-http-server.log
           CLIENT_FIN="$(grep -cF '[HALFCLOSE] client FIN observed after complete request body' /tmp/mips-http-server.log || true)"
@@ -1380,7 +1358,7 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && find . -type f \( -name "*.log" -o -name "*.env" -o -name "*-pids" -o -name "test-status" -o -name "run-tests.sh" -o -path "./qemu-speedtest/*" \) -print > /tmp/mips-log-files.list && tar -czf /tmp/mips-guest-logs.tgz -T /tmp/mips-log-files.list' 2>/dev/null
+              'cd /tmp/mips-test && find . -type f \( -name "*.log" -o -name "*.env" -o -name "*-pids" -o -name "test-status" -o -name "run-tests.sh" \) -print > /tmp/mips-log-files.list && tar -czf /tmp/mips-guest-logs.tgz -T /tmp/mips-log-files.list' 2>/dev/null
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               root@127.0.0.1:/tmp/mips-guest-logs.tgz test-results/guest/ 2>/dev/null
