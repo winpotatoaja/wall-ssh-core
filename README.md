@@ -182,7 +182,7 @@ Implementasi yang sudah ada pada branch ini:
 - RST idle channel berhasil, lalu 8 reconnect SOCKS masing-masing memverifikasi payload 1 MiB dan SHA-256. Half-close dua arah, upload pasca-EOF 8 MiB, upload TCP 32 MiB, empat client TCP bersamaan 4 × 32 MiB, empat client TLS/SNI bersamaan, dan full-duplex upload 8 MiB/download 32 MiB lulus. `MIPS TEST STATUS: 0`.
 - Artifact runtime QEMU: `14737509442`.
 
-**Status saat ini:** gerbang native, MIPS SDK, dan QEMU terbaru telah lulus. Tahap 3 masih terbuka untuk audit source/invariant terakhir: ownership thread TLS/SSH, validasi completion dan pelepasan reference tepat satu kali pada semua jalur error/shutdown, serta keamanan worker join/FD teardown. Belum diberi status LULUS FINAL sampai audit tersebut ditutup.
+**Status saat ini:** Tahap 3 telah ditutup **LULUS FINAL** setelah native regression, MIPS SDK, MT7621 QEMU (`MIPS TEST STATUS: 0`), dan audit source/invariant selesai. Pekerjaan selanjutnya berada di Tahap 4.
 
 ## Tahap 4 — Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU
 
@@ -192,11 +192,10 @@ Implementasi yang sudah ada pada branch ini:
 regresi yang ditemukan, lalu melakukan tuning berdasarkan pengukuran.
 
 Urutan kerja:
-1. Selesaikan satu batch audit/perbaikan source Tahap 3 dan test yang terkait.
-2. Jalankan seluruh regression native dalam satu rangkaian.
-3. Build paket dengan OpenWrt 24.10.7 SDK untuk `mipsel_24kc`.
-4. Jalankan paket hasil build tersebut di MT7621 QEMU; verifikasi artifact/source SHA.
-5. Jalankan QEMU OpenWrt x86_64 sebagai pembanding bila workflow terkait berubah.
+1. Jalankan regression terpadu native untuk baseline Tahap 4.
+2. Build paket dengan OpenWrt 24.10.7 SDK untuk `mipsel_24kc`.
+3. Jalankan paket hasil build tersebut di MT7621 QEMU; verifikasi artifact/source SHA.
+4. Jalankan QEMU OpenWrt x86_64 sebagai pembanding bila workflow terkait berubah.
 6. Evaluasi hasil throughput, CPU/thread, RSS, FD, queue occupancy, backpressure,
    retransmission, dan latensi; lakukan tuning hanya berdasarkan hasil terukur.
 7. Setelah perubahan tuning, ulangi regression yang terdampak dan validasi akhir.
