@@ -634,7 +634,7 @@ jobs:
             -o StrictModes=no \
             -o AllowUsers=sshcore-ci \
             -o AllowTcpForwarding=yes \
-            -o PermitOpen=any \
+            -o PermitOpen=127.0.0.1:18080 \
             -o MaxSessions=64 \
             -o LogLevel=VERBOSE >/tmp/mips-sshd.log 2>&1 &
           echo "$!" >/tmp/mips-sshd.pid
