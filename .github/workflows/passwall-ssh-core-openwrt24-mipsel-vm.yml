@@ -33,6 +33,7 @@ jobs:
             -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
             -ffunction-sections -fdata-sections -I. \
             tests/http_parser_test.c tls_engine.c client_lifetime.c \
+            io_worker_pool.c io_worker_completion_tracker.c \
             -Wl,--gc-sections -o /tmp/http-parser-test \
             -lssh2 -lssl -lcrypto
           /tmp/http-parser-test | tee test-results/http-parser-test.log
