@@ -23,23 +23,48 @@ thread_snapshot() {
         TASK_DIR=$(dirname "$STAT_FILE")
         TID=$(basename "$TASK_DIR")
         TICKS=$(proc_stat_ticks "$STAT_FILE")
-        COMM=$(cat "$TASK_DIR/comm" 2>/dev/null | tr ' ' '_')
-        [ -n "$COMM" ] || COMM=unknown
+        if [ "$TID" = "$PID" ]; then
+            COMM=ssh_owner
+        else
+            COMM=$(cat "$TASK_DIR/comm" 2>/dev/null | tr ' ' '_')
+            [ -n "$COMM" ] || COMM=unknown
+        fi
         printf '%s %s %s\n' "$TID" "$TICKS" "$COMM"
     done
+}
+
+cpu_reference_ticks() {
+    PREV_CPU_FILE="$1"
+    NOW_CPU_FILE="$2"
+    awk '
+        FNR == NR {
+            if ($1 ~ /^cpu[0-9]+$/) old_total[$1] = $3 + 0
+            next
+        }
+        $1 ~ /^cpu[0-9]+$/ {
+            delta = ($3 + 0) - (old_total[$1] + 0)
+            if (delta > 0) {
+                sum += delta
+                count++
+            }
+        }
+        END {
+            if (count > 0) printf "%.2f", sum / count
+            else printf "0"
+        }
+    ' "$PREV_CPU_FILE" "$NOW_CPU_FILE"
 }
 
 thread_cpu_line() {
     PREV_FILE="$1"
     NOW_FILE="$2"
-    ELAPSED="$3"
-    HZ_VALUE="$4"
-    awk -v elapsed="$ELAPSED" -v hz="$HZ_VALUE" '
+    CPU_REFERENCE_TICKS="$3"
+    awk -v ref_ticks="$CPU_REFERENCE_TICKS" '
         FNR == NR { old_ticks[$1] = $2 + 0; next }
         {
             delta = ($2 + 0) - (old_ticks[$1] + 0)
             if (delta < 0) delta = 0
-            pct = (elapsed > 0 && hz > 0) ? 100 * delta / (elapsed * hz) : 0
+            pct = ref_ticks > 0 ? 100 * delta / ref_ticks : 0
             printf "tid=%s/%s:%.1f%%,", $1, $3, pct
             if (pct > max_pct) {
                 max_pct = pct
@@ -129,10 +154,24 @@ run_diag_self_test() {
         rm -rf "$TEST_ROOT"
         return 1
     fi
-    printf '%s\n' '4242 100 relay_owner' > "$TEST_ROOT/threads.prev"
-    THREAD_TEST=$(thread_cpu_line "$TEST_ROOT/threads.prev" "$TEST_ROOT/threads.now" 1 100)
-    if ! printf '%s' "$THREAD_TEST" | grep -Fq 'tid=4242/relay_owner:68.0%'; then
+    printf '%s\n' 'cpu 400 400' 'cpu0 50 100' 'cpu1 50 100' 'cpu2 50 100' 'cpu3 50 100' > "$TEST_ROOT/cpu.prev"
+    printf '%s\n' 'cpu 800 800' 'cpu0 100 200' 'cpu1 100 200' 'cpu2 100 200' 'cpu3 100 200' > "$TEST_ROOT/cpu.now"
+    CPU_REFERENCE=$(cpu_reference_ticks "$TEST_ROOT/cpu.prev" "$TEST_ROOT/cpu.now")
+    if [ "$CPU_REFERENCE" != "100.00" ]; then
+        echo "DIAG SELF-TEST FAIL: per-vCPU tick reference expected 100, got $CPU_REFERENCE"
+        rm -rf "$TEST_ROOT"
+        return 1
+    fi
+    printf '%s\n' '4242 68 relay_owner' > "$TEST_ROOT/threads.prev"
+    THREAD_TEST=$(thread_cpu_line "$TEST_ROOT/threads.prev" "$TEST_ROOT/threads.now" "$CPU_REFERENCE")
+    if ! printf '%s' "$THREAD_TEST" | grep -Fq 'tid=4242/relay_owner:100.0%'; then
         echo "DIAG SELF-TEST FAIL: per-TID CPU delta calculation is incorrect: $THREAD_TEST"
+        rm -rf "$TEST_ROOT"
+        return 1
+    fi
+    PROC_TEST=$(awk -v a=68 -v b=168 -v ref="$CPU_REFERENCE" 'BEGIN{d=b-a;if(d<0)d=0;printf "%.1f",ref>0?100*d/ref:0}')
+    if [ "$PROC_TEST" != "100.0" ]; then
+        echo "DIAG SELF-TEST FAIL: process CPU normalization is incorrect: $PROC_TEST"
         rm -rf "$TEST_ROOT"
         return 1
     fi
@@ -175,8 +214,6 @@ main() {
     LOG=/tmp/mips-test
     RESULT="$LOG/qemu-speedtest"
     BIN=/usr/bin/passwall-ssh-core
-    HZ=$(getconf CLK_TCK 2>/dev/null)
-    case "$HZ" in ''|*[!0-9]*) HZ=100;; esac
     [ -x "$BIN" ] || { echo "ERROR: core binary missing"; return 2; }
     command -v curl >/dev/null 2>&1 || { echo "ERROR: curl missing"; return 2; }
     mkdir -p "$RESULT" || return 2
@@ -216,7 +253,7 @@ main() {
     PREV_SAMPLE_TS=$(date +%s)
     DEFAULT_IFACE=$(default_route_iface /proc/net/route)
     [ -n "$DEFAULT_IFACE" ] || DEFAULT_IFACE=unknown
-    echo "DEFAULT_ROUTE_INTERFACE=$DEFAULT_IFACE"
+    echo "DEFAULT_ROUTE_INTERFACE=$DEFAULT_IFACE CPU_REFERENCE=average_per_vCPU_proc_stat_delta"
     SAMPLE=0
     sample_metrics() {
         cpu_snapshot > "$RESULT/cpu.now"
@@ -226,8 +263,9 @@ main() {
         [ "$SAMPLE_ELAPSED" -gt 0 ] || SAMPLE_ELAPSED=1
         CUR_TICKS=$(proc_ticks "$CORE_PID")
         thread_snapshot "$CORE_PID" "" > "$RESULT/threads.now"
-        PROC_CPU=$(awk -v a="$PREV_TICKS" -v b="$CUR_TICKS" -v hz="$HZ" -v elapsed="$SAMPLE_ELAPSED" 'BEGIN{d=b-a;if(d<0)d=0;if(hz<=0||elapsed<=0)printf "0.0";else printf "%.1f",100*d/(hz*elapsed)}')
-        THREAD_LINE=$(thread_cpu_line "$RESULT/threads.prev" "$RESULT/threads.now" "$SAMPLE_ELAPSED" "$HZ")
+        CPU_REFERENCE=$(cpu_reference_ticks "$RESULT/cpu.prev" "$RESULT/cpu.now")
+        PROC_CPU=$(awk -v a="$PREV_TICKS" -v b="$CUR_TICKS" -v ref="$CPU_REFERENCE" 'BEGIN{d=b-a;if(d<0)d=0;printf "%.1f",ref>0?100*d/ref:0}')
+        THREAD_LINE=$(thread_cpu_line "$RESULT/threads.prev" "$RESULT/threads.now" "$CPU_REFERENCE")
         CPU_LINE=$(awk 'FNR==NR{busy[$1]=$2;total[$1]=$3;next}{dt=$3-total[$1];db=$2-busy[$1];if(dt>0){p=100*db/dt;if($1=="cpu")all=p;else cores=cores sprintf("%s=%.0f%%,",$1,p)}}END{if(all=="")all=0;printf "sys=%.0f%% cores=[%s]",all,cores}' "$RESULT/cpu.prev" "$RESULT/cpu.now")
         NET_LINE=$(net_rate_line "$RESULT/net.prev" "$RESULT/net.now" "$DEFAULT_IFACE" "$SAMPLE_ELAPSED")
         SAMPLE=$((SAMPLE+1))
@@ -253,6 +291,13 @@ main() {
         echo "URL=$URL"
         START=$(date +%s)
         if [ "$MODE" = "socks5" ]; then
+            # Reset counters after the direct transfer so samples describe only
+            # the relay path, not the preceding direct download.
+            cpu_snapshot > "$RESULT/cpu.prev"
+            net_snapshot "" > "$RESULT/net.prev"
+            PREV_TICKS=$(proc_ticks "$CORE_PID")
+            thread_snapshot "$CORE_PID" "" > "$RESULT/threads.prev"
+            PREV_SAMPLE_TS=$(date +%s)
             curl -4 -sS -fL --connect-timeout 15 --max-time 50 --max-filesize 110000000 --retry 0 \
               --socks5-hostname "$SOCKS" -o /dev/null \
               -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
@@ -266,8 +311,10 @@ main() {
         fi
         CURL_PID=$!
         while kill -0 "$CURL_PID" 2>/dev/null; do
-            if [ "$MODE" = "socks5" ]; then sample_metrics; fi
             sleep 1
+            if [ "$MODE" = "socks5" ] && kill -0 "$CURL_PID" 2>/dev/null; then
+                sample_metrics
+            fi
         done
         wait "$CURL_PID"
         RC=$?
