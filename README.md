@@ -364,6 +364,9 @@ Patch batch on `phase3/io-worker-pool-foundation`:
 - TCP connect completion rejects `POLLERR`, `POLLHUP`, and `POLLNVAL` even if `POLLOUT` is also present.
 - Normal shutdown guards the upstream descriptor before closing it.
 - Added native regressions for empty/populated rotate/random selectors and HUP/RDHUP worker-EAGAIN handling.
+- Payload buffer allocation and size-overflow failures now propagate as errors instead of terminating the process.
+- Upstream inactivity/keepalive, SOCKS handshake, and EMFILE throttling use monotonic millisecond clocks.
+- A shared EPOLLIN gate suppresses client read re-arming while HUP/RDHUP, EOF, an in-flight C2S task, or a full C2S ring is present.
 - Package release bumped to r37.
 
 **Validation status:** pending fresh native + OpenWrt 24.10.7 `mipsel_24kc` SDK and matching MT7621 QEMU runs. This patch does not change the one-SSH-session architecture. Physical MT7621 router validation remains separate and is not claimed here.
