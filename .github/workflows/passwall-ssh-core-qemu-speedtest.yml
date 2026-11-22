@@ -310,6 +310,26 @@ jobs:
             pkill -x qemu-system-mipsel 2>/dev/null || true
           fi
 
+      - name: Verify exactly one SSH authentication and session
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          CORE_LOG=bandwidth-results/qemu-speedtest/core.log
+          CORE_STDOUT=bandwidth-results/qemu-speedtest/core-stdout.log
+          HOST_LOG=bandwidth-results/host-sshd.log
+          test -s "$CORE_LOG"
+          test -s "$CORE_STDOUT"
+          test -s "$HOST_LOG"
+          CORE_AUTH_COUNT="$(grep -cF '[AUTH-DIAG] authentication accepted' "$CORE_LOG" || true)"
+          SESSION_KEY_COUNT="$(grep -cF 'Session Keys Established' "$CORE_LOG" || true)"
+          HOST_AUTH_COUNT="$(grep -cF 'Accepted password for sshcore-ci' "$HOST_LOG" || true)"
+          SINGLE_SESSION_COUNT="$(grep -cF 'SSH_sessions=1 mode=single-session' "$CORE_STDOUT" || true)"
+          test "$CORE_AUTH_COUNT" -eq 1
+          test "$SESSION_KEY_COUNT" -eq 1
+          test "$HOST_AUTH_COUNT" -eq 1
+          test "$SINGLE_SESSION_COUNT" -eq 1
+          echo "PASS: exactly one host authentication, one core authentication, one key establishment and one SSH session."
       - name: Publish benchmark results in Actions UI
         if: always()
         shell: bash
