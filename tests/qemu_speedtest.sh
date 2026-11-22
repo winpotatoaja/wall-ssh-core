@@ -25,9 +25,11 @@ main() {
         awk '/^cpu[0-9]*[ \\t]/ {t=0;for(i=2;i<=NF;i++)t+=$i;idle=$5+$6;print $1,t-idle,t}' /proc/stat
     }
     net_snapshot() {
-        for x in rx_bytes tx_bytes; do
-            cat "/sys/class/net/eth0/statistics/$x" 2>/dev/null || echo 0
-        done
+        awk 'BEGIN {
+            if ((getline rx < "/sys/class/net/eth0/statistics/rx_bytes") <= 0) rx=0
+            if ((getline tx < "/sys/class/net/eth0/statistics/tx_bytes") <= 0) tx=0
+            printf "%.0f %.0f\\n",rx,tx
+        }'
     }
     proc_ticks() {
         awk '{s=$0;sub(/^.*\\) /,"",s);n=split(s,a," ");if(n>=13)printf "%.0f",a[12]+a[13];else print 0}' "/proc/$1/stat" 2>/dev/null
@@ -94,6 +96,7 @@ main() {
     done
     wait "$DL_PID"
     DL_RC=$?
+    [ ! -s "$RESULT/curl-errors.log" ] || DL_RC=22
     WALL_END=$(date +%s)
     WALL_SECONDS=$((WALL_END - START))
 
