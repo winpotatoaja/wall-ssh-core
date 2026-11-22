@@ -37,6 +37,7 @@ jobs:
 
       - name: Self-test benchmark diagnostics before QEMU provisioning
         run: |
+          sh -n tests/qemu_speedtest.sh
           sh tests/qemu_speedtest.sh --self-test
 
       - name: Install QEMU host requirements
