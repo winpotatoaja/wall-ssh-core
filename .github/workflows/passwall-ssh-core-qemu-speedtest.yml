@@ -125,6 +125,8 @@ jobs:
           test -n "$IB_DIR"
           IB_DIR="$(readlink -f "$IB_DIR")"
           test -f "$IB_DIR/Makefile"
+          test -f "$IB_DIR/rules.mk"
+          echo "ImageBuilder rules.mk found."
           echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
 
           ssh-keygen -q -t ed25519 -N "" -f "$RUNNER_TEMP/mips-vm-key"
