@@ -31,7 +31,7 @@ main() {
         awk '{s=$0;sub(/^.*\\) /,"",s);n=split(s,a," ");if(n>=13)printf "%.0f",a[12]+a[13];else print 0}' "/proc/$1/stat" 2>/dev/null
     }
 
-    echo "R37_TWO_ENDPOINT_DOWNLOAD_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R37_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     echo "SOCKS5=$SOCKS"
     echo "GUEST=$(uname -a)"
     echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
@@ -75,43 +75,66 @@ main() {
     test_download() {
         LABEL=$1
         URL=$2
-        OUT="$RESULT/$LABEL.curl.log"
-        echo "=== DOWNLOAD $LABEL ==="
+        MODE=$3
+        OUT="$RESULT/$LABEL-$MODE.curl.log"
+        echo "=== DOWNLOAD $LABEL mode=$MODE ==="
         echo "URL=$URL"
         START=$(date +%s)
-        curl -4 -fL --retry 2 --retry-delay 2 --connect-timeout 20 --max-time 900 \
-          --socks5-hostname "$SOCKS" -o /dev/null \
-          -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
-          "$URL" > "$OUT" &
+        if [ "$MODE" = "socks5" ]; then
+            curl -4 -fL --retry 2 --retry-delay 2 --connect-timeout 20 --max-time 900 \
+              --socks5-hostname "$SOCKS" -o /dev/null \
+              -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
+              "$URL" > "$OUT" &
+        else
+            env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy \
+              curl -4 -fL --retry 2 --retry-delay 2 --connect-timeout 20 --max-time 900 \
+              --noproxy '*' -o /dev/null \
+              -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
+              "$URL" > "$OUT" &
+        fi
         CURL_PID=$!
         while kill -0 "$CURL_PID" 2>/dev/null; do
-            sample_metrics
+            if [ "$MODE" = "socks5" ]; then sample_metrics; fi
             sleep 1
         done
         wait "$CURL_PID"
         RC=$?
         WALL=$(( $(date +%s) - START ))
         if [ "$RC" -ne 0 ]; then
-            echo "ERROR: $LABEL curl_rc=$RC wall_seconds=$WALL" | tee -a "$RESULT/errors.log"
+            echo "ERROR: $LABEL mode=$MODE curl_rc=$RC wall_seconds=$WALL" | tee -a "$RESULT/errors.log"
             return 2
         fi
         if [ ! -s "$OUT" ]; then
             echo "ERROR: $LABEL produced no curl statistics" | tee -a "$RESULT/errors.log"
             return 2
         fi
-        awk -v label="$LABEL" -v wall="$WALL" '{
+        awk -v label="$LABEL" -v mode="$MODE" -v wall="$WALL" '{
           bytes=$1;sec=$2;speed=$3;code=$4;ip=$5;type=$6;
-          printf "%s bytes=%.0f (%.2f MiB) wall_seconds=%d curl_seconds=%.3f average_mbps=%.2f http_code=%s remote_ip=%s content_type=%s\n",
-            label,bytes,bytes/1048576,wall,sec,(wall>0?bytes*8/wall/1000000:0),code,ip,type
+          printf "%s mode=%s bytes=%.0f (%.2f MiB) wall_seconds=%d curl_seconds=%.3f average_MBps=%.2f curl_MBps=%.2f http_code=%s remote_ip=%s content_type=%s\n",
+            label,mode,bytes,bytes/1048576,wall,sec,speed/1048576,(wall>0?bytes/wall/1048576:0),code,ip,type
         }' "$OUT" | tee -a "$RESULT/download-results.log"
         return 0
     }
 
-    test_download vultr-singapore "https://sgp-ping.vultr.com/vultr.com.100MB.bin" || {
+    URL_VULTR="https://sgp-ping.vultr.com/vultr.com.100MB.bin"
+    URL_LINODE="http://speedtest.singapore.linode.com/100MB-singapore.bin"
+
+    echo "=== PHASE 1: QEMU GUEST DIRECT (NO SSH / NO SOCKS) ==="
+    test_download vultr-singapore "$URL_VULTR" direct || {
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
     }
-    test_download ovh "https://proof.ovh.net/files/100Mb.dat" || {
+    test_download linode-singapore "$URL_LINODE" direct || {
+        kill -TERM "$CORE_PID" 2>/dev/null || :
+        return 2
+    }
+
+    echo "=== PHASE 2: SAME URLS THROUGH R37 SSH SOCKS5 ==="
+    test_download vultr-singapore "$URL_VULTR" socks5 || {
+        kill -TERM "$CORE_PID" 2>/dev/null || :
+        return 2
+    }
+    test_download linode-singapore "$URL_LINODE" socks5 || {
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
     }
@@ -122,16 +145,16 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "R37 DOWNLOAD SUMMARY"
+      echo "R37 DIRECT VS SOCKS5 SUMMARY"
       cat "$RESULT/download-results.log"
       echo "SAMPLE_COUNT=$SAMPLE"
       echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
     } | tee "$RESULT/summary.txt"
 
     echo "RESULT_DIR=$RESULT"
-    echo "R37_TWO_ENDPOINT_DOWNLOAD_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R37_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     [ ! -s "$RESULT/errors.log" ] || return 2
-    [ "$(wc -l < "$RESULT/download-results.log")" -ge 2 ] || return 2
+    [ "$(wc -l < "$RESULT/download-results.log")" -ge 4 ] || return 2
     return 0
 }
 main "$@"
