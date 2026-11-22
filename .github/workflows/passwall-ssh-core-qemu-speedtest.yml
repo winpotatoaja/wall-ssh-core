@@ -1,18 +1,250 @@
-name: QEMU Internet Speedtest - Script Validation
+name: R37 Internet Bandwidth Benchmark (QEMU)
+
 on:
-  push:
-    branches:
-      - phase3/io-worker-pool-foundation
-    paths:
-      - ".github/workflows/passwall-ssh-core-qemu-speedtest.yml"
-      - "tests/qemu_speedtest.sh"
   workflow_dispatch:
+    inputs:
+      duration:
+        description: "Benchmark duration per direction (seconds)"
+        required: true
+        default: "60"
+        type: choice
+        options:
+          - "30"
+          - "60"
+          - "120"
+          - "180"
+
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: r37-internet-bandwidth-qemu
+  cancel-in-progress: true
+
 jobs:
-  validate:
-    runs-on: ubuntu-latest
+  internet-bandwidth:
+    name: Download and upload through r37 SOCKS5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - name: Check POSIX shell syntax
-        run: sh -n tests/qemu_speedtest.sh
+      - name: Checkout benchmark script only
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tests/qemu_speedtest.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Install QEMU host requirements
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl unzip zstd python3 openssh-client openssh-server \
+            socat mtd-utils gdisk wget ca-certificates binutils file
+
+      - name: Download the prebuilt r37 MIPS package
+        uses: actions/download-artifact@v4
+        with:
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-ipk
+          run-id: 44998188775
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          path: package
+
+      - name: Prepare MT7621 QEMU and OpenWrt firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          IPK="$(find package -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
+          test -n "$IPK"
+          CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
+          printf '%s\n' "$CONTROL" | grep -q '^Version: 1.0.0-r37$'
+          printf '%s\n' "$CONTROL" | grep -q '^Architecture: mipsel_24kc$'
+
+          mkdir -p emulator
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-linux-x86_64.tar.gz \
+            -o /tmp/router-emulator.tar.gz
+          echo "8ae277cc0fecfb99da3a452fb4226f272ee6d571f362898ca2176513f3adb0b7  /tmp/router-emulator.tar.gz" | sha256sum -c -
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-presets.zip \
+            -o /tmp/router-emulator-presets.zip
+          echo "8146b505a9d75407c4504bf90638d7e3d3e3ccfc529d09c45a40b2b6868604a2  /tmp/router-emulator-presets.zip" | sha256sum -c -
+          tar -xzf /tmp/router-emulator.tar.gz -C emulator
+          EMU_DIR="$(find emulator -maxdepth 3 -type f -name emulator.sh -print -quit | xargs dirname)"
+          test -n "$EMU_DIR"
+          unzip -q /tmp/router-emulator-presets.zip -d "$EMU_DIR"
+          if [ -d "$EMU_DIR/Router-Emulator/presets" ]; then
+            mkdir -p "$EMU_DIR/presets"
+            cp -a "$EMU_DIR/Router-Emulator/presets/." "$EMU_DIR/presets/"
+          fi
+          test -x "$EMU_DIR/qemu/qemu-system-mipsel"
+          test -f "$EMU_DIR/presets/zbtlink-zbt-wg3526-16m.ini"
+          echo "EMU_DIR=$(readlink -f "$EMU_DIR")" >> "$GITHUB_ENV"
+
+          IB_BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
+          IB_FILE="openwrt-imagebuilder-24.10.7-ramips-mt7621.Linux-x86_64.tar.zst"
+          curl -fL --retry 3 --connect-timeout 20 --max-time 1200 "$IB_BASE/$IB_FILE" -o /tmp/openwrt-imagebuilder.tar.zst
+          echo "19f321d10a78a8ca768b934243789c6b45c003374618a3c0aa51c06e06553fcc  /tmp/openwrt-imagebuilder.tar.zst" | sha256sum -c -
+          tar --zstd -xf /tmp/openwrt-imagebuilder.tar.zst
+          IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-24.10.7-ramips-mt7621*' -print -quit)"
+          test -n "$IB_DIR"
+          echo "IB_DIR=$(readlink -f "$IB_DIR")" >> "$GITHUB_ENV"
+
+          ssh-keygen -q -t ed25519 -N "" -f "$RUNNER_TEMP/mips-vm-key"
+          FILES_DIR="$RUNNER_TEMP/mips-image-files"
+          mkdir -p "$FILES_DIR/etc/dropbear" "$FILES_DIR/root/.ssh"
+          install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/etc/dropbear/authorized_keys"
+          install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/root/.ssh/authorized_keys"
+          cd "$IB_DIR"
+          make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2" FILES="$FILES_DIR"
+          SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*zbtlink-zbt-wg3526-16m*squashfs-sysupgrade.bin' -print -quit)"
+          test -n "$SYSUP"
+          SYSUP="$(readlink -f "$SYSUP")"
+
+          cd "$EMU_DIR"
+          BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
+          UBOOT_REL="u-boot-mt7621_zbtlink_zbt-wg3526-16m/u-boot-mt7621.bin"
+          mkdir -p "$EMU_DIR/firmware/24.10.7/$(dirname "$UBOOT_REL")"
+          curl -fL --retry 3 "$BASE/$UBOOT_REL" -o "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
+          curl -fL --retry 3 "$BASE/sha256sums" -o "$EMU_DIR/firmware/24.10.7/sha256sums"
+          (cd "$EMU_DIR/firmware/24.10.7" && grep -- " *$UBOOT_REL\$" sha256sums | sha256sum -c -)
+          FLASH_DIR="$EMU_DIR/nor-zbt-wg3526-16m"
+          python3 "$EMU_DIR/tools/mknand.py" --prefix mt7621 nor -o "$FLASH_DIR" \
+            --size-mb 16 \
+            --parts "u-boot:0x30000,u-boot-env:0x10000,factory:0x10000,firmware:-" \
+            --bl2 "$EMU_DIR/firmware/24.10.7/$UBOOT_REL" \
+            --sysupgrade "$SYSUP" \
+            --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
+          test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
+          test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
+          echo "R37 package and MT7621 QEMU firmware are ready."
+
+      - name: Start SSH endpoint for real internet forwarding
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo useradd -m -s /bin/bash sshcore-ci
+          echo 'sshcore-ci:OpenWrt-CI-SSH-Only-2026' | sudo chpasswd
+          sudo ssh-keygen -A
+          sudo install -d -m 0755 -o root -g root /run/sshd
+          sudo /usr/sbin/sshd -D -e -f /dev/null \
+            -p 2222 \
+            -o PidFile=/tmp/mips-sshd.pid \
+            -o HostKey=/etc/ssh/ssh_host_ed25519_key \
+            -o ListenAddress=0.0.0.0 \
+            -o PasswordAuthentication=yes \
+            -o KbdInteractiveAuthentication=no \
+            -o PubkeyAuthentication=no \
+            -o PermitRootLogin=no \
+            -o UsePAM=no \
+            -o StrictModes=no \
+            -o AllowUsers=sshcore-ci \
+            -o AllowTcpForwarding=yes \
+            -o PermitOpen=any \
+            -o MaxSessions=64 \
+            -o LogLevel=VERBOSE >/tmp/mips-sshd.log 2>&1 &
+          echo "$!" > /tmp/mips-sshd.pid
+          for attempt in $(seq 1 30); do
+            if timeout 2 bash -c '</dev/tcp/127.0.0.1/2222' 2>/dev/null; then
+              echo "SSH forwarding endpoint is ready."
+              break
+            fi
+            sleep 1
+          done
+          timeout 2 bash -c '</dev/tcp/127.0.0.1/2222'
+
+      - name: Boot MT7621 and run only the internet bandwidth benchmark
+        shell: bash
+        timeout-minutes: 35
+        run: |
+          set -euo pipefail
+          cd "$EMU_DIR"
+          mkdir -p work
+          setsid ./emulator.sh -P zbtlink-zbt-wg3526-16m -w user -l user \
+            -o "lan-forwards=8022:22" -u none \
+            -S work/mips-console.sock -L work/logs >work/mips-emulator.log 2>&1 &
+          EMU_PID=$!
+          echo "$EMU_PID" > "$GITHUB_WORKSPACE/mips-emulator.pid"
+          SSH_KEY="$RUNNER_TEMP/mips-vm-key"
+          READY=0
+          for attempt in $(seq 1 360); do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then
+              cat work/mips-emulator.log
+              false
+            fi
+            if ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o ConnectTimeout=5 \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              root@127.0.0.1 'echo MIPS_GUEST_READY' 2>/dev/null | grep -q MIPS_GUEST_READY; then
+              READY=1
+              break
+            fi
+            sleep 2
+          done
+          test "$READY" -eq 1
+          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 'mkdir -p /tmp/mips-test'
+          IPK="$(find "$GITHUB_WORKSPACE/package" -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
+          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            "$IPK" "$GITHUB_WORKSPACE/tests/qemu_speedtest.sh" \
+            root@127.0.0.1:/tmp/mips-test/
+          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 ' \
+              set -e
+              opkg install /tmp/mips-test/passwall-ssh-core*.ipk
+              cat > /tmp/mips-test/tcp.env <<EOF
+          TRANSPORT=TCP
+          HOST=10.0.2.2
+          HOST_PORT=2222
+          USERNAME=sshcore-ci
+          PASSWORD=OpenWrt-CI-SSH-Only-2026
+          DELAY=0
+          FIX_CRLF=1
+          SOCKS_ADDR=127.0.0.1:1080
+          KEEPALIVE=15
+          VERIFY_TLS=0
+          MAX_CLIENTS=32
+          IDLE_TIMEOUT=600
+          WORKERS=2
+          LOG_BACKPRESSURE=1
+          EOF
+              chmod 0700 /tmp/mips-test/qemu_speedtest.sh
+              /tmp/mips-test/qemu_speedtest.sh ${{ inputs.duration }}
+            '
+
+      - name: Collect benchmark results
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p bandwidth-results
+          if [ -f "$RUNNER_TEMP/mips-vm-key" ]; then
+            ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
+              -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
+              'cd /tmp/mips-test && tar -czf /tmp/r37-internet-bandwidth.tgz qemu-speedtest'
+            scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              root@127.0.0.1:/tmp/r37-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r37-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r37-internet-bandwidth.tgz -C bandwidth-results
+            fi
+          fi
+          cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
+          if [ -n "${EMU_DIR:-}" ]; then
+            cp "$EMU_DIR/work/mips-emulator.log" bandwidth-results/mips-emulator.log 2>/dev/null
+            if [ -f "$GITHUB_WORKSPACE/mips-emulator.pid" ]; then
+              kill -- "-$(cat "$GITHUB_WORKSPACE/mips-emulator.pid")" 2>/dev/null
+            fi
+            pkill -x qemu-system-mipsel 2>/dev/null
+          fi
+
+      - name: Upload bandwidth benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r37-qemu-internet-bandwidth
+          path: bandwidth-results/**
+          if-no-files-found: warn
+          retention-days: 14
