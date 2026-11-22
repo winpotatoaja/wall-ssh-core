@@ -84,6 +84,12 @@
 
 ## Unreleased
 
+- Record 100 MiB direct-vs-SOCKS5 benchmark run `45067089485`: OVH Singapore completed both 104,857,600-byte transfers (HTTP 200), direct at 2.63 MiB/s and SOCKS5 at 3.12 MiB/s, each under the 50-second hard cap. DigitalOcean Singapore URL failed DNS resolution (curl 6) and was replaced by the Singapore Datapacket 100 MB file URL for the next focused benchmark. Core logs confirm exactly one SSH authentication/session; artifact `14771936584` contains the detailed logs and summary.
+
+
+
+## Unreleased
+
 - Add a dedicated client epoll-cookie encoder/decoder and regression coverage for invalid IDs, boundary IDs, and pointer-tag separation. The SSH Owner now decodes tagged client IDs and resolves them through the active client list; stale client cookies are ignored without dereferencing freed client pointers. Package preparation now installs the helper header. Native and MT7621 static MIPS tests required. [mips-stage=sdk]
 
 - Introduce process-wide monotonic client IDs and generation fields, and encode client IDs in epoll event cookies. SSH Owner resolves client cookies through its active-client list, ignoring stale events instead of dereferencing freed `client_conn_t` pointers. This remains synchronous; no worker tasks or deferred client destruction are enabled. Native and MT7621 QEMU validation required. [mips-stage=sdk]
