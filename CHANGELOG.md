@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Prepare package release **1.0.0-r38** with the 16 KiB S2C worker payload fix. Update MIPS SDK/VM version gates and the dedicated direct-vs-SOCKS bandwidth workflow to consume an explicitly selected successful r38 SDK run. [mips-stage=sdk]
+
 - Fix the measured S2C throughput ceiling: the worker payload was only 128 bytes, leaving 120 bytes per socket-write task. Increase worker payload to 16 KiB (16,376-byte socket writes) and add a full-size socket-write integrity regression. Native/MIPS SDK validation and same-endpoint direct-vs-SOCKS bandwidth retest are pending; do not claim a speedup until the rebuilt MIPS IPK is benchmarked.
 
 - Centralize the client EPOLLIN eligibility gate so completion and relay paths cannot re-arm reads while HUP/RDHUP is pending, EOF is known, a C2S worker is in flight, or the C2S buffer is full; add a native regression for each blocked state.
