@@ -76,6 +76,7 @@ main() {
         LABEL=$1
         URL=$2
         MODE=$3
+        MIN_BYTES=9500000
         OUT="$RESULT/$LABEL-$MODE.curl.log"
         echo "=== DOWNLOAD $LABEL mode=$MODE ==="
         echo "URL=$URL"
