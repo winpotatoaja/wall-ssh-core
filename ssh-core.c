@@ -4963,13 +4963,21 @@ static int core_worker_run(int argc, char **argv) {
     const char *ssh_cipher_pref =
         "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr";
 #endif
-    if (libssh2_session_method_pref(session, LIBSSH2_METHOD_CRYPT_CS,
-                                    ssh_cipher_pref) != 0 ||
-        libssh2_session_method_pref(session, LIBSSH2_METHOD_CRYPT_SC,
-                                    ssh_cipher_pref) != 0) {
-        log_red("Failed to configure SSH cipher preference");
-        goto fail_cleanup;
+    int cipher_cs_rc = libssh2_session_method_pref(
+        session, LIBSSH2_METHOD_CRYPT_CS, ssh_cipher_pref);
+    int cipher_sc_rc = libssh2_session_method_pref(
+        session, LIBSSH2_METHOD_CRYPT_SC, ssh_cipher_pref);
+#ifdef SSH_CORE_MIPSEL_24KC
+    if (cipher_cs_rc == 0 && cipher_sc_rc == 0) {
+        log_blue("MT7621 SSH cipher preference: AES-128-CTR first (AES-GCM fallback)");
+    } else {
+        log_yellow("MT7621 SSH cipher preference could not be applied (cs=%d sc=%d); using libssh2 defaults",
+                   cipher_cs_rc, cipher_sc_rc);
     }
+#else
+    (void)cipher_cs_rc;
+    (void)cipher_sc_rc;
+#endif
 
     {
         long long deadline = now_ms() + HANDSHAKE_TIMEOUT_MS;
