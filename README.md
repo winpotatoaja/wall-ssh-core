@@ -196,3 +196,6 @@ Implementasi yang sudah ada pada branch ini:
 - Benchmark r41 tetap hanya satu URL Datapacket, satu direct dan satu SOCKS5, batas 50 detik per transfer, tanpa retry, dan pemeriksaan satu sesi SSH serta cipher AES-GCM aktual.
 
 **Status: eksperimen retune r41 menunggu validasi speed.** Kecepatan harus dibandingkan dengan r39 menggunakan hasil benchmark aktual; hasil QEMU bukan bukti performa perangkat MT7621 fisik.
+
+
+Catatan r41: perubahan cipher AES-GCM-first dan S2C ring 256 KiB sudah masuk. Build SDK MIPS dan satu benchmark Datapacket direct/SOCKS5 dijalankan dari commit ini; hasil throughput belum tersedia sampai workflow benchmark selesai.
