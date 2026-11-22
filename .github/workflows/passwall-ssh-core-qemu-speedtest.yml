@@ -1,12 +1,6 @@
 name: R37 Internet Bandwidth Benchmark (QEMU)
 
 on:
-  push:
-    branches:
-      - phase3/io-worker-pool-foundation
-    paths:
-      - ".github/workflows/passwall-ssh-core-qemu-speedtest.yml"
-      - "tests/qemu_speedtest.sh"
   workflow_dispatch:
     inputs:
       duration:
@@ -19,6 +13,10 @@ on:
           - "60"
           - "120"
           - "180"
+      sdk_run_id:
+        description: "Successful r38 MIPS SDK workflow run ID"
+        required: true
+        type: string
 
 permissions:
   contents: read
