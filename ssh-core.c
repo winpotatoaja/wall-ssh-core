@@ -2732,6 +2732,19 @@ static int drain_pending_eof_to_c2s(int epfd, client_conn_t *c) {
     return (c->c2s.used > before || c->client_eof) ? 1 : 0;
 }
 
+static void settle_c2s_hup_eagain(int epfd, client_conn_t *c) {
+    if (!c || c->client_eof ||
+        (!c->hup_pending && !c->rdhup_pending)) return;
+    c->client_eof = 1;
+    c->need_send_eof = 1;
+    if (c->hup_pending) {
+        c->client_dead = 1;
+        detach_client_fd(epfd, c);
+    }
+    c->hup_pending = 0;
+    c->rdhup_pending = 0;
+}
+
 static uint64_t allocate_io_task_id(void) {
     uint64_t id = g_next_io_task_id++;
     if (id == 0U) id = g_next_io_task_id++;
@@ -3365,21 +3378,9 @@ static int drain_io_worker_completions(int epfd,
                     detach_client_fd(epfd, c);
                 }
 
-                if ((completion->status == EAGAIN ||
-                     completion->status == EWOULDBLOCK) &&
-                    (c->hup_pending || c->rdhup_pending) && !c->client_eof) {
-                    /* HUP/RDHUP says no more client bytes can arrive. If the
-                     * nonblocking worker observed EAGAIN, stop retrying this
-                     * edge forever and serialize the final EOF to SSH. */
-                    c->client_eof = 1;
-                    c->need_send_eof = 1;
-                    if (c->hup_pending) {
-                        c->client_dead = 1;
-                        detach_client_fd(epfd, c);
-                    }
-                    c->hup_pending = 0;
-                    c->rdhup_pending = 0;
-                }
+                if (completion->status == EAGAIN ||
+                    completion->status == EWOULDBLOCK)
+                    settle_c2s_hup_eagain(epfd, c);
 
                 if (c->fd >= 0 && c->state == ST_RELAY) {
                     if ((c->hup_pending || c->rdhup_pending) &&
