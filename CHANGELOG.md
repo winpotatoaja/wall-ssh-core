@@ -1,4 +1,4 @@
-- **100 MB retest: slow servers confirmed and bounded skip policy added.** Run `45065615639` (artifact `14770769522`) showed Vultr Singapore at `308,228 B/s` (`0.29 MiB/s`) for a complete 100 MiB file over `340.196 s`; Linode Singapore returned no payload and timed out during connection setup. Replaced both endpoints with DigitalOcean Singapore `http://speedtest-sgp1.digitalocean.com/100mb.test` and OVHcloud Singapore `https://sin1-sgp.speedtest.network.ovh.net/files/100Mb.dat`. Each individual curl now has `--max-time 50`, `--connect-timeout 15`, `--max-filesize 110000000`, and `--retry 0`. A failed direct transfer skips its SOCKS5 counterpart; a failed SOCKS5 transfer skips only that pair; the script continues to the next endpoint. The workflow passes only if at least one full direct+SOCKS5 pair completes with identical byte counts. Skipped/timeout attempts are recorded separately from fatal errors. Exactly one core process/SSH session remains in use. Retest result pending.
+- **R39 100 MB direct-vs-SOCKS5 retest passed:** run `45068073173` (artifact `14772606003`) completed two full pairs under the 50-second per-transfer cap. Datapacket Singapore delivered 100,000,000 bytes direct in 5.036 s (`18.94 MiB/s`) and SOCKS5 in 13.483 s (`7.07 MiB/s`); OVH Singapore delivered 104,857,600 bytes direct in 28.358 s (`3.53 MiB/s`) and SOCKS5 in 31.092 s (`3.22 MiB/s`). All four responses were HTTP 200 with matching direct/SOCKS byte counts; `PAIR_COUNT=2`, no skips/errors. DigitalOcean was removed after DNS resolution failed. Core/host logs confirm exactly one SSH authentication/session and four auxiliary I/O workers. Corrected subsequent output field to `curl_avg_MiBps` to avoid confusing the curl rate with coarse wall-clock seconds.
 
 ## Unreleased
 
@@ -84,7 +84,7 @@
 
 ## Unreleased
 
-- Record 100 MiB direct-vs-SOCKS5 benchmark run `45067089485`: OVH Singapore completed both 104,857,600-byte transfers (HTTP 200), direct at 2.63 MiB/s and SOCKS5 at 3.12 MiB/s, each under the 50-second hard cap. DigitalOcean Singapore URL failed DNS resolution (curl 6) and was replaced by the Singapore Datapacket 100 MB file URL for the next focused benchmark. Core logs confirm exactly one SSH authentication/session; artifact `14771936584` contains the detailed logs and summary.
+- Intermediate retest run `45067089485` established that OVH Singapore could complete a 100 MiB direct/SOCKS5 pair under the 50-second cap, while DigitalOcean failed DNS resolution (`curl_rc=6`). The next run replaced DigitalOcean with Datapacket and completed both endpoint pairs; see run `45068073173` above.
 
 
 
