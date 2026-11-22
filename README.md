@@ -271,3 +271,5 @@ Hasil lama tidak boleh dianggap mewakili source terbaru jika ada perubahan sesud
 - Setelah seluruh validasi dan tuning Tahap 4 lulus, ubah status Tahap 4 menjadi
   **LULUS**.
 - Tahap 5 hanya dapat dinyatakan lulus setelah pengujian pada router MT7621 fisik.
+
+**Validasi SDK Tahap 4:** native regression dan OpenWrt 24.10.7 MIPS SDK lulus pada source `e2f150f27b3218022559f15a59a4a6fd59de70c0` (run `44984703379`, artifact `14739159030`). MT7621 QEMU pada source yang sama masih menunggu.
