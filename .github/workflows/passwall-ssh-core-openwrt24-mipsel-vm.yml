@@ -1380,7 +1380,7 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && find . -type f \( -name "*.log" -o -name "*.env" -o -name "*-pids" -o -name "test-status" -o -name "run-tests.sh" \) -print > /tmp/mips-log-files.list && tar -czf /tmp/mips-guest-logs.tgz -T /tmp/mips-log-files.list' 2>/dev/null
+              'cd /tmp/mips-test && find . -type f \( -name "*.log" -o -name "*.env" -o -name "*-pids" -o -name "test-status" -o -name "run-tests.sh" -o -path "./qemu-speedtest/*" \) -print > /tmp/mips-log-files.list && tar -czf /tmp/mips-guest-logs.tgz -T /tmp/mips-log-files.list' 2>/dev/null
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               root@127.0.0.1:/tmp/mips-guest-logs.tgz test-results/guest/ 2>/dev/null
