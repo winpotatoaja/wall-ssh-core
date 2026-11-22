@@ -135,7 +135,7 @@ jobs:
           install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/etc/dropbear/authorized_keys"
           install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/root/.ssh/authorized_keys"
           cd "$IB_DIR"
-          make -o checksum image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2" FILES="$FILES_DIR"
+          make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2" FILES="$FILES_DIR"
           SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*zbtlink-zbt-wg3526-16m*squashfs-sysupgrade.bin' -print -quit)"
           test -n "$SYSUP"
           SYSUP="$(readlink -f "$SYSUP")"
