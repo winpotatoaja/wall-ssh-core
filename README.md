@@ -14,7 +14,7 @@ Branch pengerjaan: `phase3/io-worker-pool-foundation`
 |---|---|---|
 | 1 | Fondasi koneksi dan arsitektur single SSH session | **LULUS** |
 | 2 | TLS Engine, pemisahan kepemilikan TLS/SSH, dan fondasi antrean | **LULUS** |
-| 3 | Integrasi local socket I/O worker ke relay aktif | **IMPLEMENTASI ADA — QEMU LULUS, AUDIT EDGE CASE TERBUKA** |
+| 3 | Integrasi local socket I/O worker ke relay aktif | **IMPLEMENTASI ADA — QEMU BASELINE LULUS, VALIDASI PATCH ROLLBACK TERBUKA** |
 | 4 | Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU | **BERJALAN — BASELINE VALID, DIAGNOSTIK/TUNING DILANJUTKAN** |
 | 5 | Validasi perangkat OpenWrt MT7621 fisik | **BELUM DIMULAI** |
 
@@ -113,7 +113,23 @@ Perubahan pada TLS Engine atau queue tetap harus menjalankan regression terkait.
 
 ## Tahap 3 — Integrasi local socket I/O worker ke relay aktif
 
-<badge color="warning">IMPLEMENTASI ADA — QEMU LULUS, AUDIT EDGE CASE TERBUKA</badge>
+### Validasi Stage 3 terbaru
+
+- Native regression dan OpenWrt 24.10.7 SDK MIPS lulus pada source SHA
+  `9dbda79c93d659be6ba02d81343120594bfcdf78` (Actions SDK run
+  `44975775354`).
+- MT7621 QEMU lulus pada run `44976854992`, memakai artifact SDK yang cocok
+  dari run `44975775354`. Pengujian RST idle berhasil, kemudian 8 reconnect SOCKS
+  masing-masing memverifikasi ukuran 1 MiB dan SHA-256; half-close, post-EOF
+  upload 8 MiB, full-duplex 8 MiB upload/32 MiB download, serta multi-client
+  TCP/TLS juga lulus.
+- Audit menemukan rollback task/lifetime pada jalur gagal-submit mengabaikan
+  hasil cancel tracker dan release reference. Kedua arah C2S/S2C kini memakai
+  rollback terverifikasi dan mencatat kegagalan invariant. Patch source terbaru
+  masih harus lulus native, SDK, dan QEMU sebelum Stage 3 ditutup.
+
+
+<badge color="warning">IMPLEMENTASI ADA — VALIDASI PATCH TERAKHIR TERBUKA</badge>
 
 **Tujuan:** memindahkan operasi socket lokal C2S dan S2C ke worker terbatas,
 sementara SSH Owner tetap mengendalikan seluruh state client dan ring buffer.
