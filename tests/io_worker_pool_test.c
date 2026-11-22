@@ -421,6 +421,41 @@ static int test_socket_io_primitives(void)
         (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]); return -1;
     }
 
+    uint8_t large_out[IO_WORKER_SOCKET_WRITE_MAX];
+    uint8_t large_received[IO_WORKER_SOCKET_WRITE_MAX];
+    for (size_t i = 0; i < sizeof(large_out); i++)
+        large_out[i] = (uint8_t)(i * 37U + 11U);
+    make_socket_task(&task, 5, pair[0], IO_WORKER_OP_SOCKET_WRITE,
+                     large_out, (uint32_t)sizeof(large_out));
+    if (check(io_worker_pool_submit(pool, &task, NULL) == 0 &&
+              wait_socket_completion(pool, &done) == 0 &&
+              done.status == 0 &&
+              done.result_len == sizeof(large_out),
+              "worker accepts a full 16 KiB socket write")) {
+        (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]); return -1;
+    }
+    size_t large_received_len = 0U;
+    while (large_received_len < sizeof(large_received)) {
+        ssize_t got = recv(pair[1], large_received + large_received_len,
+                           sizeof(large_received) - large_received_len,
+                           MSG_DONTWAIT);
+        if (got > 0) {
+            large_received_len += (size_t)got;
+            continue;
+        }
+        if (got < 0 && errno == EINTR) continue;
+        if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            struct pollfd readable = {pair[1], POLLIN, 0};
+            if (poll(&readable, 1, 3000) > 0) continue;
+        }
+        (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]);
+        return check(0, "read complete 16 KiB worker write");
+    }
+    if (check(memcmp(large_received, large_out, sizeof(large_out)) == 0,
+              "full-size worker write payload integrity")) {
+        (void)stop_destroy(pool, 0); close(pair[0]); close(pair[1]); return -1;
+    }
+
     const char inbound[] = "owner-receive";
     if (send(pair[1], inbound, sizeof(inbound) - 1U, MSG_NOSIGNAL) !=
         (ssize_t)(sizeof(inbound) - 1U)) {
