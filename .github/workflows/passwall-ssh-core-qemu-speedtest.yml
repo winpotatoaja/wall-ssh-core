@@ -60,7 +60,10 @@ jobs:
           test -n "$IPK"
           CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
           printf '%s\n' "$CONTROL" | grep -q '^Version: 1.0.0-r39$'
-          printf '%s\n' "$CONTROL" | grep -q '^Architecture: mipsel_24kc
+          printf '%s\n' "$CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
+          echo "702b00fc6c5da703a9fb848f39e0a7418d7766df10746d960e5dca032eba9350  $IPK" | sha256sum -c -
+          test "$(tr -d '\r\n' < package/build-source.sha)" = "0d48d4e5d5d2298ed057d3e5af7fc147fec5f7a0"
+          echo "Verified r39 package SHA-256 and source commit."
 
           mkdir -p emulator
           curl -fL --retry 3 --connect-timeout 20 \
