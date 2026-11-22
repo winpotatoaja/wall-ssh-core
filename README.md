@@ -15,7 +15,7 @@ Branch pengerjaan: `phase3/io-worker-pool-foundation`
 | 1 | Fondasi koneksi dan arsitektur single SSH session | **LULUS** |
 | 2 | TLS Engine, pemisahan kepemilikan TLS/SSH, dan fondasi antrean | **LULUS** |
 | 3 | Integrasi local socket I/O worker ke relay aktif | **IMPLEMENTASI ADA — QEMU LULUS, AUDIT EDGE CASE TERBUKA** |
-| 4 | Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU | **BERJALAN — BASELINE QEMU LULUS, TUNING LANJUT** |
+| 4 | Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU | **BERJALAN — BASELINE VALID, DIAGNOSTIK/TUNING DILANJUTKAN** |
 | 5 | Validasi perangkat OpenWrt MT7621 fisik | **BELUM DIMULAI** |
 
 > Status di atas menggambarkan keadaan source dan catatan pengujian yang tersedia.
@@ -168,7 +168,7 @@ Implementasi yang sudah ada pada branch ini:
 
 ## Tahap 4 — Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU
 
-<badge color="warning">BERJALAN — BASELINE QEMU LULUS, TUNING LANJUT</badge>
+<badge color="warning">BERJALAN — BASELINE VALID, DIAGNOSTIK/TUNING DILANJUTKAN</badge>
 
 **Tujuan:** membuktikan implementasi akhir pada target arsitektur, memperbaiki
 regresi yang ditemukan, lalu melakukan tuning berdasarkan pengukuran.
@@ -197,9 +197,7 @@ Urutan kerja:
 - Tidak ada mismatch checksum, byte hilang/ganda, ring tertahan, atau task reference
   yang tidak terselesaikan.
 
-**Status saat ini:** workflow dan sebagian skenario transfer/half-close sudah tersedia.
-Namun hasil QEMU terbaru belum memenuhi gerbang kelulusan proyek; karena itu tahap
-ini tetap terbuka. Build SDK yang sukses tidak boleh dicatat sebagai QEMU pass.
+**Status saat ini:** baseline native regression, MIPS SDK, dan MT7621 QEMU telah terverifikasi pada run/source yang tercatat. Tahap 4 tetap terbuka untuk konsolidasi suite, audit edge case Stage 3, dan tuning berbasis metrik. Tidak ada klaim kelulusan penuh Stage 4 sebelum batch validasi final.
 
 ## Tahap 5 — Validasi perangkat OpenWrt MT7621 fisik
 
@@ -236,8 +234,8 @@ tahap ini.
 | Target | Status | Keterangan |
 |---|---|---|
 | Native regression | Perlu konsolidasi akhir | Helper worker/lifetime/token/tracker telah memiliki test tersendiri; jalankan kembali sebagai satu suite setelah batch final |
-| OpenWrt 24.10.7 MIPS SDK | Pernah berhasil pada build sebelumnya | Cross-build bukan bukti runtime QEMU |
-| MT7621 QEMU | **Belum lulus** | Workflow integration masih menjadi gerbang terbuka; setiap run harus memakai artifact yang cocok dengan source SHA |
+| OpenWrt 24.10.7 MIPS SDK | **Lulus** | Run `44964541444`; artifact dipakai untuk baseline QEMU. Build bukan bukti runtime dengan sendirinya |
+| MT7621 QEMU | **Baseline lulus** | Run `44965112117` berhasil; source SHA `0f1d484604fb2d2f1d0e53ee5603f90fe71995f2`; Stage 3/4 masih membutuhkan audit edge case dan rerun pada perubahan code terbaru |
 | OpenWrt 25.12.5 x86_64 QEMU | Pembanding | Tidak menggantikan target MIPS maupun router fisik |
 | Router MT7621 fisik | Belum diuji pada tahap ini | Tahap 5 |
 
