@@ -1,6 +1,6 @@
 #!/bin/sh
-# Compare direct and r39 SOCKS5 downloads from two public 100 MB endpoints.
-# Each endpoint is downloaded directly once and through the single SSH SOCKS5 session once.
+# Compare direct and r39 SOCKS5 downloads from two Singapore 10 MB test endpoints.
+# Each endpoint is downloaded once direct and once through the single SSH SOCKS5 session.
 set -u
 
 main() {
@@ -31,7 +31,7 @@ main() {
         awk '{s=$0;sub(/^.*\\) /,"",s);n=split(s,a," ");if(n>=13)printf "%.0f",a[12]+a[13];else print 0}' "/proc/$1/stat" 2>/dev/null
     }
 
-    echo "R39_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R39_10MB_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     echo "SOCKS5=$SOCKS"
     echo "GUEST=$(uname -a)"
     echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
@@ -81,13 +81,13 @@ main() {
         echo "URL=$URL"
         START=$(date +%s)
         if [ "$MODE" = "socks5" ]; then
-            curl -4 -fL --retry 2 --retry-delay 2 --connect-timeout 20 --max-time 900 \
+            curl -4 -fL --connect-timeout 15 --max-time 120 --max-filesize 11000000 \
               --socks5-hostname "$SOCKS" -o /dev/null \
               -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
               "$URL" > "$OUT" &
         else
             env -u ALL_PROXY -u all_proxy -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy \
-              curl -4 -fL --retry 2 --retry-delay 2 --connect-timeout 20 --max-time 900 \
+              curl -4 -fL --connect-timeout 15 --max-time 120 --max-filesize 11000000 \
               --noproxy '*' -o /dev/null \
               -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
               "$URL" > "$OUT" &
@@ -110,8 +110,8 @@ main() {
         fi
         BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$OUT")
         case "$BYTES" in ''|*[!0-9]*) BYTES=0;; esac
-        if [ "$BYTES" -lt 95000000 ]; then
-            echo "ERROR: $LABEL mode=$MODE downloaded only $BYTES bytes; expected a 100 MB test file" | tee -a "$RESULT/errors.log"
+        if [ "$BYTES" -lt "$MIN_BYTES" ]; then
+            echo "ERROR: $LABEL mode=$MODE downloaded only $BYTES bytes; expected at least 9,500,000 bytes from a 10 MB endpoint" | tee -a "$RESULT/errors.log"
             return 2
         fi
         awk -v label="$LABEL" -v mode="$MODE" -v wall="$WALL" '{
@@ -122,25 +122,25 @@ main() {
         return 0
     }
 
-    URL_VULTR="https://sgp-ping.vultr.com/vultr.com.100MB.bin"
-    URL_LINODE="http://speedtest.singapore.linode.com/100MB-singapore.bin"
+    URL_CHERRY="https://speedtest.sg.cherryservers.com/test-10mb"
+    URL_NEWMEDIA="https://sg1.newmediaexpress.com/10MB.test"
 
-    echo "=== PHASE 1: QEMU GUEST DIRECT (NO SSH / NO SOCKS) ==="
-    test_download vultr-singapore "$URL_VULTR" direct || {
+    echo "=== PHASE 1: 10 MB DIRECT DOWNLOADS (NO SSH / NO SOCKS) ==="
+    test_download cherry-singapore "$URL_CHERRY" direct || {
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
     }
-    test_download linode-singapore "$URL_LINODE" direct || {
+    test_download newmedia-singapore "$URL_NEWMEDIA" direct || {
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
     }
 
-    echo "=== PHASE 2: SAME URLS THROUGH R39 SSH SOCKS5 ==="
-    test_download vultr-singapore "$URL_VULTR" socks5 || {
+    echo "=== PHASE 2: SAME 10 MB FILES THROUGH R39 SSH SOCKS5 ==="
+    test_download cherry-singapore "$URL_CHERRY" socks5 || {
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
     }
-    test_download linode-singapore "$URL_LINODE" socks5 || {
+    test_download newmedia-singapore "$URL_NEWMEDIA" socks5 || {
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
     }
@@ -151,13 +151,13 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "R39 DIRECT VS SOCKS5 SUMMARY"
+      echo "R39 10 MB DIRECT VS SOCKS5 SUMMARY"
       cat "$RESULT/download-results.log"
       echo "SAMPLE_COUNT=$SAMPLE"
       echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
     } | tee "$RESULT/summary.txt"
 
-    for LABEL in vultr-singapore linode-singapore; do
+    for LABEL in cherry-singapore newmedia-singapore; do
         DIRECT_BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$RESULT/$LABEL-direct.curl.log")
         SOCKS_BYTES=$(awk 'NF >= 4 {printf "%.0f", $1; exit}' "$RESULT/$LABEL-socks5.curl.log")
         if [ "$DIRECT_BYTES" != "$SOCKS_BYTES" ]; then
@@ -167,7 +167,7 @@ main() {
     done
 
     echo "RESULT_DIR=$RESULT"
-    echo "R39_DIRECT_VS_SOCKS5_DOWNLOAD_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "R39_10MB_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     [ ! -s "$RESULT/errors.log" ] || return 2
     [ "$(wc -l < "$RESULT/download-results.log")" -ge 4 ] || return 2
     return 0
