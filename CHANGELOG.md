@@ -59,3 +59,4 @@
 
 - Extend the MT7621 gate to compile and execute the client lifetime regression as a static `mipsel_24kc` helper; include the lifetime header/source in SDK-to-VM source provenance and artifact checksum validation.
 - Add SSH-Owner-only client lifetime accounting primitives and native/MIPS regression coverage: immutable client identity plus generation token, task-reference acquisition/release, stale-completion rejection, close deferral until the final reference drains, and guarded finalization. This is a tested foundation only; it is not yet wired into `client_conn_t`, epoll dispatch, or live worker submissions.
+- Queue native regression and OpenWrt 24.10.7 mipsel_24kc SDK validation for CPU-scaled I/O worker source commit `a44b45f95599d4701db928833b347b3292bafb27`; MT7621 QEMU must consume the resulting matching SDK artifact. [mips-stage=sdk]
