@@ -417,3 +417,39 @@ sebelum patch sebagai bukti throughput perbaikan.
 ## r38 build status
 
 Release r38 carries the S2C I/O worker payload increase from 128 bytes to 16 KiB and the full-size worker socket-write regression. The OpenWrt 24.10.7 `mipsel_24kc` SDK build is queued from the `[mips-stage=sdk]` commit. Do not install or benchmark this release until the SDK job publishes the IPK and its checksum.
+
+
+## Optimasi S2C: direct nonblocking send oleh SSH Owner — 2026-11-22
+
+Audit lanjutan terhadap bottleneck download pada r38 menemukan bahwa S2C masih
+menggunakan model stop-and-wait: satu client hanya boleh memiliki satu tugas
+worker S2C aktif, setiap tugas membawa maksimal 16 KiB, lalu SSH Owner harus
+menunggu completion sebelum mengirim potongan berikutnya. Model ini menambahkan
+copy payload, antrean worker, eventfd, dan completion untuk setiap potongan,
+meskipun socket client sudah nonblocking.
+
+Patch r39 mengubah jalur download S2C sebagai berikut:
+
+- S2C sekarang dikirim langsung oleh **satu SSH Owner** menggunakan
+  `send()` nonblocking melalui `send_from_rb()`. Flag
+  `MSG_DONTWAIT | MSG_NOSIGNAL` memastikan pengiriman tidak menunggu kapasitas
+  socket dan tidak memicu SIGPIPE.
+- EPOLLOUT tetap dipantau oleh epoll selama ring S2C masih berisi data. Jika
+  socket belum siap, data tetap berada di ring dan dikirim kembali saat
+  EPOLLOUT berikutnya; urutan dan commit byte tetap dikendalikan SSH Owner.
+- Menghapus tugas S2C dari worker pool, salinan payload S2C, state in-flight,
+  serta penanganan completion khusus S2C. Batas ring S2C tetap 128 KiB.
+- Worker pool tetap tersedia untuk operasi baca socket arah C2S. Worker
+  auxiliary tidak membuat sesi SSH tambahan.
+- Arsitektur tetap **tepat satu SSH Owner, satu upstream, satu autentikasi,
+  dan satu sesi SSH**. Fungsi pemetaan sesi tetap mengembalikan satu sesi
+  (`ssh_session_count_for_cpu_count() = 1` dan `*out_count = 1`);
+  deteksi CPU hanya menentukan jumlah auxiliary I/O worker (maksimum empat).
+- Nomor rilis paket dinaikkan menjadi `1.0.0-r39`.
+
+**Status validasi: menunggu native regression dan build OpenWrt
+24.10.7 `mipsel_24kc`.** Setelah SDK berhasil, IPK yang source-SHA-nya cocok
+harus diuji pada MT7621 QEMU. Kecepatan hanya boleh dinyatakan membaik setelah
+benchmark download langsung dan melalui SOCKS memakai endpoint serta durasi
+yang sama, disertai pemeriksaan ukuran dan SHA-256. Patch ini belum diklaim
+lulus benchmark bandwidth.

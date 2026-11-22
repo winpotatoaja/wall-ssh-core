@@ -229,11 +229,6 @@ typedef struct client_conn {
     client_lifetime_t lifetime;
     uint64_t       c2s_worker_task_id;
     int            c2s_worker_inflight;
-    uint64_t       s2c_worker_task_id;
-    int            s2c_worker_inflight;
-    size_t         s2c_worker_head;
-    size_t         s2c_worker_len;
-    uint64_t       s2c_worker_generation;
     int            fd;
     int            fd_close_pending;
     int            in_epoll;
@@ -1440,14 +1435,7 @@ static void perf_log_interval(long long now) {
         if (c->s2c.used > s2c_used_max) s2c_used_max = c->s2c.used;
         if (c->s2c.used > 0) {
             s2c_nonempty_clients++;
-            /*
-             * A pending async worker write deliberately disarms EPOLLOUT.
-             * Do not classify it as a missing epoll wakeup: completion
-             * will resume flushing from the SSH Owner.
-             */
-            if (c->s2c_worker_inflight) {
-                /* Expected owner/worker state: no EPOLLOUT required. */
-            } else if (c->fd >= 0 && (c->epoll_events & EPOLLOUT)) {
+            if (c->fd >= 0 && (c->epoll_events & EPOLLOUT)) {
                 epollout_armed_clients++;
             } else if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
                 s2c_epollout_missing++;
@@ -2648,8 +2636,8 @@ static int flush_ctrl_send(int epfd, client_conn_t *c) {
         want = EPOLLIN | client_rdhup_flag(c);
     } else {
         want = (c->epoll_events & ~(uint32_t)EPOLLOUT);
-        if (c->state == ST_RELAY && c->s2c.used > 0 &&
-            !c->s2c_worker_inflight) want |= EPOLLOUT;
+        if (c->state == ST_RELAY && c->s2c.used > 0)
+            want |= EPOLLOUT;
     }
     if (!c->hup_pending && !c->client_dead) {
         update_client_epoll(epfd, c, want);
@@ -2710,7 +2698,7 @@ static int send_from_rb(int fd, rb_t *r, int keep_pos) {
         size_t avail = 0;
         const uint8_t *ptr = rb_read_slice(r, &avail);
         if (!ptr || avail == 0) break;
-        ssize_t n = send(fd, ptr, avail, MSG_NOSIGNAL);
+        ssize_t n = send(fd, ptr, avail, MSG_DONTWAIT | MSG_NOSIGNAL);
         if (g_log_perf) g_perf_stats.socks_tx_calls++;
         if (n > 0) {
             if (g_log_perf) g_perf_stats.socks_tx_bytes += (uint64_t)n;
@@ -2899,80 +2887,27 @@ static int submit_c2s_worker_read(io_worker_pool_t *pool,
     return 0;
 }
 
-/* Snapshot a bounded S2C prefix into task-owned storage. The Owner keeps
- * the ring head pinned until the matching completion commits the sent bytes. */
-static int submit_s2c_worker_write(io_worker_pool_t *pool,
-                                   io_worker_completion_tracker_t *tracker,
-                                   client_conn_t *c) {
-    if (!pool || !tracker || !c || c->fd < 0 || c->s2c_worker_inflight ||
-        c->s2c.used == 0U) {
-        errno = EINVAL;
-        return -1;
-    }
-    uint32_t worker_id = 0U;
-    if (io_worker_pool_select_worker(pool, &worker_id) < 0)
-        return errno == EAGAIN ? 1 : -1;
-
-    size_t contiguous = 0U;
-    const uint8_t *src = rb_read_slice(&c->s2c, &contiguous);
-    if (!src || contiguous == 0U) return 1;
-    if (contiguous > IO_WORKER_SOCKET_WRITE_MAX)
-        contiguous = IO_WORKER_SOCKET_WRITE_MAX;
-
-    io_worker_task_t task;
-    memset(&task, 0, sizeof(task));
-    task.task_id = allocate_io_task_id();
-    task.client_id = c->client_id;
-    task.generation = c->generation;
-    task.opcode = IO_WORKER_OP_SOCKET_WRITE;
-    task.payload_len = (uint32_t)(8U + contiguous);
-    int32_t fd_value = (int32_t)c->fd;
-    uint32_t length = (uint32_t)contiguous;
-    memcpy(task.payload, &fd_value, sizeof(fd_value));
-    memcpy(task.payload + sizeof(fd_value), &length, sizeof(length));
-    const uint8_t *pinned = rb_read_slice_pinned(
-        &c->s2c, c->s2c.head, c->s2c.generation, contiguous);
-    if (!pinned) return -1;
-    memcpy(task.payload + 8U, pinned, contiguous);
-
-    io_worker_task_ref_t ref = {
-        .task_id = task.task_id,
-        .client_id = task.client_id,
-        .generation = task.generation,
-        .worker_id = worker_id
-    };
-    if (client_lifetime_acquire(&c->lifetime, c->client_id, c->generation) < 0)
-        return -1;
-    if (io_worker_completion_tracker_register(tracker, &ref) < 0) {
-        if (client_lifetime_release(&c->lifetime, ref.client_id, ref.generation) < 0)
-            log_red("[IO worker] lifetime release after tracker registration failure: %s",
-                    strerror(errno));
-        return -1;
-    }
-    if (io_worker_pool_submit_to_worker(pool, &task, worker_id) < 0) {
-        int saved_errno = errno;
-        if (rollback_io_worker_registration(c, tracker, &ref) < 0)
-            return -1;
-        errno = saved_errno;
-        return saved_errno == EAGAIN ? 1 : -1;
-    }
-    c->s2c_worker_task_id = task.task_id;
-    c->s2c_worker_inflight = 1;
-    c->s2c_worker_head = c->s2c.head;
-    c->s2c_worker_generation = c->s2c.generation;
-    c->s2c_worker_len = contiguous;
-    return 0;
-}
-
+/*
+ * S2C is drained by the single SSH Owner. The accepted client socket is
+ * nonblocking and EPOLLOUT is armed while bytes remain, so this path never
+ * waits for socket capacity and avoids a worker submit/completion round-trip
+ * for every small payload. send_from_rb() drains at most the bounded S2C
+ * ring capacity before returning on EAGAIN.
+ */
 static int flush_s2c_to_client(int epfd, client_conn_t *c) {
     (void)epfd;
     if (!c || c->fd < 0 || c->ctrl_len > 0U || c->s2c.used == 0U)
         return 0;
-    if (c->s2c_worker_inflight) return 0;
-    int submit_rc = submit_s2c_worker_write(g_io_pool, g_io_tracker, c);
-    if (submit_rc == 0) return 0;
-    if (submit_rc < 0) return -1;
-    return send_from_rb(c->fd, &c->s2c, 0) < 0 ? -1 : 0;
+
+    size_t before = c->s2c.used;
+    if (send_from_rb(c->fd, &c->s2c, 0) < 0)
+        return -1;
+
+    if (c->s2c.used < before)
+        c->last_activity_ms = now_ms();
+    if (c->s2c.used == 0U && c->ssh_eof)
+        (void)shutdown(c->fd, SHUT_WR);
+    return 0;
 }
 
 static int drain_socks_req_buf(client_conn_t *c, int *eof_out) {
@@ -3217,25 +3152,8 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
         }
 
         if (c->fd >= 0 && (events & EPOLLOUT) && c->ctrl_len == 0 &&
-            c->s2c.used > 0 && !c->s2c_worker_inflight) {
-            int submit_rc = submit_s2c_worker_write(g_io_pool, g_io_tracker, c);
-            if (submit_rc == 1) {
-                /* Only temporary queue pressure may use the bounded Owner fallback. */
-                size_t s2c_before = c->s2c.used;
-                if (send_from_rb(c->fd, &c->s2c, 0) < 0) {
-                    c->client_dead = 1;
-                    c->client_reset = 1;
-                    c->client_eof = 1;
-                    c->need_send_eof = 1;
-                    c->hup_pending = 0;
-                    c->rdhup_pending = 0;
-                    detach_client_fd(epfd, c);
-                } else {
-                    if (c->s2c.used < s2c_before) c->last_activity_ms = now_ms();
-                    if (c->s2c.used == 0U && c->ssh_eof) (void)shutdown(c->fd, SHUT_WR);
-                }
-            } else if (submit_rc < 0) {
-                log_red("[IO worker] fatal S2C submit invariant: %s", strerror(errno));
+            c->s2c.used > 0) {
+            if (flush_s2c_to_client(epfd, c) < 0) {
                 c->client_dead = 1;
                 c->client_reset = 1;
                 c->client_eof = 1;
@@ -3275,7 +3193,7 @@ static void handle_client_io(int epfd, client_conn_t *c, uint32_t events) {
         if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
             uint32_t want = client_rdhup_flag(c);
             if (client_read_epoll_allowed(c)) want |= EPOLLIN;
-            if ((c->s2c.used > 0 && !c->s2c_worker_inflight) ||
+            if ((c->s2c.used > 0) ||
                 c->ctrl_len > 0) want |= EPOLLOUT;
             update_client_epoll(epfd, c, want);
         }
@@ -3343,56 +3261,7 @@ static int drain_io_worker_completions(int epfd,
                 if (c->lifetime.worker_refs == 0U && c->fd_close_pending)
                     detach_client_fd(epfd, c);
 
-                if (c->s2c_worker_task_id == ref.task_id) {
-                    c->s2c_worker_task_id = 0U;
-                    c->s2c_worker_inflight = 0;
-                    if (!current || c->state != ST_RELAY || c->fd < 0 ||
-                        c->fd_close_pending || c->client_dead)
-                        continue;
-
-                    if (completion->status == 0) {
-                        if (completion->result_len == 0U ||
-                            completion->result_len > c->s2c_worker_len ||
-                            c->s2c.head != c->s2c_worker_head ||
-                            c->s2c.generation != c->s2c_worker_generation ||
-                            rb_commit_read(&c->s2c, completion->result_len, 0) < 0) {
-                            c->client_dead = 1;
-                            c->client_reset = 1;
-                            c->client_eof = 1;
-                            c->need_send_eof = 1;
-                            detach_client_fd(epfd, c);
-                        } else {
-                            c->last_activity_ms = now_ms();
-                            if (g_log_perf) {
-                                g_perf_stats.socks_tx_bytes += completion->result_len;
-                                if (completion->result_len < c->s2c_worker_len)
-                                    g_perf_stats.socks_tx_partial++;
-                            }
-                            if (c->s2c.used == 0U && c->ssh_eof)
-                                (void)shutdown(c->fd, SHUT_WR);
-                        }
-                    } else if (completion->status != EAGAIN &&
-                               completion->status != EWOULDBLOCK) {
-                        c->client_dead = 1;
-                        c->client_reset = 1;
-                        c->client_eof = 1;
-                        c->need_send_eof = 1;
-                        detach_client_fd(epfd, c);
-                    }
-
-                    if (c->fd >= 0 && c->state == ST_RELAY) {
-                        if (completion->status == 0 && c->s2c.used > 0U)
-                            handle_client_io(epfd, c, EPOLLOUT);
-                        else {
-                            uint32_t want = client_rdhup_flag(c);
-                            if (client_read_epoll_allowed(c)) want |= EPOLLIN;
-                            if ((c->s2c.used > 0U && !c->s2c_worker_inflight) ||
-                                c->ctrl_len > 0U)
-                                want |= EPOLLOUT;
-                            update_client_epoll(epfd, c, want);
-                        }
-                    }
-                } else if (c->c2s_worker_task_id == ref.task_id) {
+                if (c->c2s_worker_task_id == ref.task_id) {
                     c->c2s_worker_task_id = 0U;
                 c->c2s_worker_inflight = 0;
                 if (!current || c->state != ST_RELAY || c->fd < 0 ||
@@ -3453,7 +3322,7 @@ static int drain_io_worker_completions(int epfd,
                     } else {
                         uint32_t want = client_rdhup_flag(c);
                         if (client_read_epoll_allowed(c)) want |= EPOLLIN;
-                        if ((c->s2c.used > 0U && !c->s2c_worker_inflight) ||
+                        if ((c->s2c.used > 0U) ||
                             c->ctrl_len > 0U)
                             want |= EPOLLOUT;
                         update_client_epoll(epfd, c, want);
@@ -3571,14 +3440,13 @@ static void record_eagain(LIBSSH2_SESSION *session, upstream_ctx_t *u,
                 ? libssh2_channel_window_write_ex(c->channel, NULL) : 0UL;
             log_yellow("[SSH pending] serial retry op=%d dirs=%d client=%llu "
                        "c2s=%zu s2c=%zu write_window=%lu write_pending=%d "
-                       "window_wait=%d workers=%d/%d",
+                       "window_wait=%d c2s_worker=%d",
                        (int)op, d,
                        (unsigned long long)(c ? c->client_id : 0U),
                        c ? c->c2s.used : 0U, c ? c->s2c.used : 0U,
                        write_window, c ? c->write_pending : 0,
                        c ? c->write_waiting_window : 0,
-                       c ? c->c2s_worker_inflight : 0,
-                       c ? c->s2c_worker_inflight : 0);
+                       c ? c->c2s_worker_inflight : 0);
         }
         set_pending_operation(c, op);
         *stop_loop_out = 1;
@@ -3638,7 +3506,7 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
     if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
         uint32_t want = client_rdhup_flag(c);
         if (client_read_epoll_allowed(c)) want |= EPOLLIN;
-        if ((c->s2c.used > 0 && !c->s2c_worker_inflight) ||
+        if ((c->s2c.used > 0) ||
             c->ctrl_len > 0) want |= EPOLLOUT;
         update_client_epoll(epfd, c, want);
     }
@@ -4413,7 +4281,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 uint32_t want = client_rdhup_flag(c);
                 if (upstream_client_write_allowed(u) && client_read_epoll_allowed(c))
                     want |= EPOLLIN;
-                if ((c->s2c.used > 0 && !c->s2c_worker_inflight) ||
+                if ((c->s2c.used > 0) ||
                     c->ctrl_len > 0) want |= EPOLLOUT;
                 update_client_epoll(epfd, c, want);
             }
