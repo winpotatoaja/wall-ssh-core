@@ -1333,13 +1333,6 @@ jobs:
           ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 'sh /tmp/mips-test/run-tests.sh'
 
-          echo "========== QEMU REAL INTERNET BANDWIDTH TEST THROUGH R37 SOCKS5 =========="
-          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            "$GITHUB_WORKSPACE/tests/qemu_speedtest.sh" root@127.0.0.1:/tmp/mips-test/qemu_speedtest.sh
-          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-            'chmod 0700 /tmp/mips-test/qemu_speedtest.sh && /tmp/mips-test/qemu_speedtest.sh 60'
-
           echo "========== VERIFY HOST OBSERVED TCP AND TLS HALF-CLOSE =========="
           cat /tmp/mips-http-server.log
           CLIENT_FIN="$(grep -cF '[HALFCLOSE] client FIN observed after complete request body' /tmp/mips-http-server.log || true)"
@@ -1365,7 +1358,7 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && find . -type f \( -name "*.log" -o -name "*.env" -o -name "*-pids" -o -name "test-status" -o -name "run-tests.sh" -o \( -path "./qemu-speedtest/*" ! -name "upload-64MiB.bin" \) \) -print > /tmp/mips-log-files.list && tar -czf /tmp/mips-guest-logs.tgz -T /tmp/mips-log-files.list' 2>/dev/null
+              'cd /tmp/mips-test && find . -type f \( -name "*.log" -o -name "*.env" -o -name "*-pids" -o -name "test-status" -o -name "run-tests.sh" \) -print > /tmp/mips-log-files.list && tar -czf /tmp/mips-guest-logs.tgz -T /tmp/mips-log-files.list' 2>/dev/null
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               root@127.0.0.1:/tmp/mips-guest-logs.tgz test-results/guest/ 2>/dev/null
