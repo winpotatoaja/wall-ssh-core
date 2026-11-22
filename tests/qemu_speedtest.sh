@@ -154,11 +154,11 @@ main() {
         fi
     }
 
-    URL_DIGITALOCEAN="http://speedtest-sgp1.digitalocean.com/100mb.test"
+    URL_DATAPACKET="http://sgp.download.datapacket.com/100mb.bin"
     URL_OVH="https://sin1-sgp.speedtest.network.ovh.net/files/100Mb.dat"
 
     echo "=== 100 MB DIRECT + SOCKS5; EACH REQUEST HAS A HARD 50-SECOND CAP ==="
-    run_endpoint digitalocean-singapore "$URL_DIGITALOCEAN"
+    run_endpoint datapacket-singapore "$URL_DATAPACKET"
     run_endpoint ovh-singapore "$URL_OVH"
 
     kill -TERM "$CORE_PID" 2>/dev/null || :
