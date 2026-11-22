@@ -8,7 +8,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: openwrt24-mipsel-r39-${{ github.ref }}
+  group: openwrt24-mipsel-r40-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   sdk:
