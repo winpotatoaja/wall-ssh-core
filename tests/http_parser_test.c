@@ -1965,9 +1965,73 @@ static int run_worker_count_regressions(void) {
     return failures;
 }
 
+static int run_payload_selector_regressions(void) {
+    app_cfg_t cfg = {0};
+    int embedded_banner = 0;
+    char *out = translate_payload("[rotate=]", &cfg, 0, &embedded_banner);
+    int failed = (!out || strcmp(out, "") != 0);
+    free(out);
+
+    embedded_banner = 0;
+    out = translate_payload("[random=]", &cfg, 0, &embedded_banner);
+    if (!out || strcmp(out, "") != 0) failed = 1;
+    free(out);
+
+    embedded_banner = 0;
+    out = translate_payload("before[rotate=alpha;beta]after", &cfg, 0,
+                            &embedded_banner);
+    if (!out || strncmp(out, "before", 6) != 0 ||
+        strlen(out) < 5 || strcmp(out + strlen(out) - 5, "after") != 0)
+        failed = 1;
+    free(out);
+
+    embedded_banner = 0;
+    out = translate_payload("before[random=alpha;beta]after", &cfg, 0,
+                            &embedded_banner);
+    if (!out || strncmp(out, "before", 6) != 0 ||
+        strlen(out) < 5 || strcmp(out + strlen(out) - 5, "after") != 0)
+        failed = 1;
+    free(out);
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] empty and populated rotate/random payload selectors\\n");
+        return 1;
+    }
+    puts("[PASS] empty and populated rotate/random payload selectors");
+    return 0;
+}
+
+static int run_worker_hup_eagain_regression(void) {
+    int sv[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return 1;
+    client_conn_t c = {.fd = sv[0], .hup_pending = 1};
+    settle_c2s_hup_eagain(-1, &c);
+    int failed = !c.client_eof || !c.need_send_eof || !c.client_dead ||
+                 c.hup_pending || c.rdhup_pending || c.fd != -1;
+    close(sv[1]);
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) return 1;
+    c = (client_conn_t){.fd = sv[0], .rdhup_pending = 1};
+    settle_c2s_hup_eagain(-1, &c);
+    if (!c.client_eof || !c.need_send_eof || c.client_dead ||
+        c.hup_pending || c.rdhup_pending || c.fd != sv[0])
+        failed = 1;
+    close(sv[0]);
+    close(sv[1]);
+
+    if (failed) {
+        fprintf(stderr, "[FAIL] worker EAGAIN with pending HUP/RDHUP must settle EOF without rearming read\\n");
+        return 1;
+    }
+    puts("[PASS] worker EAGAIN with pending HUP/RDHUP settles EOF without read re-arm");
+    return 0;
+}
+
 int main(void) {
     g_log_path = "-";
     int failures = run_core_state_regressions();
+    failures += run_payload_selector_regressions();
+    failures += run_worker_hup_eagain_regression();
     failures += run_perf_metrics_regression();
     failures += run_worker_count_regressions();
 
