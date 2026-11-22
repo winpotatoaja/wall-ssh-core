@@ -126,8 +126,8 @@ main() {
         fi
         awk -v label="$LABEL" -v mode="$MODE" -v wall="$WALL" '{
           bytes=$1;sec=$2;speed=$3;code=$4;ip=$5;type=$6;
-          printf "%s mode=%s bytes=%.0f (%.2f MiB) wall_seconds=%d curl_seconds=%.3f average_MiBps=%.2f curl_MiBps=%.2f http_code=%s remote_ip=%s content_type=%s\n",
-            label,mode,bytes,bytes/1048576,wall,sec,speed/1048576,(wall>0?bytes/wall/1048576:0),code,ip,type
+          printf "%s mode=%s bytes=%.0f (%.2f MiB) wall_seconds=%d curl_seconds=%.3f curl_avg_MiBps=%.2f http_code=%s remote_ip=%s content_type=%s\n",
+            label,mode,bytes,bytes/1048576,wall,sec,speed/1048576,code,ip,type
         }' "$OUT" | tee -a "$RESULT/download-results.log"
         return 0
     }
