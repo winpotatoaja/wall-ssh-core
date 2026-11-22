@@ -45,7 +45,7 @@
 #define MAX_HTTP_HEADER        16384
 #define MAX_HTTP_SKIP_BODY     (16U * 1024U * 1024U)
 #define C2S_RELAY_BUF_SIZE     32768
-#define S2C_RELAY_BUF_SIZE     131072
+#define S2C_RELAY_BUF_SIZE     262144
 #define MAX_EVENTS             128
 #define SSH_CORE_IO_QUEUE_CAPACITY 64U
 #define DEFAULT_MAX_CLIENTS    64
@@ -4951,14 +4951,15 @@ static int core_worker_run(int argc, char **argv) {
 
 #ifdef SSH_CORE_MIPSEL_24KC
     /*
-     * MT7621 QEMU profiling showed aes128-gcm@openssh.com negotiated while the
-     * single SSH Owner saturated one vCPU during S2C decryption. Test AES-128-CTR
-     * first on this target so the server pairs it with an independent SHA-2 MAC;
-     * retain GCM/ChaCha as compatibility fallbacks. Other architectures keep
-     * the existing cipher preference order.
+     * The r40 Datapacket run confirmed that AES-128-CTR + HMAC-SHA2-256
+     * is slower than the already-measured AES-GCM path on the MIPS software
+     * crypto backend (5.63 vs 8.88 MiB/s SOCKS5). Restore AES-GCM first for
+     * MT7621; keep CTR as a compatibility fallback. The S2C ring is also
+     * doubled to 256 KiB to reduce relay-pump/read-call overhead per batch.
+     * Other architectures keep their existing cipher preference order.
      */
     const char *ssh_cipher_pref =
-        "aes128-ctr,aes128-gcm@openssh.com,aes256-ctr,chacha20-poly1305@openssh.com";
+        "aes128-gcm@openssh.com,aes128-ctr,aes256-ctr,chacha20-poly1305@openssh.com";
 #else
     const char *ssh_cipher_pref =
         "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr";
@@ -4969,7 +4970,7 @@ static int core_worker_run(int argc, char **argv) {
         session, LIBSSH2_METHOD_CRYPT_SC, ssh_cipher_pref);
 #ifdef SSH_CORE_MIPSEL_24KC
     if (cipher_cs_rc == 0 && cipher_sc_rc == 0) {
-        log_blue("MT7621 SSH cipher preference: AES-128-CTR first (AES-GCM fallback)");
+        log_blue("MT7621 SSH cipher preference: AES-128-GCM first (AES-CTR fallback)");
     } else {
         log_yellow("MT7621 SSH cipher preference could not be applied (cs=%d sc=%d); using libssh2 defaults",
                    cipher_cs_rc, cipher_sc_rc);
