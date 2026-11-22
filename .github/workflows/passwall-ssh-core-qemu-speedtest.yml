@@ -1,6 +1,11 @@
 name: Passwall SSH Core - MT7621 QEMU Speedtest
 
 on:
+  push:
+    branches: [phase3/io-worker-pool-foundation]
+    paths:
+      - ".github/workflows/passwall-ssh-core-qemu-speedtest.yml"
+      - "tests/qemu_speedtest.sh"
   workflow_dispatch:
     inputs:
       sdk_run_id:
@@ -29,8 +34,8 @@ jobs:
     name: OpenWrt 24.10.7 MT7621 sustained SOCKS5 benchmark
     uses: ./.github/workflows/passwall-ssh-core-openwrt24-mipsel-vm.yml
     with:
-      sdk_run_id: ${{ inputs.sdk_run_id }}
-      benchmark_duration: ${{ fromJSON(inputs.duration) }}
+      sdk_run_id: ${{ github.event_name == 'push' && '44998188775' || inputs.sdk_run_id }}
+      benchmark_duration: ${{ github.event_name == 'push' && 60 || fromJSON(inputs.duration) }}
     permissions:
       contents: read
       actions: read
