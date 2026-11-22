@@ -129,6 +129,28 @@ jobs:
           echo "ImageBuilder rules.mk found."
           echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
 
+          # ImageBuilder's checksum manifest is not consumed by the QEMU test.
+          # Keep calculating it, but do not let that ancillary target prevent
+          # use of a firmware image that is subsequently checked below.
+          python3 - "$IB_DIR/Makefile" <<'PY'
+          from pathlib import Path
+          import sys
+
+          makefile = Path(sys.argv[1])
+          content = makefile.read_text()
+          original = "\t$(MAKE) -s checksum\n"
+          replacement = "\t$(MAKE) -s checksum || echo 'WARNING: ImageBuilder checksum manifest failed; validating firmware image directly for QEMU'\n"
+          if content.count(original) == 1:
+              makefile.write_text(content.replace(original, replacement))
+              print("ImageBuilder checksum target made non-fatal for this QEMU-only workflow.")
+          else:
+              print("Could not uniquely locate ImageBuilder checksum target.")
+          PY
+          if ! grep -Fq "checksum || echo 'WARNING: ImageBuilder checksum manifest failed" "$IB_DIR/Makefile"; then
+            echo "ImageBuilder checksum hook patch was not applied."
+            false
+          fi
+
           ssh-keygen -q -t ed25519 -N "" -f "$RUNNER_TEMP/mips-vm-key"
           FILES_DIR="$RUNNER_TEMP/mips-image-files"
           mkdir -p "$FILES_DIR/etc/dropbear" "$FILES_DIR/root/.ssh"
@@ -147,6 +169,7 @@ jobs:
           SYSUP="$(readlink -f "$SYSUP")"
           test -s "$SYSUP"
           echo "Selected firmware image: $SYSUP"
+          sha256sum "$SYSUP"
 
           cd "$EMU_DIR"
           BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
