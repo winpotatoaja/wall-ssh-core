@@ -62,7 +62,8 @@ main() {
         return 2
     fi
 
-    if ! curl -4 -fsS --socks5-hostname "$SOCKS" --connect-timeout 15 --max-time 45 "$DOWN_URL" -o /dev/null >/dev/null 2>&1; then
+    PREFLIGHT_URL=${PREFLIGHT_URL:-https://speed.cloudflare.com/__down?bytes=1024}
+    if ! curl -4 -fsS --socks5-hostname "$SOCKS" --connect-timeout 15 --max-time 45 "$PREFLIGHT_URL" -o /dev/null >/dev/null 2>&1; then
         echo "ERROR: Internet download preflight through SOCKS5 failed"
         echo "Check guest WAN/DNS, SSH tunnel and Cloudflare speed-test reachability."
         kill -TERM "$CORE_PID" 2>/dev/null || :
