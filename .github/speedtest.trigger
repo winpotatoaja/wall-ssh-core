@@ -1,0 +1,3 @@
+r39 internet bandwidth benchmark
+sdk_run_id=45020186643
+qemu_run_id=45020754464
