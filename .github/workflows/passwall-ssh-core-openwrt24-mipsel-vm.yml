@@ -98,7 +98,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r36 single-session MIPS IPK and I/O worker pool helper
+      - name: Build r37 single-session MIPS IPK and I/O worker pool helper
         shell: bash
         run: |
           set -euo pipefail
@@ -809,7 +809,7 @@ jobs:
             fail "ImageBuilder firmware is missing libopenssl3 or libssh2-1"
           fi
 
-          echo "========== INSTALL R33 MIPS IPK (OFFLINE) =========="
+          echo "========== INSTALL R37 MIPS IPK (OFFLINE) =========="
           if [ "$STATUS" -eq 0 ]; then
             opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
@@ -818,8 +818,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r36'; then
-            pass "opkg installed passwall-ssh-core r36 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r37'; then
+            pass "opkg installed passwall-ssh-core r37 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
