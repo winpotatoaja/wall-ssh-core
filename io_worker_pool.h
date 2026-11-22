@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 #define IO_WORKER_POOL_MAX_WORKERS 4U
-#define IO_WORKER_POOL_PAYLOAD_SIZE 128U
+#define IO_WORKER_POOL_PAYLOAD_SIZE (16U * 1024U)
 #define IO_WORKER_POOL_STACK_SIZE (512U * 1024U)
 
 typedef struct io_worker_pool io_worker_pool_t;
