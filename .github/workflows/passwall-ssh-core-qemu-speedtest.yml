@@ -35,6 +35,10 @@ jobs:
             tests/qemu_speedtest.sh
           sparse-checkout-cone-mode: false
 
+      - name: Self-test benchmark diagnostics before QEMU provisioning
+        run: |
+          sh tests/qemu_speedtest.sh --self-test
+
       - name: Install QEMU host requirements
         run: |
           set -euo pipefail
