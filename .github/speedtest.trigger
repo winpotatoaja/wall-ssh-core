@@ -1,1 +1,1 @@
-r39 Datapacket diagnostic rerun: per-process/per-TID CPU normalized by average per-vCPU /proc/stat ticks; mark main TID ssh_owner; reset CPU/thread/network counters immediately before SOCKS5 so direct transfer is excluded; one 100MB pair, 50-second hard limit, no retry, one SSH session.
+r39 diagnostic retest retry: fix AWK process-CPU ternary expression; verify self-test before QEMU; one Datapacket direct/SOCKS5 pair, 50-second hard cap, no retries, one SSH session.
