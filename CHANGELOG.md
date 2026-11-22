@@ -1,3 +1,4 @@
+- Restrict synchronous C2S/S2C socket fallback to temporary worker queue pressure only (`submit_rc == 1` / `EAGAIN`). Fatal submit/tracker/lifetime errors now fail the affected client path closed instead of silently running synchronous I/O; the shared S2C flush helper propagates fatal submission errors. Native/MIPS/QEMU validation pending.
 - Treat duplicate/stale worker completions (`ENOENT`) as already-consumed records, but fail the relay closed on malformed/mismatched completion identity, missing retained client-generation, lifetime-release failure, or a completion with no matching C2S/S2C in-flight task. Completion drain now propagates invariant failures to the SSH Owner so it exits with failure instead of continuing with inconsistent lifetime/task state. Native/MIPS/QEMU validation pending.
 
 ## Unreleased
