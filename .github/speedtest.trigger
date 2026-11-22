@@ -1,1 +1,1 @@
-r39 diagnostic retest retry: fix AWK process-CPU ternary expression; verify self-test before QEMU; one Datapacket direct/SOCKS5 pair, 50-second hard cap, no retries, one SSH session.
+R40 MT7621 MIPS SSH cipher experiment: prefer AES-128-CTR before AES-GCM on mipsel_24kc; build exact SDK artifact then auto-dispatch one Datapacket URL direct+SOCKS5 pair, 50-second timeout, no retries, one SSH session.
