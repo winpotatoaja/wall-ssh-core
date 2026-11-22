@@ -138,7 +138,8 @@ Implementasi yang sudah ada pada branch ini:
 - Completion yang ditolak tracker karena task tidak dikenal (`ENOENT`) diperlakukan sebagai duplikat/stale dan diabaikan tanpa melepas reference lagi.
 - Completion dengan identitas yang tidak cocok (`EPROTO`/error tracker lain), client-generation yang tidak ditemukan setelah tracker menerima task, kegagalan release lifetime, atau task tanpa arah in-flight yang cocok kini menjadi invariant failure. Drain mengembalikan error; SSH Owner menghentikan relay dengan exit status gagal, bukan melanjutkan dengan state yang tidak konsisten.
 - Fallback socket I/O sinkron pada Owner hanya diizinkan ketika submit worker mengembalikan status antrean sementara (`1`/`EAGAIN`). Kegagalan submit internal (`-1`) tidak lagi disamarkan sebagai queue-full; client ditutup secara aman dan jalur flush S2C mengembalikan error ke pemanggil.
-- Jalur drain saat shutdown/startup juga memeriksa hasil invariant; status validasi tetap terbuka sampai native/MIPS/QEMU lulus.
+- Jalur drain saat shutdown/startup juga memeriksa hasil invariant. Native regression dan build OpenWrt 24.10.7 `mipsel_24kc` untuk batch ini telah lulus pada Actions run `44964541444` (artifact `14730609580`); runtime MT7621 QEMU masih wajib lulus sebelum Tahap 3 ditutup.
+- Pemeriksaan workflow TLS kini memakai path eksplisit `$GITHUB_WORKSPACE/ssh-core.c` dan memverifikasi file ada, sehingga pemeriksaan tidak lagi dapat memberi PASS palsu ketika dijalankan dari direktori SDK.
 
 **Audit dan validasi yang masih wajib:**
 - Menuntaskan audit semua jalur completion: sukses, partial write, EAGAIN,
