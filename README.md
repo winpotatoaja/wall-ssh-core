@@ -188,14 +188,15 @@ Implementasi yang sudah ada pada branch ini:
 
 <badge color="warning">VALIDASI FUNGSIONAL LULUS — RETEST THROUGHPUT TERBUKA</badge>
 
-### Retest internet 100 MiB dengan batas 50 detik — hasil terverifikasi
+### Retest internet 100 MB — dua endpoint lulus, empat transfer di bawah 50 detik
 
-- Actions run `45067089485` selesai `success`; artifact `14771936584`.
-- OVHcloud Singapore `https://sin1-sgp.speedtest.network.ovh.net/files/100Mb.dat`: direct menerima tepat `104.857.600` byte (100 MiB) dalam `37,297 s`, rata-rata curl `2,63 MiB/s`; SOCKS5 menerima tepat `104.857.600` byte dalam `30,494 s`, rata-rata curl `3,12 MiB/s`. Keduanya HTTP 200 dan pasangan byte identik.
-- DigitalOcean endpoint `speedtest-sgp1.digitalocean.com` gagal resolusi DNS (`curl_rc=6`, 0 byte); bukan timeout 50 detik. Endpoint tersebut dihapus dari skrip dan diganti dengan Datapacket Singapore `http://sgp.download.datapacket.com/100mb.bin` untuk run berikutnya.
-- Benchmark dijalankan dengan hard timeout 50 detik per request, connect timeout 15 detik, tanpa retry; endpoint direct yang gagal tidak dilanjutkan ke SOCKS5.
-- Log core menunjukkan satu autentikasi password dan satu `Session Keys Established`; startup menegaskan `SSH_sessions=1`. Empat worker I/O tambahan tidak membuat sesi SSH tambahan. `errors.log` kosong.
-- Ringkasan aktual disimpan dalam artifact; hasil OVH adalah bukti 100 MiB yang selesai, bukan proyeksi. Hasil Datapacket masih menunggu run setelah penggantian URL.
+- Actions run `45068073173` selesai `success`; job `137348615690`; artifact `14772606003`. Hasil juga dipublikasikan pada GitHub Actions Step Summary.
+- **Datapacket Singapore** `http://sgp.download.datapacket.com/100mb.bin`: tepat `100.000.000` byte (100 MB desimal / 95,37 MiB). Direct `5,036 s`, `18,94 MiB/s`; SOCKS5 `13,483 s`, `7,07 MiB/s`. Kedua respons HTTP 200, byte identik; SOCKS5 mencapai 37,3% dari direct pada endpoint ini.
+- **OVHcloud Singapore** `https://sin1-sgp.speedtest.network.ovh.net/files/100Mb.dat`: tepat `104.857.600` byte (100 MiB). Direct `28,358 s`, `3,53 MiB/s`; SOCKS5 `31,092 s`, `3,22 MiB/s`. Kedua respons HTTP 200, byte identik; SOCKS5 mencapai 91,2% dari direct.
+- Semua empat transfer selesai dalam batas keras `50` detik; tidak ada endpoint yang dilewati. `PAIR_COUNT=2`, `SAMPLE_COUNT=43`, `skipped.log` dan `errors.log` kosong.
+- Session invariant terbukti: core startup mencatat `SSH_sessions=1`; core log mencatat tepat satu `authentication accepted` dan satu `Session Keys Established`; host sshd mencatat satu `Accepted password`. CPU guest 4 dan memilih 4 auxiliary I/O workers tanpa menambah SSH session.
+- Pengukuran merupakan hasil pada runner GitHub Actions + MT7621 QEMU untuk dua server uji Singapura, bukan jaminan kecepatan pada jaringan/operator atau router fisik. Angka throughput menggunakan `curl speed_download / 1.048.576`; output formatter berikutnya juga menggunakan label eksplisit `curl_avg_MiBps`.
+- DigitalOcean sebelumnya gagal DNS (`curl_rc=6`) dan telah diganti dengan Datapacket. Percobaan Vultr terdahulu memang terukur lambat sekitar `0,29 MiB/s`; itu bukan hasil dari endpoint pengganti ini.
 
 ### Retest r39 S2C direct-send — SDK, MT7621 QEMU, dan benchmark 10 MB lulus; retest 100 MB disiapkan
 
@@ -214,7 +215,7 @@ Implementasi yang sudah ada pada branch ini:
 - Batas pengaman benchmark 10 MB yang telah selesai: curl `--max-filesize 11000000`, `--max-time 120`, `--connect-timeout 15`, tanpa retry otomatis. Setiap transfer menerima minimal 9.500.000 byte dan jumlah byte direct/SOCKS5 identik.
 
 - **Percobaan 100 MB pertama terukur lambat dan tidak lulus:** Actions run `45065615639`, artifact `14770769522`. Vultr Singapore mengirim `104.857.600` byte dalam `340,196` detik (`308.228 B/s`, sekitar `0,29 MiB/s`). Linode Singapore gagal sebelum menerima data (`curl_rc=28`, sekitar 15 detik, HTTP `000`), sehingga tahap SOCKS5 tidak dijalankan. Artefak juga mengonfirmasi tepat satu autentikasi SSH sukses pada host dan satu SSH session di core.
-- **Retest 100 MB dengan endpoint alternatif disiapkan (hasil belum tersedia):** DigitalOcean Singapore `http://speedtest-sgp1.digitalocean.com/100mb.test` dan OVHcloud Singapore `https://sin1-sgp.speedtest.network.ovh.net/files/100Mb.dat`. DigitalOcean Singapore dicantumkan sebagai endpoint file uji 100 MB dalam daftar speedtest; halaman resmi OVHcloud Singapore mendokumentasikan file uji statis mulai 1 MiB sampai 10 GiB dan menyediakan URL file 100Mb.
+- **Retest 100 MB selesai:** DigitalOcean diganti dengan Datapacket Singapore setelah DNS gagal. Datapacket dan OVH menyelesaikan dua pasangan direct/SOCKS5 dengan ukuran byte identik; detail run `45068073173` dan artifact `14772606003` tercatat di bagian hasil terverifikasi di atas.
 - Batas keras setiap transfer adalah `50` detik (connect timeout `15` detik), file cap `110.000.000` byte, minimum hasil lengkap `95.000.000` byte, dan tanpa retry. Jika direct gagal/timeout, SOCKS5 endpoint yang sama dilewati; workflow lanjut ke endpoint berikutnya. Jika direct lolos tetapi SOCKS5 timeout, pasangan itu dicatat SKIP dan workflow tetap lanjut. Run dinyatakan lulus hanya jika minimal satu endpoint menyelesaikan pasangan direct+SOCKS5 dengan jumlah byte identik.
 - Pengujian tetap hanya workflow bandwidth khusus, dengan satu proses core dan satu SSH session. Maksimum empat percobaan transfer; endpoint lambat tidak menahan job lebih dari 50 detik per request. Hasil 10 MB tetap data historis, bukan klaim throughput 100 MB.
 
