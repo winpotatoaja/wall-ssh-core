@@ -4949,8 +4949,27 @@ static int core_worker_run(int argc, char **argv) {
     log_blue("SSH Client : %s (libssh2)", SSH_CLIENT_BANNER + 8);
     log_blue("Starting Key Exchange");
 
-    libssh2_session_method_pref(session, LIBSSH2_METHOD_CRYPT_CS, "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr");
-    libssh2_session_method_pref(session, LIBSSH2_METHOD_CRYPT_SC, "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr");
+#ifdef SSH_CORE_MIPSEL_24KC
+    /*
+     * MT7621/MIPS24K has no AES-GCM acceleration. The previous preference
+     * negotiated aes128-gcm@openssh.com and saturated the single SSH Owner
+     * while decrypting S2C packets. Prefer AES-128-CTR on this target so the
+     * server can pair it with an independent SHA-2 MAC; retain GCM/ChaCha as
+     * compatibility fallbacks. Other architectures keep the existing order.
+     */
+    const char *ssh_cipher_pref =
+        "aes128-ctr,aes128-gcm@openssh.com,aes256-ctr,chacha20-poly1305@openssh.com";
+#else
+    const char *ssh_cipher_pref =
+        "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr";
+#endif
+    if (libssh2_session_method_pref(session, LIBSSH2_METHOD_CRYPT_CS,
+                                    ssh_cipher_pref) != 0 ||
+        libssh2_session_method_pref(session, LIBSSH2_METHOD_CRYPT_SC,
+                                    ssh_cipher_pref) != 0) {
+        log_red("Failed to configure SSH cipher preference");
+        goto fail_cleanup;
+    }
 
     {
         long long deadline = now_ms() + HANDSHAKE_TIMEOUT_MS;
