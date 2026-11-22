@@ -47,7 +47,6 @@
 #define C2S_RELAY_BUF_SIZE     32768
 #define S2C_RELAY_BUF_SIZE     131072
 #define MAX_EVENTS             128
-#define SSH_CORE_IO_WORKER_COUNT 1U
 #define SSH_CORE_IO_QUEUE_CAPACITY 64U
 #define DEFAULT_MAX_CLIENTS    64
 #define MAX_CLIENTS_LIMIT      256
@@ -111,6 +110,7 @@ static int ssh_session_count_for_cpu_count(long cpu_count) {
 }
 
 static long g_detected_cpu_count = 1;
+static uint32_t g_io_worker_count = 1U;
 static int g_worker_count_auto = 1;
 static __thread int g_worker_id = 0;
 static __thread int g_worker_count = 1;
@@ -5183,8 +5183,8 @@ static int core_worker_run(int argc, char **argv) {
         goto fail_cleanup;
     }
 
-    /* One SSH Owner, one conservative I/O worker; Stage 4 will tune this. */
-    io_pool = io_worker_pool_create(SSH_CORE_IO_WORKER_COUNT,
+    /* One SSH Owner; CPU topology controls only the bounded local I/O pool. */
+    io_pool = io_worker_pool_create(g_io_worker_count,
                                    SSH_CORE_IO_QUEUE_CAPACITY,
                                    io_worker_socket_execute, NULL);
     if (!io_pool) {
@@ -5192,26 +5192,33 @@ static int core_worker_run(int argc, char **argv) {
         goto fail_cleanup;
     }
     io_tracker = io_worker_completion_tracker_create(
-        SSH_CORE_IO_WORKER_COUNT, SSH_CORE_IO_QUEUE_CAPACITY);
+        g_io_worker_count, SSH_CORE_IO_QUEUE_CAPACITY);
     if (!io_tracker) {
         log_red("Unable to create I/O completion tracker: %s", strerror(errno));
         goto fail_cleanup;
     }
     g_io_pool = io_pool;
     g_io_tracker = io_tracker;
-    int io_completion_fd = io_worker_pool_completion_fd(io_pool, 0U);
-    if (io_completion_fd < 0) {
-        log_red("Unable to obtain I/O worker completion fd: %s", strerror(errno));
-        goto fail_cleanup;
-    }
     struct epoll_event io_completion_ev = {
         .events = EPOLLIN,
         .data.ptr = &g_worker_completion_tag
     };
-    if (epoll_ctl(epfd, EPOLL_CTL_ADD, io_completion_fd, &io_completion_ev) < 0) {
-        log_red("Unable to register I/O worker completion fd: %s", strerror(errno));
-        goto fail_cleanup;
+    for (uint32_t io_worker_id = 0U; io_worker_id < g_io_worker_count; io_worker_id++) {
+        int io_completion_fd = io_worker_pool_completion_fd(io_pool, io_worker_id);
+        if (io_completion_fd < 0) {
+            log_red("Unable to obtain I/O worker %u completion fd: %s",
+                    io_worker_id, strerror(errno));
+            goto fail_cleanup;
+        }
+        if (epoll_ctl(epfd, EPOLL_CTL_ADD, io_completion_fd, &io_completion_ev) < 0) {
+            log_red("Unable to register I/O worker %u completion fd: %s",
+                    io_worker_id, strerror(errno));
+            goto fail_cleanup;
+        }
     }
+    log_blue("[IO worker] pool started: %u workers (CPU detected=%ld, cap=%u), one SSH session",
+             g_io_worker_count, g_detected_cpu_count,
+             (unsigned int)IO_WORKER_POOL_MAX_WORKERS);
 
     uint32_t upstream_ev = uctx.tls ? EPOLLIN : (EPOLLIN | EPOLLRDHUP);
     struct epoll_event ev = { .events = EPOLLIN, .data.ptr = &g_listen_tag };
@@ -5240,9 +5247,15 @@ static int core_worker_run(int argc, char **argv) {
 
     while (!stop_requested()) {
         int timeout_ms = upstream_epoll_timeout_ms(&uctx, force_next_tick, now_ms());
-        if (io_pool && io_worker_pool_outstanding(io_pool, 0U) > 0U &&
-            timeout_ms > 100)
-            timeout_ms = 100;
+        if (io_pool && timeout_ms > 100) {
+            uint32_t io_workers = io_worker_pool_worker_count(io_pool);
+            for (uint32_t io_worker_id = 0U; io_worker_id < io_workers; io_worker_id++) {
+                if (io_worker_pool_outstanding(io_pool, io_worker_id) > 0U) {
+                    timeout_ms = 100;
+                    break;
+                }
+            }
+        }
         long long epoll_started_ms = g_log_perf ? now_ms() : 0;
         int nfds = epoll_wait(epfd, events, MAX_EVENTS, timeout_ms);
         if (g_log_perf) {
@@ -5791,11 +5804,18 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
     }
 
     g_worker_count_auto = 1;
-    *out_count = ssh_session_count_for_cpu_count(g_detected_cpu_count);
+    /* CPU topology sizes only the auxiliary socket-I/O pool. The process
+     * still starts exactly one SSH Owner and one upstream SSH session. */
+    g_io_worker_count = (uint32_t)(g_detected_cpu_count > (long)IO_WORKER_POOL_MAX_WORKERS
+                                      ? IO_WORKER_POOL_MAX_WORKERS
+                                      : g_detected_cpu_count);
+    if (g_io_worker_count == 0U) g_io_worker_count = 1U;
+    *out_count = 1;
     fprintf(stderr,
-            "[CPU] detected=%ld SSH_sessions=1 mode=single-session; "
+            "[CPU] detected=%ld io_workers=%u/%u SSH_sessions=1 mode=single-owner; "
             "legacy requested workers=%d%s\\n",
-            g_detected_cpu_count, requested_workers,
+            g_detected_cpu_count, g_io_worker_count,
+            (unsigned int)IO_WORKER_POOL_MAX_WORKERS, requested_workers,
             manual_workers ? " (ignored to prevent multiple SSH logins)" : "");
     return 0;
 }
