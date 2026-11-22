@@ -1,8 +1,9 @@
 r39 internet bandwidth benchmark
 sdk_run_id=45020186643
 qemu_run_id=45020754464
-download_size=10MB
-endpoints=cherryservers-singapore,newmediaexpress-singapore
-transfer_cap=11000000_bytes
-per_transfer_timeout=120_seconds
+download_size=100MB
+endpoints=vultr-singapore,linode-singapore
+transfer_cap=110000000_bytes
+minimum_payload=95000000_bytes
+per_transfer_timeout=600_seconds
 retries=0
