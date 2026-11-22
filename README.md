@@ -164,9 +164,7 @@ Implementasi yang sudah ada pada branch ini:
 - Tidak ada task/reference tertinggal, ring buffer yang tidak terkuras, atau
   kegagalan integritas data pada skenario uji.
 
-**Status saat ini:** integrasi worker sudah ada di source, tetapi validasi terpadu
-belum dinyatakan lulus. Jangan menganggap Tahap 3 selesai hanya karena worker pool
-dan dispatch sudah terhubung.
+**Status saat ini:** native regression, OpenWrt SDK cross-build, dan MT7621 QEMU runtime telah lulus untuk source SHA yang tercatat. Tahap 3 masih terbuka untuk audit edge-case RST, reconnect, dan FD reuse serta verifikasi bahwa semua completion/lifetime invariant tercover.
 
 ## Tahap 4 — Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU
 
