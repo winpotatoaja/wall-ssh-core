@@ -99,7 +99,7 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r39 single-session MIPS IPK and I/O worker pool helper
+      - name: Build r41 single-session MIPS IPK and I/O worker pool helper
         shell: bash
         run: |
           set -euo pipefail
