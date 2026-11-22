@@ -180,7 +180,13 @@ Implementasi yang sudah ada pada branch ini:
 - Tidak ada task/reference tertinggal, ring buffer yang tidak terkuras, atau
   kegagalan integritas data pada skenario uji.
 
-**Status saat ini:** native regression, OpenWrt SDK cross-build, dan MT7621 QEMU runtime telah lulus untuk source SHA sebelumnya. Assertion RST/reconnect/FD reuse sudah ditambahkan ke workflow, tetapi belum tervalidasi pada source SHA terbaru. Tahap 3 tetap terbuka sampai suite terbaru lulus dan audit completion/lifetime invariant ditutup.
+**Validasi source terbaru:**
+- Native regression dan OpenWrt 24.10.7 `mipsel_24kc` SDK lulus pada run `44978923453` (SDK artifact `14736718226`).
+- MT7621 QEMU run `44980515142` lulus menggunakan artifact SDK tersebut; workflow checkout commit `cb07179b00363d685aabe9ca5e4468a6c7548b1f`, dengan source rollback C2S/S2C dari `f3a85dc43722bfb6f38045a70a1f16dffd3bdcc2`.
+- RST idle channel berhasil, lalu 8 reconnect SOCKS masing-masing memverifikasi payload 1 MiB dan SHA-256. Half-close dua arah, upload pasca-EOF 8 MiB, upload TCP 32 MiB, empat client TCP bersamaan 4 × 32 MiB, empat client TLS/SNI bersamaan, dan full-duplex upload 8 MiB/download 32 MiB lulus. `MIPS TEST STATUS: 0`.
+- Artifact runtime QEMU: `14737509442`.
+
+**Status saat ini:** gerbang native, MIPS SDK, dan QEMU terbaru telah lulus. Tahap 3 masih terbuka untuk audit source/invariant terakhir: ownership thread TLS/SSH, validasi completion dan pelepasan reference tepat satu kali pada semua jalur error/shutdown, serta keamanan worker join/FD teardown. Belum diberi status LULUS FINAL sampai audit tersebut ditutup.
 
 ## Tahap 4 — Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU
 
