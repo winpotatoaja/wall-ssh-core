@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/passwall-ssh-core-qemu-speedtest.yml"
       - "tests/qemu_speedtest.sh"
+      - ".github/workflows/passwall-ssh-core-openwrt24-mipsel-vm.yml"
   workflow_dispatch:
     inputs:
       sdk_run_id:
