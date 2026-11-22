@@ -188,7 +188,7 @@ Implementasi yang sudah ada pada branch ini:
 
 <badge color="warning">VALIDASI FUNGSIONAL LULUS — RETEST THROUGHPUT TERBUKA</badge>
 
-### Retest r39 S2C direct-send — SDK, MT7621 QEMU, dan internet benchmark 10 MB lulus (uji berkelanjutan masih terbuka)
+### Retest r39 S2C direct-send — SDK, MT7621 QEMU, dan benchmark 10 MB lulus; retest 100 MB disiapkan
 
 - Native regression dan OpenWrt 24.10.7 `mipsel_24kc` SDK lulus pada run `45020186643`; IPK artifact `14753870688`, versi `1.0.0-r39`, source SHA `0d48d4e5d5d2298ed057d3e5af7fc147fec5f7a0`, SHA-256 `702b00fc6c5da703a9fb848f39e0a7418d7766df10746d960e5dca032eba9350`.
 - MT7621 QEMU run `45020754464` berhasil; workflow artifact `14754055916`. Guest melaporkan `MIPS TEST STATUS: 0` dan menggunakan IPK r39 tersebut.
@@ -202,7 +202,11 @@ Implementasi yang sudah ada pada branch ini:
 - S2C backpressure sempat memenuhi buffer 128 KiB dan kemudian terkuras sampai 0 pada kedua koneksi; tidak ada log ERROR/FATAL/invariant dan `errors.log` kosong.
 - Hasil ini membuktikan peningkatan hasil uji pendek dibanding sekitar 300 KB/s yang dilaporkan pada percobaan 100 MB sebelumnya, tetapi angka lama tidak memiliki hasil akhir lengkap karena run dibatalkan. Jangan menganggap perbandingannya sebagai A/B identik; server, ukuran, dan sesi pengujian berbeda.
 - Benchmark internet memakai dua file sekitar 10 MB dari server Singapura: Cherry Servers `https://speedtest.sg.cherryservers.com/test-10mb` (10.485.760 byte) dan NewMedia Express `https://sg1.newmediaexpress.com/10MB.test` (10.000.000 byte). Setiap file diunduh sekali direct dan sekali lewat SOCKS5, sehingga total payload target sekitar 40 MB untuk empat transfer.
-- Batas pengaman benchmark: curl `--max-filesize 11000000`, `--max-time 120`, `--connect-timeout 15`, tanpa retry otomatis. Setiap transfer harus menerima minimal 9.500.000 byte dan jumlah byte direct/SOCKS5 untuk endpoint yang sama harus identik.
+- Batas pengaman benchmark 10 MB yang telah selesai: curl `--max-filesize 11000000`, `--max-time 120`, `--connect-timeout 15`, tanpa retry otomatis. Setiap transfer menerima minimal 9.500.000 byte dan jumlah byte direct/SOCKS5 identik.
+
+- **Retest internet 100 MB disiapkan (hasil belum tersedia):** workflow bandwidth khusus kini memakai Vultr `https://sgp-ping.vultr.com/vultr.com.100MB.bin` dan Linode Singapore `http://speedtest.singapore.linode.com/100MB-singapore.bin`. Setiap endpoint diuji sekali direct dan sekali melalui SOCKS5; target total sekitar 400 MB untuk empat transfer.
+- Pengaman retest 100 MB: minimal `95.000.000` byte per transfer, batas file `110.000.000` byte, timeout transfer `600` detik, connect timeout `15` detik, tanpa retry otomatis. Timeout langkah QEMU dinaikkan menjadi 65 menit agar empat transfer punya ruang waktu cukup. Perbandingan direct/SOCKS tetap memakai file identik dan satu sesi SSH.
+- Hasil benchmark 10 MB di atas tetap dicatat sebagai data historis. Retest 100 MB belum boleh dianggap lulus sampai workflow menghasilkan empat transfer lengkap, ukuran byte direct/SOCKS identik per endpoint, log error kosong, dan log membuktikan satu autentikasi SSH.
 
 
 
