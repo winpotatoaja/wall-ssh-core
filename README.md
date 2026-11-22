@@ -15,7 +15,7 @@ Branch pengerjaan: `phase3/io-worker-pool-foundation`
 | 1 | Fondasi koneksi dan arsitektur single SSH session | **LULUS** |
 | 2 | TLS Engine, pemisahan kepemilikan TLS/SSH, dan fondasi antrean | **LULUS** |
 | 3 | Integrasi local socket I/O worker ke relay aktif | **LULUS** |
-| 4 | Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU | **BERJALAN — BASELINE VALID, DIAGNOSTIK/TUNING DILANJUTKAN** |
+| 4 | Validasi terpadu, perbaikan, dan tuning native/MIPS/QEMU | **BERJALAN — VALIDASI ULANG DIAGNOSTIK** |
 | 5 | Validasi perangkat OpenWrt MT7621 fisik | **BELUM DIMULAI** |
 
 > Status di atas menggambarkan keadaan source dan catatan pengujian yang tersedia.
@@ -214,7 +214,9 @@ Urutan kerja:
 - Tidak ada mismatch checksum, byte hilang/ganda, ring tertahan, atau task reference
   yang tidak terselesaikan.
 
-**Status saat ini:** baseline native regression, MIPS SDK, dan MT7621 QEMU telah terverifikasi pada run/source yang tercatat. Tahap 4 tetap terbuka untuk konsolidasi suite, audit edge case Stage 3, dan tuning berbasis metrik. Tidak ada klaim kelulusan penuh Stage 4 sebelum batch validasi final.
+**Perbaikan diagnostik Tahap 4:** source commit `852c6f5dc8c4be9179e56f9cd1a47ec33fdf9068` mengecualikan client dengan `s2c_worker_inflight` dari hitungan `s2c_epollout_missing`, karena EPOLLOUT memang sengaja dilepas selama worker menulis. Perubahan ini mencegah false positive pada metrik, bukan mengubah jalur data.
+
+**Status saat ini:** baseline Tahap 3 telah lulus. Koreksi diagnostik Tahap 4 masih menunggu regression native + MIPS SDK + MT7621 QEMU yang dijalankan ulang pada source terkini. Setelah itu, pengukuran performa dilakukan pada beban dan konfigurasi identik sebelum memutuskan tuning. Benchmark beberapa proses/SSH session di `tests/MIPS-MT-BENCHMARK.md` hanya menjadi pembanding kapasitas; hasilnya tidak boleh dianggap sebagai bukti worker pool satu-session lebih cepat.
 
 ## Tahap 5 — Validasi perangkat OpenWrt MT7621 fisik
 
