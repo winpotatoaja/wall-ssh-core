@@ -8,7 +8,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: openwrt24-mipsel-r40-${{ github.ref }}
+  group: openwrt24-mipsel-r41-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   sdk:
@@ -228,7 +228,7 @@ jobs:
                 : "OpenWrt 24.10.7 mipsel_24kc SDK build failed.",
               target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
-      - name: Dispatch single-endpoint r40 Datapacket bandwidth test
+      - name: Dispatch single-endpoint r41 Datapacket bandwidth test
         if: success()
         uses: actions/github-script@v7
         with:
@@ -243,7 +243,7 @@ jobs:
                 source_sha: context.sha
               }
             });
-            core.info("Queued Datapacket-only r40 benchmark using SDK run " + context.runId + " and source " + context.sha);
+            core.info("Queued Datapacket-only r41 benchmark using SDK run " + context.runId + " and source " + context.sha);
   vm:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
     runs-on: ubuntu-26.04
