@@ -5814,12 +5814,16 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
      * still starts exactly one SSH Owner and one upstream SSH session. */
     g_io_worker_count = io_worker_count_for_cpu_count(g_detected_cpu_count);
     *out_count = 1;
+    /* Preserve the established single-session diagnostic consumed by the
+     * integration harness; report the auxiliary pool separately. */
     fprintf(stderr,
-            "[CPU] detected=%ld io_workers=%u/%u SSH_sessions=1 mode=single-owner; "
+            "[CPU] detected=%ld SSH_sessions=1 mode=single-session; "
             "legacy requested workers=%d%s\\n",
-            g_detected_cpu_count, g_io_worker_count,
-            (unsigned int)IO_WORKER_POOL_MAX_WORKERS, requested_workers,
+            g_detected_cpu_count, requested_workers,
             manual_workers ? " (ignored to prevent multiple SSH logins)" : "");
+    fprintf(stderr,
+            "[IO worker] CPU topology selected=%u/%u auxiliary I/O workers\\n",
+            g_io_worker_count, (unsigned int)IO_WORKER_POOL_MAX_WORKERS);
     return 0;
 }
 
