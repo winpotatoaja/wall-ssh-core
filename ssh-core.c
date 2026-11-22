@@ -904,21 +904,47 @@ typedef struct {
     char  *data;
     size_t len;
     size_t cap;
+    int    failed;
 } sbuf_t;
 
-static void sbuf_append(sbuf_t *sb, const char *s, size_t n) {
-    if (n == 0) return;
-    if (sb->len + n + 1 > sb->cap) {
-        size_t ncap = (sb->cap == 0) ? 4096 : sb->cap * 2;
-        while (ncap < sb->len + n + 1) ncap *= 2;
+static int sbuf_append(sbuf_t *sb, const char *s, size_t n) {
+    if (!sb || (!s && n != 0U)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (sb->failed) {
+        errno = ENOMEM;
+        return -1;
+    }
+    if (n == 0U) return 0;
+    if (n > SIZE_MAX - sb->len - 1U) {
+        sb->failed = 1;
+        errno = EOVERFLOW;
+        return -1;
+    }
+    size_t needed = sb->len + n + 1U;
+    if (needed > sb->cap) {
+        size_t ncap = sb->cap ? sb->cap : 4096U;
+        while (ncap < needed) {
+            if (ncap > SIZE_MAX / 2U) {
+                ncap = needed;
+                break;
+            }
+            ncap *= 2U;
+        }
         char *p = realloc(sb->data, ncap);
-        if (!p) abort();
+        if (!p) {
+            sb->failed = 1;
+            errno = ENOMEM;
+            return -1;
+        }
         sb->data = p;
         sb->cap = ncap;
     }
     memcpy(sb->data + sb->len, s, n);
     sb->len += n;
     sb->data[sb->len] = '\0';
+    return 0;
 }
 
 static char *replace_all_str(const char *src, const char *find, const char *repl) {
@@ -935,6 +961,10 @@ static char *replace_all_str(const char *src, const char *find, const char *repl
         sbuf_append(&sb, p, (size_t)(hit - p));
         sbuf_append(&sb, repl, rlen);
         p = hit + flen;
+    }
+    if (sb.failed) {
+        free(sb.data);
+        return NULL;
     }
     if (!sb.data) sb.data = strdup("");
     return sb.data;
@@ -1014,11 +1044,17 @@ static char *translate_payload(const char *raw, const app_cfg_t *cfg, int is_tls
         p++;
     }
     free(cur);
+    if (exp_sb.failed) {
+        free(exp_sb.data);
+        return NULL;
+    }
     cur = exp_sb.data ? exp_sb.data : strdup("");
+    if (!cur) return NULL;
 
     char *unesc = unescape_backslashes(cur);
     free(cur);
     cur = unesc;
+    if (!cur) return NULL;
 
     const char *port = cfg->host_port[0] ? cfg->host_port : (is_tls ? "443" : "80");
     const char *pport = cfg->proxy_port[0] ? cfg->proxy_port : (is_tls ? "443" : "80");
@@ -1054,6 +1090,7 @@ static char *translate_payload(const char *raw, const app_cfg_t *cfg, int is_tls
         char *next = replace_all_str(cur, pairs[i][0], pairs[i][1]);
         free(cur);
         cur = next;
+        if (!cur) return NULL;
     }
 
     const char *raw_tags[4] = {"[raw]", "[real_raw]", "[realData]", "[netData]"};
@@ -1066,6 +1103,16 @@ static char *translate_payload(const char *raw, const app_cfg_t *cfg, int is_tls
             sbuf_append(&sb, cur, (size_t)(hit - cur));
             sbuf_append(&sb, repl, strlen(repl));
             sbuf_append(&sb, hit + strlen(raw_tags[t]), strlen(hit + strlen(raw_tags[t])));
+            if (sb.failed) {
+                free(sb.data);
+                free(cur);
+                return NULL;
+            }
+            if (!sb.data) sb.data = strdup("");
+            if (!sb.data) {
+                free(cur);
+                return NULL;
+            }
             free(cur);
             cur = sb.data;
         }
@@ -1081,6 +1128,11 @@ static char *translate_payload(const char *raw, const app_cfg_t *cfg, int is_tls
             sbuf_append(&sb, cur, (size_t)(hit - cur));
             sbuf_append(&sb, key, strlen(key));
             sbuf_append(&sb, hit + strlen(ws_tags[t]), strlen(hit + strlen(ws_tags[t])));
+            if (sb.failed) {
+                free(sb.data);
+                free(cur);
+                return NULL;
+            }
             free(cur);
             cur = sb.data;
         }
@@ -1157,6 +1209,11 @@ static char *translate_payload(const char *raw, const app_cfg_t *cfg, int is_tls
             sbuf_append(&sb, chosen, chosen_len);
             sbuf_append(&sb, endb + 1, strlen(endb + 1));
             free(list);
+            if (sb.failed) {
+                free(sb.data);
+                free(cur);
+                return NULL;
+            }
             if (!sb.data) {
                 sb.data = strdup("");
                 if (!sb.data) {
