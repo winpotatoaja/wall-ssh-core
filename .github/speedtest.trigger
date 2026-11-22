@@ -1,1 +1,2 @@
-R40 MT7621 MIPS SSH cipher experiment: prefer AES-128-CTR before AES-GCM on mipsel_24kc; build exact SDK artifact then auto-dispatch one Datapacket URL direct+SOCKS5 pair, 50-second timeout, no retries, one SSH session.
+sdk_run_id=45077446350
+source_sha=35b0a478587a81773859911dcb68523d6ea0c058
