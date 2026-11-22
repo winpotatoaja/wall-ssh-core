@@ -1,1 +1,1 @@
-r39 focused Datapacket diagnostics: corrected /proc stat CPU accounting, per-TID CPU sampling, default-route interface discovery and RX/TX counters; 100MB direct+SOCKS5 only, 50-second hard timeout, no retries, exactly one SSH session.
+r39 Datapacket diagnostic rerun: per-process/per-TID CPU normalized by average per-vCPU /proc/stat ticks; mark main TID ssh_owner; reset CPU/thread/network counters immediately before SOCKS5 so direct transfer is excluded; one 100MB pair, 50-second hard limit, no retry, one SSH session.
