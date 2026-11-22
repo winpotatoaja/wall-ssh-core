@@ -1,0 +1,37 @@
+name: Passwall SSH Core - MT7621 QEMU Speedtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_run_id:
+        description: "Successful MIPS SDK run containing the package artifact"
+        required: true
+        default: "44998188775"
+        type: string
+      duration:
+        description: "Sustained download test duration (seconds)"
+        required: true
+        default: "60"
+        type: choice
+        options:
+          - "30"
+          - "60"
+          - "120"
+          - "180"
+
+permissions:
+  contents: read
+  actions: read
+  statuses: write
+
+jobs:
+  qemu-speedtest:
+    name: OpenWrt 24.10.7 MT7621 sustained SOCKS5 benchmark
+    uses: ./.github/workflows/passwall-ssh-core-openwrt24-mipsel-vm.yml
+    with:
+      sdk_run_id: ${{ inputs.sdk_run_id }}
+      benchmark_duration: ${{ fromJSON(inputs.duration) }}
+    permissions:
+      contents: read
+      actions: read
+      statuses: write
