@@ -149,7 +149,7 @@ run_diag_self_test() {
     fi
 
     thread_snapshot 4242 "$TEST_ROOT/tasks" > "$TEST_ROOT/threads.now"
-    if ! grep -Fq '4242 168 relay_owner' "$TEST_ROOT/threads.now"; then
+    if ! grep -Fq '4242 168 ssh_owner' "$TEST_ROOT/threads.now"; then
         echo "DIAG SELF-TEST FAIL: per-TID snapshot did not retain TID/name/ticks"
         rm -rf "$TEST_ROOT"
         return 1
@@ -162,9 +162,9 @@ run_diag_self_test() {
         rm -rf "$TEST_ROOT"
         return 1
     fi
-    printf '%s\n' '4242 68 relay_owner' > "$TEST_ROOT/threads.prev"
+    printf '%s\n' '4242 68 ssh_owner' > "$TEST_ROOT/threads.prev"
     THREAD_TEST=$(thread_cpu_line "$TEST_ROOT/threads.prev" "$TEST_ROOT/threads.now" "$CPU_REFERENCE")
-    if ! printf '%s' "$THREAD_TEST" | grep -Fq 'tid=4242/relay_owner:100.0%'; then
+    if ! printf '%s' "$THREAD_TEST" | grep -Fq 'tid=4242/ssh_owner:100.0%'; then
         echo "DIAG SELF-TEST FAIL: per-TID CPU delta calculation is incorrect: $THREAD_TEST"
         rm -rf "$TEST_ROOT"
         return 1
