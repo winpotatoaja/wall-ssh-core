@@ -2877,13 +2877,15 @@ static int submit_s2c_worker_write(io_worker_pool_t *pool,
     if (client_lifetime_acquire(&c->lifetime, c->client_id, c->generation) < 0)
         return -1;
     if (io_worker_completion_tracker_register(tracker, &ref) < 0) {
-        (void)client_lifetime_release(&c->lifetime, c->client_id, c->generation);
+        if (client_lifetime_release(&c->lifetime, ref.client_id, ref.generation) < 0)
+            log_red("[IO worker] lifetime release after tracker registration failure: %s",
+                    strerror(errno));
         return -1;
     }
     if (io_worker_pool_submit_to_worker(pool, &task, worker_id) < 0) {
         int saved_errno = errno;
-        (void)io_worker_completion_tracker_cancel(tracker, &ref);
-        (void)client_lifetime_release(&c->lifetime, c->client_id, c->generation);
+        if (rollback_io_worker_registration(c, tracker, &ref) < 0)
+            return -1;
         errno = saved_errno;
         return saved_errno == EAGAIN ? 1 : -1;
     }
