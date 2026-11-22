@@ -102,13 +102,6 @@ static long detect_available_cpu_count(void) {
     return online_count > 0 ? online_count : 1;
 }
 
-/* A process owns exactly one upstream SSH session. CPU count is used
- * for auxiliary I/O parallelism, never to multiply SSH authentications. */
-static int ssh_session_count_for_cpu_count(long cpu_count) {
-    (void)cpu_count;
-    return 1;
-}
-
 static long g_detected_cpu_count = 1;
 static uint32_t g_io_worker_count = 1U;
 static int g_worker_count_auto = 1;
