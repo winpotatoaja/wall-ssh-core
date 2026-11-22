@@ -1923,10 +1923,12 @@ static int run_perf_metrics_regression(void) {
 
 static int run_worker_count_regressions(void) {
     static const long cpu_counts[] = { -2, 0, 1, 2, 3, 4, 8, 16 };
+    static const uint32_t expected_io_workers[] = { 1, 1, 1, 2, 3, 4, 4, 4 };
     int failures = 0;
 
     for (size_t i = 0; i < sizeof(cpu_counts) / sizeof(cpu_counts[0]); i++) {
         int sessions = ssh_session_count_for_cpu_count(cpu_counts[i]);
+        uint32_t io_workers = io_worker_count_for_cpu_count(cpu_counts[i]);
         if (sessions != 1) {
             fprintf(stderr,
                     "[FAIL] CPU count %ld selected %d SSH sessions; expected exactly 1\\n",
@@ -1936,17 +1938,29 @@ static int run_worker_count_regressions(void) {
             printf("[PASS] CPU count %ld keeps exactly one SSH session\\n",
                    cpu_counts[i]);
         }
+        if (io_workers != expected_io_workers[i]) {
+            fprintf(stderr,
+                    "[FAIL] CPU count %ld selected %u I/O workers; expected %u\\n",
+                    cpu_counts[i], io_workers, expected_io_workers[i]);
+            failures++;
+        } else {
+            printf("[PASS] CPU count %ld selects %u bounded I/O worker(s)\\n",
+                   cpu_counts[i], io_workers);
+        }
     }
 
     long detected = detect_available_cpu_count();
     int sessions = ssh_session_count_for_cpu_count(detected);
-    if (detected < 1 || sessions != 1) {
-        fprintf(stderr, "[FAIL] live CPU detection returned %ld CPU(s), SSH sessions=%d\\n",
-                detected, sessions);
+    uint32_t io_workers = io_worker_count_for_cpu_count(detected);
+    if (detected < 1 || sessions != 1 || io_workers < 1U ||
+        io_workers > IO_WORKER_POOL_MAX_WORKERS) {
+        fprintf(stderr,
+                "[FAIL] live CPU detection returned %ld CPU(s), SSH sessions=%d, I/O workers=%u\\n",
+                detected, sessions, io_workers);
         failures++;
     } else {
-        printf("[PASS] live CPU detection: %ld available CPU(s), exactly 1 SSH session\\n",
-               detected);
+        printf("[PASS] live CPU detection: %ld available CPU(s), %u I/O worker(s), exactly 1 SSH session\\n",
+               detected, io_workers);
     }
     return failures;
 }
