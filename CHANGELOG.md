@@ -1,5 +1,8 @@
 ## Unreleased
 
+- Complete native regressions and OpenWrt 24.10.7 mipsel_24kc SDK build for S2C direct nonblocking r39. SDK run `45020186643` produced the source-matched IPK artifact `14753870688`, version `1.0.0-r39`, architecture `mipsel_24kc`, SHA-256 `702b00fc6c5da703a9fb848f39e0a7418d7766df10746d960e5dca032eba9350`. MT7621 QEMU validation is the next required gate.
+
+
 - Align MT7621 QEMU package-version checks and the dedicated direct-vs-SOCKS bandwidth workflow with r39 so stale r38 artifacts cannot be benchmarked as the new S2C patch.
 
 - Change S2C download forwarding to direct nonblocking `send()` by the single SSH Owner; keep EPOLLOUT active while S2C bytes remain and retain the worker pool only for C2S socket reads. Remove the per-chunk S2C worker submit/completion round-trip and its in-flight state.

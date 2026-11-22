@@ -456,3 +456,19 @@ lulus benchmark bandwidth.
 
 
 - Workflow alignment: the MT7621 SDK/QEMU version guard and the separate direct-vs-SOCKS bandwidth workflow now target r39, preventing an r38 IPK from being mistaken for the S2C direct-send patch.
+
+
+## Validasi r39 — OpenWrt 24.10.7 MIPS SDK — 2026-11-22
+
+**Status: LULUS (native regression + MIPS SDK build).**
+
+- GitHub Actions SDK run: [45020186643](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/45020186643).
+- Source SHA yang dibangun: `0d48d4e5d5d2298ed057d3e5af7fc147fec5f7a0` (patch S2C direct nonblocking).
+- Artifact ID: `14753870688`; nama artifact `passwall-ssh-core-openwrt-24.10.7-mipsel-ipk`.
+- IPK: `passwall-ssh-core_1.0.0-r39_mipsel_24kc.ipk`, ukuran 45,024 byte.
+- Metadata IPK diverifikasi: Package `passwall-ssh-core`, Version `1.0.0-r39`, Architecture `mipsel_24kc`.
+- SHA-256 IPK: `702b00fc6c5da703a9fb848f39e0a7418d7766df10746d960e5dca032eba9350`.
+- Native regression lulus: HTTP/SOCKS/core state, SPSC normal + counter rollover, TLS Engine duplex/graceful close, I/O worker pool (termasuk stress 50,000 task), client lifetime, completion tracker, dan client event token.
+- Cross-compile MIPS dan packaging IPK selesai sukses. Warning `STAGING_DIR not defined` muncul pada helper cross-compile terpisah; semua helper tetap dibuat dan artifact terunggah.
+
+**Gerbang berikutnya:** MT7621 QEMU harus menginstal IPK r39 dari artifact SDK di atas. Validasi mencakup integritas transfer, half-close, full-duplex, multi-client pada satu sesi SSH, dan pemeriksaan versi paket. Belum ada klaim throughput r39 sebelum QEMU dan benchmark bandwidth khusus selesai.
