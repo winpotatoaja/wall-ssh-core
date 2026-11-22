@@ -2,8 +2,10 @@ r39 internet bandwidth benchmark
 sdk_run_id=45020186643
 qemu_run_id=45020754464
 download_size=100MB
-endpoints=vultr-singapore,linode-singapore
+endpoints=digitalocean-singapore,ovh-singapore
+per_transfer_max_time=50_seconds
+connect_timeout=15_seconds
 transfer_cap=110000000_bytes
 minimum_payload=95000000_bytes
-per_transfer_timeout=600_seconds
 retries=0
+skip_failed_endpoint_pair=yes
