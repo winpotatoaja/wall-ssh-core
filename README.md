@@ -5,7 +5,7 @@ keputusan, dan pekerjaan tersisa dicatat berdasarkan lima tahap di bawah. Status
 hanya boleh dinaikkan menjadi **LULUS** setelah seluruh kriteria tahap tersebut
 dibuktikan oleh hasil pengujian yang tercatat.
 
-Terakhir diperbarui: 2026-11-22  
+Terakhir diperbarui: 2026-11-23  
 Branch pengerjaan: `phase3/io-worker-pool-foundation`
 
 ## Ringkasan status
@@ -188,19 +188,13 @@ Implementasi yang sudah ada pada branch ini:
 
 <badge color="warning">VALIDASI FUNGSIONAL LULUS — RETEST THROUGHPUT TERBUKA</badge>
 
-### Hasil r40 dan rencana retune S2C — r41
+### Hasil benchmark r41 dan instrumentasi bottleneck — r42
 
-- Benchmark r40 selesai dengan satu SSH authentication/session dan cipher yang benar-benar dinegosiasikan `aes128-ctr` + `hmac-sha2-256`. Kecepatan direct 20,69 MiB/s dan SOCKS5 5,63 MiB/s. Dibanding r39 AES-GCM (8,88 MiB/s SOCKS5), throughput SOCKS5 turun sekitar 36,6%.
-- Thread `ssh_owner` tetap sekitar 100% satu vCPU; empat worker I/O lokal tetap 0%. Pada saat transfer, `socks_tx_eagain=0`, `socks_tx_partial=0`, `s2c_epollout_missing=0`, dan `pend_blk=0`. Jalur S2C memanggil `libssh2_channel_read()` dan mengirim ring ke client dari SSH Owner. Worker aktif untuk operasi socket C2S, bukan dekripsi SSH S2C.
-- r41 mengembalikan AES-128-GCM sebagai preferensi MIPS pertama (CTR tetap fallback) dan menggandakan `S2C_RELAY_BUF_SIZE` menjadi 256 KiB. Tujuan perubahan buffer adalah mengurangi overhead per batch; pekerjaan kriptografi libssh2 tetap serial dan belum diklaim teratasi.
-- Benchmark r41 tetap hanya satu URL Datapacket, satu direct dan satu SOCKS5, batas 50 detik per transfer, tanpa retry, dan pemeriksaan satu sesi SSH serta cipher AES-GCM aktual.
+- SDK r41 berhasil pada run `45081609577`; benchmark otomatis run `45081951698` (artifact `14777935844`) juga berhasil. Satu objek Datapacket 100.000.000 byte selesai pada direct `14,70 MiB/s` dan SOCKS5 `6,80 MiB/s` (46,3% dari baseline direct), keduanya HTTP 200 dan ukuran byte cocok.
+- Selama bulk transfer, `ssh_owner` memakai sekitar 100% satu vCPU; keempat auxiliary worker TID tetap 0%. `tls_rx_calls=0`, `socks_tx_eagain=0`, `socks_tx_partial=0`, `s2c_epollout_missing=0`, dan `pend_blk=0`. Bukti ini menempatkan hambatan pada jalur SSH Owner serial, tetapi belum memisahkan biaya dekripsi OpenSSL dari framing/antrean paket libssh2.
+- Perbandingan r39/r40 bukan A/B cipher yang terkontrol: direct baseline internet berubah antar-run. Angka kecepatan itu hanya observasi; belum cukup untuk menyimpulkan perbedaan kecepatan disebabkan oleh cipher.
+- r41 mempertahankan AES-128-GCM sebagai preferensi MIPS pertama dan S2C ring 256 KiB. Perubahan ini tidak diubah pada r42 agar pengukuran timing tidak tercampur dengan tuning algoritma atau ukuran buffer.
+- r42 menambahkan timing `CLOCK_MONOTONIC` yang hanya aktif ketika `LOG_PERF=1`: `perf_s2c_read_us` mengukur seluruh `libssh2_channel_read()`; `perf_ssh_recv_cb_us` mengukur seluruh callback receive; `perf_ssh_recv_s2c_cb_us` adalah bagian callback yang terjadi di dalam channel read; `perf_s2c_internal_us` adalah selisih channel-read dengan callback nested; `perf_ssh_recv_syscall_us` mengukur syscall `recv()`; dan `perf_socks_tx_us` mengukur drain S2C ke socket lokal.
+- `perf_s2c_internal_us` adalah estimasi waktu internal library di luar callback receive (framing, dekripsi/authentication, packet-list/queue handling, copy, dan pekerjaan channel lain), bukan pengukuran AES-GCM murni. Timer berbasis elapsed monotonic time juga mencakup waktu terjadwal dan kernel; overhead instrumentasi perlu diperhitungkan saat membaca hasil.
 
-**Catatan validasi pertama:** SDK r41 berhenti pada regresi native yang masih mengharapkan S2C 128 KiB. Assertion diperbarui agar mengharapkan 256 KiB; kode produksi tidak menyebabkan kegagalan tersebut.
-
-**Status: eksperimen retune r41 menunggu validasi speed.** Kecepatan harus dibandingkan dengan r39 menggunakan hasil benchmark aktual; hasil QEMU bukan bukti performa perangkat MT7621 fisik.
-
-
-Catatan r41: perubahan cipher AES-GCM-first dan S2C ring 256 KiB sudah masuk. Regresi native kapasitas buffer kini mengunci C2S 32 KiB dan S2C 256 KiB. Build SDK MIPS akan dijalankan ulang menggunakan gate native yang sudah diperbarui.
-
-
-r41 retry: native assertion has been aligned with the 256 KiB S2C ring. Re-run the MIPS SDK gate, then automatically benchmark the exact matching IPK against Datapacket.
+**Status:** r41 baseline telah selesai divalidasi di SDK dan QEMU; bottleneck performa masih terbuka. r42 adalah diagnostic build, bukan klaim speedup. Validasi perangkat MT7621 fisik tetap belum dilakukan.
