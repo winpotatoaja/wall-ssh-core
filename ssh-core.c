@@ -334,6 +334,10 @@ typedef struct {
     uint64_t tls_rx_calls, tls_rx_bytes, tls_rx_eagain;
     uint64_t ssh_rx_bytes, ssh_rx_eagain;
     uint64_t s2c_read_calls, s2c_read_bytes, s2c_read_eagain;
+    uint64_t s2c_read_ns, ssh_recv_cb_ns, ssh_recv_s2c_cb_ns;
+    uint64_t ssh_recv_syscall_ns, socks_tx_ns;
+    uint64_t ssh_recv_cb_calls, ssh_recv_s2c_cb_calls;
+    uint64_t ssh_recv_syscall_calls, socks_tx_flush_calls;
     uint64_t socks_tx_calls, socks_tx_bytes, socks_tx_eagain, socks_tx_partial;
     uint64_t c2s_rx_bytes, c2s_ssh_write_bytes;
     uint64_t c2s_post_eof_rx_bytes, c2s_post_eof_ssh_write_bytes;
@@ -345,6 +349,7 @@ typedef struct {
 } perf_stats_t;
 
 static __thread perf_stats_t g_perf_stats;
+static __thread unsigned int g_perf_s2c_read_depth = 0;
 static __thread int g_log_perf = 0;
 static __thread long long g_perf_window_start_ms = 0;
 
@@ -1395,6 +1400,14 @@ static long long now_ms(void) {
     return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
 }
 
+/* High-resolution elapsed-time clock used only by LOG_PERF instrumentation. */
+static uint64_t perf_now_ns(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) +
+           (uint64_t)ts.tv_nsec;
+}
+
 static void perf_begin(long long now) {
     if (!g_log_perf) return;
     memset(&g_perf_stats, 0, sizeof(g_perf_stats));
@@ -1443,6 +1456,10 @@ static void perf_log_interval(long long now) {
         }
     }
 
+    uint64_t s2c_internal_ns =
+        g_perf_stats.s2c_read_ns >= g_perf_stats.ssh_recv_s2c_cb_ns
+        ? g_perf_stats.s2c_read_ns - g_perf_stats.ssh_recv_s2c_cb_ns : 0;
+
     log_raw("[PERF] span_ms=%lld clients=%d relay=%u "
             "ep_calls=%llu ep_wait_ms=%llu ep_wait_max_ms=%llu ep_wakeups=%llu ep_timeouts=%llu "
             "tls_rx_calls=%llu tls_rx_bytes=%llu tls_rx_eagain=%llu ssh_rx_bytes=%llu ssh_rx_eagain=%llu "
@@ -1453,7 +1470,12 @@ static void perf_log_interval(long long now) {
             "epoll_ctl_add_fail=%llu epoll_ctl_mod_fail=%llu epoll_ctl_errno=%d "
             "c2s_used_sum=%zu c2s_used_max=%zu c2s_nonempty=%u c2s_window_waiters=%u ssh_eof_clients=%u ssh_eof_c2s_pending=%u "
             "s2c_used_sum=%zu s2c_used_max=%zu s2c_nonempty=%u epollout_armed=%u s2c_epollout_missing=%u "
-            "s2c_full=%llu libssh2_eagain=%llu pend_blk=%llu",
+            "s2c_full=%llu libssh2_eagain=%llu pend_blk=%llu "
+            "perf_s2c_read_us=%llu perf_ssh_recv_cb_us=%llu "
+            "perf_ssh_recv_s2c_cb_us=%llu perf_s2c_internal_us=%llu "
+            "perf_ssh_recv_syscall_us=%llu perf_socks_tx_us=%llu "
+            "ssh_recv_cb_calls=%llu ssh_recv_s2c_cb_calls=%llu "
+            "ssh_recv_syscall_calls=%llu socks_tx_flush_calls=%llu",
             span_ms, g_client_count, relay_clients,
             (unsigned long long)g_perf_stats.epoll_calls,
             (unsigned long long)g_perf_stats.epoll_wait_ms,
@@ -1488,7 +1510,17 @@ static void perf_log_interval(long long now) {
             epollout_armed_clients, s2c_epollout_missing,
             (unsigned long long)g_perf_stats.s2c_full,
             (unsigned long long)g_perf_stats.libssh2_eagain,
-            (unsigned long long)g_perf_stats.pending_blocks);
+            (unsigned long long)g_perf_stats.pending_blocks,
+            (unsigned long long)(g_perf_stats.s2c_read_ns / 1000U),
+            (unsigned long long)(g_perf_stats.ssh_recv_cb_ns / 1000U),
+            (unsigned long long)(g_perf_stats.ssh_recv_s2c_cb_ns / 1000U),
+            (unsigned long long)(s2c_internal_ns / 1000U),
+            (unsigned long long)(g_perf_stats.ssh_recv_syscall_ns / 1000U),
+            (unsigned long long)(g_perf_stats.socks_tx_ns / 1000U),
+            (unsigned long long)g_perf_stats.ssh_recv_cb_calls,
+            (unsigned long long)g_perf_stats.ssh_recv_s2c_cb_calls,
+            (unsigned long long)g_perf_stats.ssh_recv_syscall_calls,
+            (unsigned long long)g_perf_stats.socks_tx_flush_calls);
 
     memset(&g_perf_stats, 0, sizeof(g_perf_stats));
     g_perf_window_start_ms = now;
@@ -1897,8 +1929,8 @@ static ssize_t mark_upstream_rx_terminal(upstream_ctx_t *u, ssize_t result) {
     return u->rx_flush_eagain ? -EAGAIN : result;
 }
 
-static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length,
-                           int flags, void **abstract) {
+static ssize_t ssh_recv_cb_impl(libssh2_socket_t sock, void *buffer, size_t length,
+                                int flags, void **abstract) {
     (void)flags;
     upstream_ctx_t *u = (upstream_ctx_t *)(*abstract);
     if (!u) return -EIO;
@@ -1948,7 +1980,19 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length,
         return mark_upstream_rx_terminal(u, -(ssize_t)err);
     }
     ssize_t r;
-    do { r = recv(sock, buffer, length, 0); } while (r < 0 && errno == EINTR);
+    do {
+        uint64_t recv_started_ns = g_log_perf ? perf_now_ns() : 0;
+        r = recv(sock, buffer, length, 0);
+        if (g_log_perf) {
+            g_perf_stats.ssh_recv_syscall_calls++;
+            if (recv_started_ns != 0) {
+                uint64_t recv_ended_ns = perf_now_ns();
+                if (recv_ended_ns >= recv_started_ns)
+                    g_perf_stats.ssh_recv_syscall_ns +=
+                        recv_ended_ns - recv_started_ns;
+            }
+        }
+    } while (r < 0 && errno == EINTR);
     if (r > 0) {
         if (g_log_perf) g_perf_stats.ssh_rx_bytes += (uint64_t)r;
         u->last_activity_ms = now_ms();
@@ -1962,6 +2006,29 @@ static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length,
     }
     if (r == 0) return mark_upstream_rx_terminal(u, 0);
     return mark_upstream_rx_terminal(u, -(ssize_t)(recv_error ? recv_error : EIO));
+}
+
+/* Time the callback and its subset nested inside an S2C channel read. */
+static ssize_t ssh_recv_cb(libssh2_socket_t sock, void *buffer, size_t length,
+                           int flags, void **abstract) {
+    uint64_t started_ns = g_log_perf ? perf_now_ns() : 0;
+    int nested_in_s2c = g_log_perf && g_perf_s2c_read_depth > 0;
+    if (g_log_perf) {
+        g_perf_stats.ssh_recv_cb_calls++;
+        if (nested_in_s2c) g_perf_stats.ssh_recv_s2c_cb_calls++;
+    }
+
+    ssize_t rc = ssh_recv_cb_impl(sock, buffer, length, flags, abstract);
+    if (started_ns != 0) {
+        uint64_t ended_ns = perf_now_ns();
+        if (ended_ns >= started_ns) {
+            uint64_t elapsed_ns = ended_ns - started_ns;
+            g_perf_stats.ssh_recv_cb_ns += elapsed_ns;
+            if (nested_in_s2c)
+                g_perf_stats.ssh_recv_s2c_cb_ns += elapsed_ns;
+        }
+    }
+    return rc;
 }
 
 static ssize_t ssh_send_cb(libssh2_socket_t sock, const void *buffer, size_t length,
@@ -2900,8 +2967,17 @@ static int flush_s2c_to_client(int epfd, client_conn_t *c) {
         return 0;
 
     size_t before = c->s2c.used;
-    if (send_from_rb(c->fd, &c->s2c, 0) < 0)
-        return -1;
+    uint64_t tx_started_ns = g_log_perf ? perf_now_ns() : 0;
+    int tx_rc = send_from_rb(c->fd, &c->s2c, 0);
+    if (g_log_perf) {
+        g_perf_stats.socks_tx_flush_calls++;
+        if (tx_started_ns != 0) {
+            uint64_t tx_ended_ns = perf_now_ns();
+            if (tx_ended_ns >= tx_started_ns)
+                g_perf_stats.socks_tx_ns += tx_ended_ns - tx_started_ns;
+        }
+    }
+    if (tx_rc < 0) return -1;
 
     if (c->s2c.used < before)
         c->last_activity_ms = now_ms();
@@ -3367,11 +3443,23 @@ static void tls_finish_libssh2_call(upstream_ctx_t *u, int returned_eagain) {
 static ssize_t channel_read_with_rx_flush(upstream_ctx_t *u,
                                           LIBSSH2_CHANNEL *channel,
                                           char *buffer, size_t length) {
-    if (g_log_perf) g_perf_stats.s2c_read_calls++;
+    uint64_t read_started_ns = g_log_perf ? perf_now_ns() : 0;
+    if (g_log_perf) {
+        g_perf_stats.s2c_read_calls++;
+        g_perf_s2c_read_depth++;
+    }
     int previous = u->rx_flush_eagain;
     u->rx_flush_eagain = 1;
     tls_begin_libssh2_call(u);
     ssize_t rc = libssh2_channel_read(channel, buffer, length);
+    if (g_log_perf) {
+        if (read_started_ns != 0) {
+            uint64_t read_ended_ns = perf_now_ns();
+            if (read_ended_ns >= read_started_ns)
+                g_perf_stats.s2c_read_ns += read_ended_ns - read_started_ns;
+        }
+        if (g_perf_s2c_read_depth > 0) g_perf_s2c_read_depth--;
+    }
     tls_finish_libssh2_call(u, rc == LIBSSH2_ERROR_EAGAIN);
     u->rx_flush_eagain = previous;
     if (g_log_perf) {
