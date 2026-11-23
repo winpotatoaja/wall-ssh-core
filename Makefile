@@ -23,7 +23,7 @@ define Package/passwall-ssh-core
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Single-session non-blocking libssh2 SOCKS5 relay core
-  DEPENDS:=+libssh2 +libopenssl $(CORE_ARCH_DEPENDS)
+  DEPENDS:=+libssh2 +libopenssl
 endef
 
 define Package/passwall-ssh-core/description
