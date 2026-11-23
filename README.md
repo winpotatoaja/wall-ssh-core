@@ -10,7 +10,7 @@ Branch pengerjaan: `benchmark/r39-internet-speedtest`
 
 ## r49 — Poly1305 dipindahkan ke worker dan overlap dengan dekripsi ChaCha20
 
-**Status: patch fallback diperbaiki setelah regression SDK #609 gagal; menunggu validasi ulang native/SDK. Belum ada klaim kenaikan throughput.**
+**Status: fallback fix r49 siap untuk validasi ulang native dan OpenWrt MIPS SDK. Belum ada klaim kenaikan throughput.**
 
 **Hasil validasi awal SDK #609 (45223162174):** native relay regressions lulus,
 SDK berhasil diunduh, dan patched libssh2 berhasil dikonfigurasi untuk MIPS.
