@@ -135,7 +135,7 @@ net_rate_line() {
 }
 
 run_diag_self_test() {
-    TEST_ROOT="/tmp/r48-speedtest-diag-test"
+    TEST_ROOT="/tmp/r49-speedtest-diag-test"
     rm -rf "$TEST_ROOT"
     mkdir -p "$TEST_ROOT/tasks/4242" "$TEST_ROOT/net/testnet/statistics" "$TEST_ROOT/net/lo/statistics" || return 2
 
@@ -409,7 +409,7 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "r48 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
+      echo "r49 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
       cat "$RESULT/download-results.log"
       echo "--- PAIRS ---"
       cat "$RESULT/pairs.log"
