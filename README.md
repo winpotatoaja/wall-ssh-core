@@ -212,6 +212,14 @@ Implementasi yang sudah ada pada branch ini:
 
 ### r43 — instrumentasi internal libssh2
 
+**Catatan perbaikan build dan evaluasi cipher (23 November 2026):**
+
+- SDK run `45088480296` berhenti pada tahap native regression, sebelum mengunduh SDK atau mengompilasi libssh2. Penyebabnya dua pemanggilan `perf_log_interval()` di `tests/http_parser_test.c` masih memakai signature lama; fungsi sekarang menerima `LIBSSH2_SESSION *diag_session`. Test harness diperbaiki dengan mengirim `NULL` (jalur snapshot diagnostik memang opsional). Belum ada perubahan runtime relay dari perbaikan ini.
+- Benchmark wolfSSL pada GL-AR300M16/QCA9531 MIPS 24Kc 650 MHz menunjukkan ChaCha20-Poly1305 15,42 MiB/s dan OpenSSL AES-128-GCM 5,04 MiB/s dengan blok 16 KiB. Ini mendukung eksperimen ChaCha pada CPU MIPS tanpa AES instructions, tetapi bukan hasil benchmark SSH `libssh2` atau MT7621.
+- Hambatan integrasi: OpenWrt package saat ini memakai libssh2 1.11.0, dan source cipher table-nya tidak mengimplementasikan `chacha20-poly1305@openssh.com`. Mengubah urutan cipher atau konfigurasi OpenSSL saja tidak dapat mengaktifkannya. Diperlukan implementasi protokol SSH ChaCha20-Poly1305 di libssh2 (atau penggantian backend SSH yang kompatibel) beserta tes interoperabilitas dan performa.
+- MT7621 EIP93 mendaftarkan AES-ECB/CBC/CTR dan sejumlah authenc/IPsec transform, bukan AES-GCM atau ChaCha20-Poly1305. Selain itu, keberadaan driver kernel Crypto API tidak otomatis berarti `EVP_Cipher()` OpenSSL/libssh2 menggunakan hardware tersebut. Jalur itu harus dibuktikan terpisah.
+- Negosiasi ChaCha TLS/HTTPS adalah lapisan berbeda dari cipher SSH. Cipher TLS yang ditawarkan dan dipilih bergantung pada dukungan serta kebijakan client/server; tidak boleh diasumsikan otomatis mengubah cipher SSH di dalam sesi.
+
 - r43 mempertahankan cipher AES-128-GCM dan S2C ring 256 KiB dari r41/r42. Perubahan ini diagnostik; belum ada klaim peningkatan throughput.
 - SDK akan membangun ulang source libssh2 **1.11.0** yang dipakai OpenWrt 24.10.7. Patcher `tools/apply_libssh2_r43_diag.py` diterapkan setelah target prepare dan sebelum compile. Paket artifact SDK berisi dua IPK dari commit/source SHA yang sama: `passwall-ssh-core` r43 dan patched `libssh2 1.11.0-1`.
 - QEMU benchmark memverifikasi checksum kedua IPK, menginstal ulang patched libssh2 secara paksa, memeriksa simbol API diagnostik pada library runtime, lalu menjalankan satu download Datapacket direct dan satu SOCKS5 seperti sebelumnya. Batas tiap transfer 50 detik; tidak ada retry atau sesi SSH tambahan.
