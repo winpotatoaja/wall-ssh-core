@@ -6,6 +6,7 @@
 #include <libssh2.h>
 #ifdef SSH_CORE_MIPSEL_24KC
 #include <linux/if_alg.h>
+#define PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY 0x00001000U
 #endif
 #include "libssh2_diag.h"
 #include <limits.h>
@@ -190,6 +191,8 @@ static int eip93_ctr_cryptoapi_probe(void) {
 
     memset(&sa, 0, sizeof(sa));
     sa.salg_family = AF_ALG;
+    sa.salg_feat = PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY;
+    sa.salg_mask = PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY;
     memcpy(sa.salg_type, "skcipher", sizeof("skcipher"));
     memcpy(sa.salg_name, "ctr(aes-eip93)", sizeof("ctr(aes-eip93)"));
 
