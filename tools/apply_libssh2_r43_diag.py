@@ -331,7 +331,7 @@ libssh2_session_diag_timing_enable(LIBSSH2_SESSION *session, int enabled)
     while(packet) {
         session->passwall_diag.packet_queue_packets_current++;
         session->passwall_diag.packet_queue_bytes_current +=
-            (unsigned long long)packet->data_len;
+            (unsigned long long)(packet->data_len - packet->data_head);
         packet = _libssh2_list_next(&packet->node);
     }
     session->passwall_diag.packet_queue_packets_peak =
