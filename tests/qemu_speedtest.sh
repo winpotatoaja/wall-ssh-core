@@ -256,6 +256,27 @@ main() {
     fi
     echo "PASS: ChaCha20-Poly1305 negotiated before bandwidth tests begin."
 
+    # Do not spend the two 100 MB transfers unless the inbound ChaCha worker
+    # pool was actually created during the SSH key exchange.
+    CRYPTO_WORKERS_READY=0
+    N=0
+    while [ "$N" -lt 10 ]; do
+        if grep -Eq 'libssh2_chacha_workers_active=[1-9][0-9]*' "$RESULT/core.log"; then
+            CRYPTO_WORKERS_READY=1
+            break
+        fi
+        kill -0 "$CORE_PID" 2>/dev/null || break
+        N=$((N+1))
+        sleep 1
+    done
+    if [ "$CRYPTO_WORKERS_READY" -ne 1 ]; then
+        echo "ERROR: ChaCha decrypt worker pool did not become active; skipping both 100 MB downloads"
+        grep -E '\\[PERF\\]|ChaCha|SSH Cipher' "$RESULT/core.log" 2>/dev/null || :
+        kill -TERM "$CORE_PID" 2>/dev/null || :
+        return 2
+    fi
+    echo "PASS: inbound ChaCha decrypt workers are active before bandwidth tests begin."
+
     PREV_TICKS=$(proc_ticks "$CORE_PID")
     thread_snapshot "$CORE_PID" "" > "$RESULT/threads.prev"
     PREV_SAMPLE_TS=$(date +%s)
