@@ -374,8 +374,8 @@ def patch(root: Path) -> None:
                           u_char *c, u_int bytes);
 
 #endif""",
-"""void chacha_encrypt_bytes(chacha_ctx *x, const u8 *m,
-                          u8 *c, u32 bytes);
+"""void chacha_encrypt_bytes(struct chacha_ctx *x, const u_char *m,
+                          u_char *c, u_int bytes);
 
 struct chacha_parallel_pool;
 struct chacha_parallel_pool *chacha_parallel_pool_create(unsigned int workers);
