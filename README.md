@@ -31,10 +31,16 @@ Perubahan r47:
 
 **Catatan validasi:** SDK run #571 / `45194372103` gagal pada kompilasi libssh2
 karena patcher awal menggunakan tipe internal `chacha_ctx/u8/u32` di header publik.
-Patcher sudah dikoreksi agar memakai `struct chacha_ctx/u_char/u_int`; warning
-deklarasi campuran C90 pada worker juga sudah dirapikan. Run #571 memakai commit
-sebelum koreksi tersebut, jadi belum memvalidasi revisi patcher saat ini.
+Patcher sudah dikoreksi agar memakai `struct chacha_ctx/u_char/u_int`, deklarasi
+worker dirapikan untuk C90, prototype diagnostik ditambahkan, dan thread crypto
+diberi nama `chacha-decN` agar penggunaan CPU tiap lane terlihat.
 
+SDK run #577 / `45195734454` berhasil membangun libssh2 1.11.1 dan membuat IPK
+`libssh2-1_1.11.1-r1_mipsel_24kc.ipk`, tetapi langkah validasi setelah compile
+gagal karena OpenWrt membersihkan source tree seusai target `compile`. Workflow
+kemudian mencari `libssh2_config.h` yang sudah terhapus. Urutan diperbaiki:
+jalankan target `configure`, compile dan jalankan crypto regression ketika source
+masih ada, baru jalankan target `compile`. Revisi ini belum divalidasi Actions.
 Kriteria berikutnya: native crypto regression harus lulus untuk payload kecil,
 batas blok, 4 KiB, dan 32 KiB; MIPS SDK harus membangun libssh2 dan IPK r47;
 kemudian runtime MT7621 QEMU harus membuktikan worker aktif, counter paralel
