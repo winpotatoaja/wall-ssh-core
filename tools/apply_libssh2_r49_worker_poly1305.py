@@ -478,6 +478,23 @@ def patch(root: Path) -> None:
     source = source[:start] + WORKER_MAIN.rstrip() + source[end:]
     chacha_c.write_text(source)
 
+    # The r48 fallback dispatches ChaCha through chacha_encrypt_bytes_parallel().
+    # r49 worker_main uses task_kind, so mark these legacy tasks as decrypt.
+    replace_once(
+        chacha_c,
+        "    pool->source = source;\n"
+        "    pool->destination = destination;\n"
+        "    pool->completed = 0U;\n\n"
+        "    for(lane = 0U; lane < workers; lane++) {",
+        "    pool->source = source;\n"
+        "    pool->destination = destination;\n"
+        "    pool->completed = 0U;\n"
+        "    for(lane = 0U; lane < workers; lane++)\n"
+        "        pool->task_kind[lane] = CHACHA_TASK_DECRYPT;\n\n"
+        "    for(lane = 0U; lane < workers; lane++) {",
+        "mark legacy r48 fallback dispatches as ChaCha decrypt tasks"
+    )
+
     replace_once(
         chacha_c,
         "    chacha_parallel_wipe(pool->states, sizeof(pool->states));\n"
