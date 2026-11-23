@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <libssh2.h>
+#include "libssh2_diag.h"
 #include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -1414,7 +1415,7 @@ static void perf_begin(long long now) {
     g_perf_window_start_ms = now;
 }
 
-static void perf_log_interval(long long now) {
+static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
     if (!g_log_perf) return;
     if (g_perf_window_start_ms <= 0) {
         perf_begin(now);
@@ -1422,6 +1423,15 @@ static void perf_log_interval(long long now) {
     }
     long long span_ms = now - g_perf_window_start_ms;
     if (span_ms < 1000) return;
+
+    LIBSSH2_DIAG_TIMING libssh2_diag;
+    memset(&libssh2_diag, 0, sizeof(libssh2_diag));
+    if (diag_session)
+        (void)libssh2_session_diag_timing_snapshot(
+            diag_session, &libssh2_diag, 1);
+    uint64_t libssh2_transport_noncrypto_ns =
+        libssh2_diag.transport_read_ns >= libssh2_diag.crypto_decrypt_ns
+        ? libssh2_diag.transport_read_ns - libssh2_diag.crypto_decrypt_ns : 0;
 
     unsigned int relay_clients = 0;
     unsigned int s2c_nonempty_clients = 0;
@@ -1475,7 +1485,18 @@ static void perf_log_interval(long long now) {
             "perf_ssh_recv_s2c_cb_us=%llu perf_s2c_internal_us=%llu "
             "perf_ssh_recv_syscall_us=%llu perf_socks_tx_us=%llu "
             "ssh_recv_cb_calls=%llu ssh_recv_s2c_cb_calls=%llu "
-            "ssh_recv_syscall_calls=%llu socks_tx_flush_calls=%llu",
+            "ssh_recv_syscall_calls=%llu socks_tx_flush_calls=%llu "
+            "libssh2_crypto_decrypt_us=%llu libssh2_crypto_decrypt_calls=%llu "
+            "libssh2_crypto_decrypt_bytes=%llu libssh2_transport_read_us=%llu "
+            "libssh2_transport_noncrypto_us=%llu libssh2_transport_read_calls=%llu "
+            "libssh2_packet_drain_us=%llu libssh2_packet_drain_calls=%llu "
+            "libssh2_packet_drain_bytes=%llu libssh2_packet_drain_removed=%llu "
+            "libssh2_packet_queue_current_packets=%llu "
+            "libssh2_packet_queue_current_bytes=%llu "
+            "libssh2_packet_queue_peak_packets=%llu "
+            "libssh2_packet_queue_peak_bytes=%llu "
+            "libssh2_packet_queue_enqueued_packets=%llu "
+            "libssh2_packet_queue_enqueued_bytes=%llu",
             span_ms, g_client_count, relay_clients,
             (unsigned long long)g_perf_stats.epoll_calls,
             (unsigned long long)g_perf_stats.epoll_wait_ms,
@@ -1520,7 +1541,23 @@ static void perf_log_interval(long long now) {
             (unsigned long long)g_perf_stats.ssh_recv_cb_calls,
             (unsigned long long)g_perf_stats.ssh_recv_s2c_cb_calls,
             (unsigned long long)g_perf_stats.ssh_recv_syscall_calls,
-            (unsigned long long)g_perf_stats.socks_tx_flush_calls);
+            (unsigned long long)g_perf_stats.socks_tx_flush_calls,
+            (unsigned long long)(libssh2_diag.crypto_decrypt_ns / 1000U),
+            (unsigned long long)libssh2_diag.crypto_decrypt_calls,
+            (unsigned long long)libssh2_diag.crypto_decrypt_bytes,
+            (unsigned long long)(libssh2_diag.transport_read_ns / 1000U),
+            (unsigned long long)(libssh2_transport_noncrypto_ns / 1000U),
+            (unsigned long long)libssh2_diag.transport_read_calls,
+            (unsigned long long)(libssh2_diag.packet_drain_ns / 1000U),
+            (unsigned long long)libssh2_diag.packet_drain_calls,
+            (unsigned long long)libssh2_diag.packet_drain_bytes,
+            (unsigned long long)libssh2_diag.packet_drain_removed,
+            (unsigned long long)libssh2_diag.packet_queue_packets_current,
+            (unsigned long long)libssh2_diag.packet_queue_bytes_current,
+            (unsigned long long)libssh2_diag.packet_queue_packets_peak,
+            (unsigned long long)libssh2_diag.packet_queue_bytes_peak,
+            (unsigned long long)libssh2_diag.packet_queue_enqueued_packets,
+            (unsigned long long)libssh2_diag.packet_queue_enqueued_bytes);
 
     memset(&g_perf_stats, 0, sizeof(g_perf_stats));
     g_perf_window_start_ms = now;
@@ -5288,7 +5325,10 @@ static int core_worker_run(int argc, char **argv) {
     }
 
     struct epoll_event events[MAX_EVENTS];
-    if (g_log_perf) perf_begin(now_ms());
+    if (g_log_perf) {
+        libssh2_session_diag_timing_enable(session, 1);
+        perf_begin(now_ms());
+    }
     int force_next_tick = 0;
     int idle_rx_paused = 0;
     long long last_ka_try_ms = 0;
@@ -5663,7 +5703,7 @@ static int core_worker_run(int argc, char **argv) {
         if (!uctx.upstream_epoll_detached)
             update_epoll(epfd, upstream_watch_fd, &g_upstream_tag, &upstream_ev, want_up);
 
-        perf_log_interval(now_ms());
+        perf_log_interval(now_ms(), session);
     }
 
     log_blue("Worker %d/%d stopping; accepted_total=%llu",
