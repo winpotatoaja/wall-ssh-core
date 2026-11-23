@@ -22,6 +22,7 @@ typedef struct {
     unsigned int chacha_workers_requested;
     unsigned int chacha_workers_active;
     unsigned long long chacha_poly1305_ns;
+    unsigned long long chacha_poly1305_offloaded_packets;
     unsigned long long chacha20_key_ns;
     unsigned long long chacha20_header_ns;
     unsigned long long chacha20_payload_ns;
