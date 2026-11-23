@@ -8,7 +8,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: openwrt24-mipsel-r45-${{ github.ref }}
+  group: openwrt24-mipsel-r46-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   sdk:
@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r44_bulk_aesgcm.py tools/apply_libssh2_r45_eip93_ctr.py
+          python3 -m py_compile tools/apply_libssh2_r43_diag.py
           mkdir -p test-results
           gcc -std=gnu11 -O1 -g -Wall -Wextra -pthread \
             -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
@@ -41,9 +41,6 @@ jobs:
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror tests/aesgcm_inplace_test.c \
             -o /tmp/aesgcm-inplace-test -lcrypto
           /tmp/aesgcm-inplace-test | tee test-results/aesgcm-inplace-test-native.log
-          gcc -std=c11 -O2 -g -Wall -Wextra -Werror tests/afalg_ctr_test.c \
-            -o /tmp/afalg-ctr-test
-          /tmp/afalg-ctr-test | tee test-results/afalg-ctr-test-native.log
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror -pthread \
             tests/spsc_rb_test.c -o /tmp/spsc-rb-test
           timeout 90s /tmp/spsc-rb-test | tee test-results/spsc-rb-test-native.log
@@ -98,18 +95,35 @@ jobs:
           make package/libs/zlib/compile -j"$(nproc)" V=s
           ./scripts/feeds update packages
           ./scripts/feeds install libssh2
+          LIBSSH2_RECIPE="feeds/packages/libs/libssh2/Makefile"
+          python3 - "$LIBSSH2_RECIPE" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text()
+updates = (
+    ("PKG_VERSION:=1.11.0", "PKG_VERSION:=1.11.1"),
+    ("PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz",
+     "PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.xz"),
+    ("PKG_HASH:=3736161e41e2693324deb38c26cfdc3efe6209d634ba4258db1cecff6a5ad461",
+     "PKG_HASH:=9954cb54c4f548198a7cbebad248bdc87dd64bd26185708a294b2b50771e3769"),
+)
+for old, new in updates:
+    if source.count(old) != 1:
+        raise RuntimeError(f"Unexpected OpenWrt libssh2 recipe anchor: {old}")
+    source = source.replace(old, new, 1)
+path.write_text(source)
+print("PASS: OpenWrt libssh2 recipe pinned to upstream 1.11.1 with verified SHA-256")
+PY
           echo "CONFIG_PACKAGE_libssh2=y" >> .config
           make defconfig
-          # Apply r43 diagnostics, r44 bulk GCM, and r45 EIP93 to the pinned libssh2 1.11.0 source.
+          # Apply only r43 diagnostics to upstream libssh2 1.11.1 (native ChaCha20-Poly1305).
           make package/feeds/packages/libssh2/prepare V=s
-          LIBSSH2_SRC="$(find build_dir -maxdepth 3 -type d -name 'libssh2-1.11.0' -print -quit)"
+          LIBSSH2_SRC="$(find build_dir -maxdepth 3 -type d -name 'libssh2-1.11.1' -print -quit)"
           test -n "$LIBSSH2_SRC"
           python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r43_diag.py" "$LIBSSH2_SRC"
           test -s "$LIBSSH2_SRC/.passwall-r43-diag-patched"
-          python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r44_bulk_aesgcm.py" "$LIBSSH2_SRC"
-          test -s "$LIBSSH2_SRC/.passwall-r44-bulk-aesgcm-patched"
-          python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r45_eip93_ctr.py" "$LIBSSH2_SRC"
-          test -s "$LIBSSH2_SRC/.passwall-r45-eip93-ctr-patched"
           make package/feeds/packages/libssh2/compile -j"$(nproc)" V=s
           test -f "$STAGING/usr/include/openssl/ssl.h"
           test -f "$STAGING/usr/include/libssh2.h"
@@ -118,8 +132,9 @@ jobs:
           test -e "$STAGING/usr/lib/libssh2.so"
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_enable'
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_snapshot'
-          echo "PASS: patched libssh2 diagnostic API symbols are exported."
-      - name: Build r45 single-session MIPS IPK and I/O worker pool helper
+          grep -aFq 'chacha20-poly1305@openssh.com' "$STAGING/usr/lib/libssh2.so"
+          echo "PASS: libssh2 1.11.1 diagnostics and native ChaCha20-Poly1305 are present."
+      - name: Build r46 single-session MIPS IPK and I/O worker pool helper
         shell: bash
         run: |
           set -euo pipefail
@@ -140,7 +155,7 @@ jobs:
           fi
           echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
           IPK="$(find bin/packages -type f -name 'passwall-ssh-core*.ipk' | head -n 1)"
-          LIBSSH2_IPK="$(find bin/packages -type f -name 'libssh2-1_1.11.0-r1_mipsel_24kc.ipk' | head -n 1)"
+          LIBSSH2_IPK="$(find bin/packages -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' | head -n 1)"
           test -n "$IPK"
           test -n "$LIBSSH2_IPK"
           mkdir -p "$GITHUB_WORKSPACE/test-results"
@@ -154,10 +169,6 @@ jobs:
           readelf -h "$BIN" | tee "$GITHUB_WORKSPACE/test-results/elf-header.txt"
           CROSS_CC="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -path '*/bin/*-openwrt-linux-musl-gcc' -print | head -n 1)"
           test -n "$CROSS_CC"
-          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror "$GITHUB_WORKSPACE/tests/afalg_ctr_test.c" -o "$GITHUB_WORKSPACE/test-results/afalg-ctr-test"
-          chmod 0755 "$GITHUB_WORKSPACE/test-results/afalg-ctr-test"
-          file "$GITHUB_WORKSPACE/test-results/afalg-ctr-test" | tee "$GITHUB_WORKSPACE/test-results/afalg-ctr-test-file.txt"
-          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum afalg-ctr-test > afalg-ctr-test.sha256)
           "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -pthread "$GITHUB_WORKSPACE/tests/spsc_rb_test.c" -o "$GITHUB_WORKSPACE/test-results/spsc-rb-test"
           chmod 0755 "$GITHUB_WORKSPACE/test-results/spsc-rb-test"
           file "$GITHUB_WORKSPACE/test-results/spsc-rb-test" | tee "$GITHUB_WORKSPACE/test-results/spsc-rb-test-file.txt"
@@ -205,12 +216,9 @@ jobs:
           name: passwall-ssh-core-openwrt-24.10.7-mipsel-ipk
           path: |
             test-results/passwall-ssh-core*.ipk
-            test-results/libssh2-1_1.11.0-r1_mipsel_24kc.ipk
+            test-results/libssh2-1_1.11.1-r1_mipsel_24kc.ipk
             test-results/build-source.sha
             test-results/ipk.sha256
-            test-results/afalg-ctr-test
-            test-results/afalg-ctr-test.sha256
-            test-results/afalg-ctr-test-file.txt
             test-results/socks-halfclose
             test-results/halfclose.sha256
             test-results/socks-mt-download
@@ -258,7 +266,7 @@ jobs:
                 : "OpenWrt 24.10.7 mipsel_24kc SDK build failed.",
               target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
-      - name: Dispatch single-endpoint r45 Datapacket bandwidth test
+      - name: Dispatch single-endpoint r46 Datapacket bandwidth test
         if: success()
         uses: actions/github-script@v7
         with:
@@ -273,7 +281,7 @@ jobs:
                 source_sha: context.sha
               }
             });
-            core.info("Queued Datapacket-only r45 benchmark using SDK run " + context.runId + " and source " + context.sha);
+            core.info("Queued Datapacket-only r46 benchmark using SDK run " + context.runId + " and source " + context.sha);
   vm:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
     runs-on: ubuntu-26.04
@@ -331,7 +339,7 @@ jobs:
           file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r45' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r46' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
           readelf -h test-results/socks-mt-download | grep -q 'MIPS'
           readelf -h test-results/tls-engine-test | grep -q 'MIPS'
@@ -865,8 +873,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r45'; then
-            pass "opkg installed passwall-ssh-core r45 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r46'; then
+            pass "opkg installed passwall-ssh-core r46 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
