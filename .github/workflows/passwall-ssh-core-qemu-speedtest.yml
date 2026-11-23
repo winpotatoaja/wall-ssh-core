@@ -16,6 +16,11 @@ on:
         description: "Exact source commit used by the r49 SDK build"
         required: true
         type: string
+      verify_only_run_id:
+        description: "Existing benchmark run ID to validate from its uploaded artifact; skips QEMU and all network transfers"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -44,17 +49,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          VERIFY_ONLY_RUN_ID=''
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             SDK_RUN_ID='${{ github.event.inputs.sdk_run_id }}'
             SOURCE_SHA='${{ github.event.inputs.source_sha }}'
+            VERIFY_ONLY_RUN_ID='${{ github.event.inputs.verify_only_run_id }}'
           else
             SDK_RUN_ID="$(sed -n 's/^sdk_run_id=//p' .github/speedtest.trigger | head -n1)"
             SOURCE_SHA="$(sed -n 's/^source_sha=//p' .github/speedtest.trigger | head -n1)"
+            VERIFY_ONLY_RUN_ID="$(sed -n 's/^verify_only_run_id=//p' .github/speedtest.trigger | head -n1)"
           fi
           [[ "$SDK_RUN_ID" =~ ^[0-9]+$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ -n "$VERIFY_ONLY_RUN_ID" ]]; then
+            [[ "$VERIFY_ONLY_RUN_ID" =~ ^[0-9]+$ ]]
+            echo "Verification-only mode: using existing bandwidth artifact from run $VERIFY_ONLY_RUN_ID; no QEMU/network test will be executed."
+          fi
           echo "sdk_run_id=$SDK_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "verify_only_run_id=$VERIFY_ONLY_RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Self-test benchmark diagnostics before QEMU provisioning
         run: |
@@ -62,6 +75,7 @@ jobs:
           sh tests/qemu_speedtest.sh --self-test
 
       - name: Install QEMU host requirements
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -78,7 +92,18 @@ jobs:
           repository: ${{ github.repository }}
           path: package
 
+      - name: Download previous benchmark artifact for verification only
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: r49-qemu-internet-bandwidth
+          run-id: ${{ steps.sdkmeta.outputs.verify_only_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          path: bandwidth-results
+
       - name: Prepare MT7621 QEMU and OpenWrt firmware
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
         shell: bash
         env:
           EXPECTED_SOURCE_SHA: ${{ steps.sdkmeta.outputs.source_sha }}
@@ -225,6 +250,7 @@ jobs:
           echo "r49 package and MT7621 QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -259,6 +285,7 @@ jobs:
           timeout 2 bash -c '</dev/tcp/127.0.0.1/2222'
 
       - name: Boot MT7621 and run only the internet bandwidth benchmark
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
         shell: bash
         timeout-minutes: 65
         run: |
@@ -316,7 +343,7 @@ jobs:
             "opkg --force-reinstall install /tmp/mips-test/libssh2-1_1.11.1-r1_mipsel_24kc.ipk && grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 && opkg install /tmp/mips-test/passwall-ssh-core*.ipk && chmod 0700 /tmp/mips-test/qemu_speedtest.sh && /tmp/mips-test/qemu_speedtest.sh"
 
       - name: Collect benchmark results
-        if: always()
+        if: ${{ always() && steps.sdkmeta.outputs.verify_only_run_id == '' }}
         shell: bash
         run: |
           set +e
@@ -382,10 +409,11 @@ jobs:
           SAMPLE_LOG=bandwidth-results/qemu-speedtest/samples.log
           test -s "$CORE_LOG"
           test -s "$SAMPLE_LOG"
+          # Require measured CPU activity, not just thread names, for all four crypto workers.
           for worker_id in 0 1 2; do
-            grep -Eq "tid=[0-9]+/chacha-dec${worker_id}:" "$SAMPLE_LOG"
+            grep -Eq "tid=[0-9]+/chacha-dec${worker_id}:([1-9][0-9]*([.][0-9]+)?|0[.]([0-9]*[1-9][0-9]*))%" "$SAMPLE_LOG"
           done
-          grep -Eq "tid=[0-9]+/chacha-poly:" "$SAMPLE_LOG"
+          grep -Eq "tid=[0-9]+/chacha-poly:([1-9][0-9]*([.][0-9]+)?|0[.]([0-9]*[1-9][0-9]*))%" "$SAMPLE_LOG"
           grep -Fq '[ChaCha] r49 S2C payload: detected_cpus=4 owner_payload_lanes=0 crypto_workers=4 poly1305_workers=1 chacha_payload_workers=3 active_compute_lanes=4 threshold=4096 bytes' "$CORE_LOG"
           awk '
             /^\[PERF\]/ &&
@@ -398,6 +426,8 @@ jobs:
             END { exit !found }
           ' "$CORE_LOG"
           grep -Fq '[LIBSSH2-DIAG] r49 timing instrumentation enabled (libssh2 1.11.1; worker-only ChaCha20 plus overlapped Poly1305 S2C)' "$CORE_LOG"
+          # log_raw's 2 KiB message buffer truncates the final parallel_bytes/parallel_packets fields.
+          # Verify parallel execution using the visible parallel_us counter plus nonzero CPU for each worker TID above.
           awk '
             /^\[PERF\]/ &&
             /libssh2_decrypt_path_calls=[0-9]+/ &&
@@ -410,9 +440,7 @@ jobs:
             /libssh2_chacha_workers_active=4/ &&
             /libssh2_chacha_poly1305_us=[1-9][0-9]*/ &&
             /libssh2_chacha_poly1305_offloaded_packets=[1-9][0-9]*/ &&
-            /libssh2_chacha20_parallel_us=[1-9][0-9]*/ &&
-            /libssh2_chacha20_parallel_bytes=[1-9][0-9]*/ &&
-            /libssh2_chacha20_parallel_packets=[1-9][0-9]*/ { found=1 }
+            /libssh2_chacha20_parallel_us=[1-9][0-9]*/ { found=1 }
             END { exit !found }
           ' "$CORE_LOG"
           echo "PASS: r49 worker-only ChaCha and overlapped Poly1305 counters were recorded."
