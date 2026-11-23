@@ -28,6 +28,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r44_bulk_aesgcm.py tools/apply_libssh2_r45_eip93_ctr.py
           mkdir -p test-results
           gcc -std=gnu11 -O1 -g -Wall -Wextra -pthread \
             -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
