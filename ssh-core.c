@@ -155,9 +155,6 @@ static __thread int g_skip_libssh2_cleanup = 0;
 static __thread const char *g_kbd_password = "";
 
 
-#endif
-
-
 /* Sentinel tag untuk O(1) epoll dispatch */
 static __thread int g_listen_tag = 0;
 static __thread int g_upstream_tag = 0;
