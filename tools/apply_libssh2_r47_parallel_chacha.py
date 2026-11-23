@@ -58,6 +58,11 @@ chacha_parallel_worker_main(void *opaque)
     chacha_parallel_worker_t *worker = (chacha_parallel_worker_t *)opaque;
     chacha_parallel_pool_t *pool = worker->pool;
     unsigned long long seen_generation = 0;
+#if defined(__linux__)
+    char thread_name[16];
+    (void)snprintf(thread_name, sizeof(thread_name), "chacha-dec%u", worker->index);
+    (void)prctl(PR_SET_NAME, thread_name, 0, 0, 0);
+#endif
 
     if(pthread_mutex_lock(&pool->mutex) != 0)
         return NULL;
@@ -418,7 +423,11 @@ int chacha_encrypt_bytes_parallel(struct chacha_parallel_pool *pool,
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
 
 """, "ChaCha worker includes")
     with chacha_c.open("a") as f:
