@@ -36,10 +36,20 @@ def patch(root: Path) -> None:
     )
     replace_once(
         priv,
-        "    unsigned long long decrypt_path_bytes;\n",
-        "    unsigned long long decrypt_path_bytes;\n"
-        "    unsigned long long decrypt_cipher_calls;\n"
-        "    unsigned long long decrypt_cipher_bytes;\n",
+        """/* Public snapshot layout shared with the app's libssh2_diag.h. */
+typedef struct {
+    unsigned long long decrypt_path_ns;
+    unsigned long long decrypt_path_calls;
+    unsigned long long decrypt_path_bytes;
+""",
+        """/* Public snapshot layout shared with the app's libssh2_diag.h. */
+typedef struct {
+    unsigned long long decrypt_path_ns;
+    unsigned long long decrypt_path_calls;
+    unsigned long long decrypt_path_bytes;
+    unsigned long long decrypt_cipher_calls;
+    unsigned long long decrypt_cipher_bytes;
+""",
         "diagnostic snapshot cipher callback counters",
     )
 

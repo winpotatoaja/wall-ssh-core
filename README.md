@@ -212,7 +212,7 @@ Implementasi yang sudah ada pada branch ini:
 
 ### r44 — bulk AES-GCM fragment decrypt
 
-**Status implementasi:** patch libssh2 1.11.0 dan uji in-place OpenSSL ditambahkan; validasi native CI, OpenWrt 24.10.7 SDK MIPS, serta QEMU benchmark source-matched masih menunggu hasil Actions.
+**Status implementasi:** patch libssh2 1.11.0 dan uji in-place OpenSSL ditambahkan. SDK attempt pertama #508 berhenti di patcher karena anchor untuk struktur snapshot tidak unik; patcher kini menargetkan typedef snapshot dengan konteks yang spesifik. Validasi native CI, OpenWrt 24.10.7 SDK MIPS, serta QEMU benchmark source-matched masih menunggu hasil Actions.
 
 - Jalur transport khusus `aes128-gcm@openssh.com` / `aes256-gcm@openssh.com` mempertahankan blok pertama untuk membaca panjang paket, kemudian memproses fragmen ciphertext yang tersedia melalui satu callback cipher berukuran penuh, bukan callback berulang per 16 byte.
 - OpenSSL backend menggunakan `EVP_Cipher()` dengan input/output in-place untuk AES-GCM decrypt. Jalur dekripsi tidak lagi menyalin setiap potongan ke `EVP_MAX_BLOCK_LENGTH` temporary buffer lalu menyalinnya kembali. Jalur cipher lain dan AES-GCM encrypt tetap memakai implementasi lama.
