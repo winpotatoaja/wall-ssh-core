@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply Passwall r43 timing probes to the pinned OpenWrt libssh2 1.11.0 source."""
+"""Apply Passwall r43 timing probes to the pinned OpenWrt libssh2 1.11.1 source."""
 from pathlib import Path
 import sys
 
@@ -12,8 +12,8 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
 
 def patch(root: Path) -> None:
     version = (root / "include/libssh2.h").read_text()
-    if '#define LIBSSH2_VERSION "1.11.0"' not in version:
-        raise RuntimeError("The r43 diagnostic patch is pinned to libssh2 1.11.0")
+    if '#define LIBSSH2_VERSION "1.11.1"' not in version:
+        raise RuntimeError("The r43 diagnostic patch is pinned to libssh2 1.11.1")
 
     priv = root / "src/libssh2_priv.h"
     replace_once(priv,
@@ -402,8 +402,8 @@ libssh2_session_diag_timing_snapshot(LIBSSH2_SESSION *session,
 """)
 
     marker = root / ".passwall-r43-diag-patched"
-    marker.write_text("libssh2 1.11.0 Passwall r43 timing probes\n")
-    print("PASS: patched libssh2 1.11.0 crypto, transport, packet queue, and channel drain timing")
+    marker.write_text("libssh2 1.11.1 Passwall r43 timing probes\n")
+    print("PASS: patched libssh2 1.11.1 crypto, transport, packet queue, and channel drain timing")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
