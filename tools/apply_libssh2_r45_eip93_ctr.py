@@ -86,6 +86,8 @@ void _libssh2_cipher_ctx_dtor(_libssh2_cipher_ctx *ctx);""",
         "#include <errno.h>\n"
         "#include <limits.h>\n"
         "#include <stdint.h>\n"
+        "#include <sys/uio.h>\n"
+        "#include <openssl/crypto.h>\n"
         "#include <string.h>\n"
         "#include <sys/socket.h>\n"
         "#include <sys/types.h>\n"
