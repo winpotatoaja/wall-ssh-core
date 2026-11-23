@@ -81,6 +81,7 @@ chacha_parallel_worker_main(void *opaque)
         measure_poly = pool->measure_poly;
         if(task_kind == CHACHA_TASK_DECRYPT)
             local_state = pool->states[worker->index];
+        pool->active_workers++;
 
         (void)pthread_mutex_unlock(&pool->mutex);
         if(task_kind == CHACHA_TASK_POLY1305) {
@@ -107,8 +108,10 @@ chacha_parallel_worker_main(void *opaque)
         if(pthread_mutex_lock(&pool->mutex) != 0)
             return NULL;
 
+        if(pool->active_workers > 0U)
+            pool->active_workers--;
         pool->completed++;
-        if(pool->completed >= pool->worker_count)
+        if(pool->completed >= pool->worker_count || pool->active_workers == 0U)
             (void)pthread_cond_broadcast(&pool->work_done);
     }
 
@@ -226,6 +229,17 @@ chacha_decrypt_poly_worker_only(struct chacha_parallel_pool *opaque_pool,
     if(pool->stopping || pool->worker_error ||
        pool->completed != workers) {
         rc = -1;
+        (void)pthread_cond_broadcast(&pool->work_ready);
+        while(pool->active_workers > 0U) {
+            int drain_rc = pthread_cond_wait(&pool->work_done, &pool->mutex);
+            if(drain_rc != 0)
+                break;
+        }
+        /* Keep shared packet memory intact if a worker did not quiesce. */
+        if(pool->active_workers > 0U) {
+            (void)pthread_mutex_unlock(&pool->mutex);
+            return -1;
+        }
     } else {
         for(i = 0U; i < POLY1305_TAGLEN; i++)
             tag_diff |= (unsigned int)(pool->poly_tag[i] ^ wire_tag[i]);
@@ -442,6 +456,7 @@ def patch(root: Path) -> None:
         chacha_c,
         "    unsigned long long generation;\n    const u8 *source;",
         "    unsigned long long generation;\n"
+        "    unsigned int active_workers;\n"
         "    unsigned int task_kind[CHACHA_PARALLEL_MAX_WORKERS];\n"
         "    u8 *poly_input;\n"
         "    size_t poly_len;\n"
