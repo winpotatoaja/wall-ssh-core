@@ -91,6 +91,7 @@ void _libssh2_cipher_ctx_dtor(_libssh2_cipher_ctx *ctx);""",
         "#include <string.h>\n"
         "#include <sys/socket.h>\n"
         "#include <sys/types.h>\n"
+        "#include <sys/time.h>\n"
         "#include <unistd.h>\n"
         "#include <linux/if_alg.h>\n",
         "include AF_ALG socket definitions",
@@ -105,6 +106,7 @@ _libssh2_eip93_afalg_open(_libssh2_cipher_ctx *ctx,
     struct sockaddr_alg sa;
     int tfm_fd = -1;
     int op_fd = -1;
+    struct timeval io_timeout = { 5, 0 };
 
     memset(&sa, 0, sizeof(sa));
     sa.salg_family = AF_ALG;
@@ -123,6 +125,11 @@ _libssh2_eip93_afalg_open(_libssh2_cipher_ctx *ctx,
 
     op_fd = accept(tfm_fd, NULL, 0);
     if(op_fd < 0)
+        goto fail;
+    if(setsockopt(op_fd, SOL_SOCKET, SO_RCVTIMEO,
+                  &io_timeout, sizeof(io_timeout)) < 0 ||
+       setsockopt(op_fd, SOL_SOCKET, SO_SNDTIMEO,
+                  &io_timeout, sizeof(io_timeout)) < 0)
         goto fail;
 
     close(tfm_fd);
