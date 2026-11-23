@@ -1429,9 +1429,16 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
     if (diag_session)
         (void)libssh2_session_diag_timing_snapshot(
             diag_session, &libssh2_diag, 1);
-    uint64_t libssh2_transport_noncrypto_ns =
-        libssh2_diag.transport_read_ns >= libssh2_diag.crypto_decrypt_ns
-        ? libssh2_diag.transport_read_ns - libssh2_diag.crypto_decrypt_ns : 0;
+    uint64_t libssh2_transport_other_ns =
+        libssh2_diag.transport_read_ns >=
+            (libssh2_diag.decrypt_path_ns + g_perf_stats.ssh_recv_s2c_cb_ns)
+        ? libssh2_diag.transport_read_ns -
+            libssh2_diag.decrypt_path_ns - g_perf_stats.ssh_recv_s2c_cb_ns : 0;
+    uint64_t libssh2_channel_accounted_ns =
+        libssh2_diag.transport_read_ns + libssh2_diag.packet_drain_ns;
+    uint64_t libssh2_channel_other_ns =
+        g_perf_stats.s2c_read_ns >= libssh2_channel_accounted_ns
+        ? g_perf_stats.s2c_read_ns - libssh2_channel_accounted_ns : 0;
 
     unsigned int relay_clients = 0;
     unsigned int s2c_nonempty_clients = 0;
@@ -1486,11 +1493,12 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             "perf_ssh_recv_syscall_us=%llu perf_socks_tx_us=%llu "
             "ssh_recv_cb_calls=%llu ssh_recv_s2c_cb_calls=%llu "
             "ssh_recv_syscall_calls=%llu socks_tx_flush_calls=%llu "
-            "libssh2_crypto_decrypt_us=%llu libssh2_crypto_decrypt_calls=%llu "
-            "libssh2_crypto_decrypt_bytes=%llu libssh2_transport_read_us=%llu "
-            "libssh2_transport_noncrypto_us=%llu libssh2_transport_read_calls=%llu "
+            "libssh2_decrypt_path_us=%llu libssh2_decrypt_path_calls=%llu "
+            "libssh2_decrypt_path_bytes=%llu libssh2_transport_read_us=%llu "
+            "libssh2_transport_other_us=%llu libssh2_transport_read_calls=%llu "
             "libssh2_packet_drain_us=%llu libssh2_packet_drain_calls=%llu "
             "libssh2_packet_drain_bytes=%llu libssh2_packet_drain_removed=%llu "
+            "libssh2_channel_other_us=%llu "
             "libssh2_packet_queue_current_packets=%llu "
             "libssh2_packet_queue_current_bytes=%llu "
             "libssh2_packet_queue_peak_packets=%llu "
@@ -1542,16 +1550,17 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             (unsigned long long)g_perf_stats.ssh_recv_s2c_cb_calls,
             (unsigned long long)g_perf_stats.ssh_recv_syscall_calls,
             (unsigned long long)g_perf_stats.socks_tx_flush_calls,
-            (unsigned long long)(libssh2_diag.crypto_decrypt_ns / 1000U),
-            (unsigned long long)libssh2_diag.crypto_decrypt_calls,
-            (unsigned long long)libssh2_diag.crypto_decrypt_bytes,
+            (unsigned long long)(libssh2_diag.decrypt_path_ns / 1000U),
+            (unsigned long long)libssh2_diag.decrypt_path_calls,
+            (unsigned long long)libssh2_diag.decrypt_path_bytes,
             (unsigned long long)(libssh2_diag.transport_read_ns / 1000U),
-            (unsigned long long)(libssh2_transport_noncrypto_ns / 1000U),
+            (unsigned long long)(libssh2_transport_other_ns / 1000U),
             (unsigned long long)libssh2_diag.transport_read_calls,
             (unsigned long long)(libssh2_diag.packet_drain_ns / 1000U),
             (unsigned long long)libssh2_diag.packet_drain_calls,
             (unsigned long long)libssh2_diag.packet_drain_bytes,
             (unsigned long long)libssh2_diag.packet_drain_removed,
+            (unsigned long long)(libssh2_channel_other_ns / 1000U),
             (unsigned long long)libssh2_diag.packet_queue_packets_current,
             (unsigned long long)libssh2_diag.packet_queue_bytes_current,
             (unsigned long long)libssh2_diag.packet_queue_packets_peak,
