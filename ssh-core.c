@@ -119,9 +119,11 @@ static uint32_t io_worker_count_for_cpu_count(long cpu_count) {
 }
 
 static unsigned int chacha_worker_count_for_cpu_count(long cpu_count) {
+    /* One CPU keeps the sole compute lane on Owner; otherwise every CPU
+     * receives a dedicated ChaCha worker and Owner only coordinates packets. */
     if (cpu_count <= 1L) return 0U;
-    if (cpu_count - 1L > 3L) return 3U;
-    return (unsigned int)(cpu_count - 1L);
+    if (cpu_count > 4L) return 4U;
+    return (unsigned int)cpu_count;
 }
 
 static long g_detected_cpu_count = 1;
@@ -5098,8 +5100,9 @@ static int core_worker_run(int argc, char **argv) {
     unsigned int chacha_workers =
         chacha_worker_count_for_cpu_count(g_detected_cpu_count);
     libssh2_session_set_chacha_workers(session, chacha_workers);
-    log_blue("[ChaCha] packet-local S2C parallelism: detected_cpus=%ld owner_lanes=1 background_workers=%u total_lanes=%u threshold=4096 bytes",
-             g_detected_cpu_count, chacha_workers, chacha_workers + 1U);
+    log_blue("[ChaCha] r48 S2C payload: detected_cpus=%ld owner_payload_lanes=%u crypto_workers=%u active_compute_lanes=%u threshold=4096 bytes",
+             g_detected_cpu_count, chacha_workers ? 0U : 1U,
+             chacha_workers, chacha_workers ? chacha_workers : 1U);
 #if LIBSSH2_VERSION_NUM >= 0x010b01
     /* libssh2 1.11.1+ has the typed callback API. */
     libssh2_session_callback_set2(session, LIBSSH2_CALLBACK_RECV, (libssh2_cb_generic *)ssh_recv_cb);
@@ -5353,7 +5356,7 @@ static int core_worker_run(int argc, char **argv) {
     struct epoll_event events[MAX_EVENTS];
     if (g_log_perf) {
         libssh2_session_diag_timing_enable(session, 1);
-        log_blue("[LIBSSH2-DIAG] r47 timing instrumentation enabled (libssh2 1.11.1; ChaCha20-Poly1305 parallel S2C)");
+        log_blue("[LIBSSH2-DIAG] r48 timing instrumentation enabled (libssh2 1.11.1; ChaCha20-Poly1305 worker-only S2C payload)");
         perf_begin(now_ms());
     }
     int force_next_tick = 0;

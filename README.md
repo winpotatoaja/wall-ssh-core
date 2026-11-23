@@ -8,6 +8,27 @@ dibuktikan oleh hasil pengujian yang tercatat.
 Terakhir diperbarui: 2026-11-23  
 Branch pengerjaan: `benchmark/r39-internet-speedtest`
 
+## r48 — seluruh payload ChaCha20 dikerjakan worker, bukan SSH Owner
+
+**Status: implementasi disiapkan; menunggu validasi SDK MIPS dan QEMU 4-vCPU.**
+
+r48 mengubah pembagian kerja r47. Untuk paket S2C berukuran minimal 4 KiB,
+seluruh blok payload ChaCha20 diproses oleh persistent crypto workers. SSH Owner
+hanya menyiapkan state, dispatch pekerjaan, dan menunggu seluruh worker selesai;
+tidak ada lane ChaCha payload yang dihitung oleh Owner.
+
+- CPU 1: satu lane serial pada Owner, tanpa worker tambahan.
+- CPU 2: dua persistent crypto workers; Owner hanya mengatur dan menunggu.
+- CPU 4: empat persistent crypto workers; Owner tidak menghitung payload.
+- Batas maksimum pool empat worker; jumlah CPU efektif tetap dideteksi dari
+  affinity/cpuset terlebih dahulu, lalu sysconf sebagai fallback.
+- Poly1305 authentication tetap dilakukan serial oleh Owner sebelum payload
+  disentuh. Header SSH dan state/protokol juga tetap pada Owner.
+- Regression mencakup 1, 2, dan 4 worker, ukuran di sekitar batas 4 KiB,
+  batas blok 64 byte, tail, serta penolakan tag rusak tanpa memodifikasi packet.
+
+Belum ada klaim kenaikan throughput sebelum hasil QEMU r48 dibandingkan.
+
 ## r47 — paralelisme dekripsi ChaCha20 dalam satu paket SSH
 
 **Status: SDK dan QEMU r47 lulus; paralelisme runtime terverifikasi, throughput belum menjadi A/B terkontrol.**
@@ -37,12 +58,9 @@ Owner sebelum dekripsi in-place. Worker pool aktif dan dibuat saat key exchange.
   ChaCha paralel pada interval transfer. Poly1305 serial masih memakan sekitar
   180–254 ms per interval aktif satu detik.
 
-**Arah optimasi selanjutnya:** jangan menambah thread I/O. Beban serial Poly1305
-adalah kandidat yang layak ditangani berikutnya. r48 akan menguji pemrosesan
-Poly1305 pada worker khusus secara bersamaan dengan transformasi ChaCha, dengan
-ciphertext disalin ke scratch sebelum pekerjaan dimulai agar tag diverifikasi
-terhadap ciphertext asli dan payload yang gagal autentikasi dipulihkan sebelum
-libssh2 menerima hasil.
+**Arah optimasi berikutnya:** r48 menguji apakah penghapusan lane ChaCha payload
+milik Owner dapat menurunkan bottleneck thread tersebut. Poly1305 tetap serial
+dan baru dapat menjadi sasaran terpisah setelah hasil worker-only ini diukur.
 ## r46 — gunakan ChaCha20-Poly1305 dari libssh2 upstream
 
 **Status: SDK r46 dan transfer QEMU #67 berhasil; satu pemeriksaan diagnostik workflow sudah diperbaiki.**

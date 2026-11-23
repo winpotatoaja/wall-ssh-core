@@ -1,6 +1,6 @@
 /*
  * Passwall r47: ChaCha20-Poly1305 packet parallelism regression.
- * Verifies serial encryption against one- and three-worker decryption,
+ * Verifies serial encryption against one-, two- and four-worker decryption,
  * including block tails and authentication failure before in-place writes.
  */
 #include <stdio.h>
@@ -100,44 +100,56 @@ main(void)
         0U, 1U, 63U, 64U, 65U, 4095U, 4096U, 4097U,
         8191U, 8192U, 16384U, MAX_PAYLOAD
     };
+    static const unsigned int worker_counts[] = { 1U, 2U, 4U };
     unsigned char key[64];
     struct chachapoly_ctx encrypt_ctx;
-    struct chachapoly_ctx decrypt_ctx_1;
-    struct chachapoly_ctx decrypt_ctx_3;
+    struct chachapoly_ctx decrypt_ctx[3];
+    size_t i, j;
 
-    for(size_t i = 0; i < sizeof(key); i++)
-        key[i] = (unsigned char)pattern_byte(0x47U, i);
+    memset(&encrypt_ctx, 0, sizeof(encrypt_ctx));
+    memset(decrypt_ctx, 0, sizeof(decrypt_ctx));
+    for(i = 0; i < sizeof(key); i++)
+        key[i] = (unsigned char)pattern_byte(0x48U, i);
 
-    if(chachapoly_init(&encrypt_ctx, key, sizeof(key), 0U) != 0 ||
-       chachapoly_init(&decrypt_ctx_1, key, sizeof(key), 1U) != 0 ||
-       chachapoly_init(&decrypt_ctx_3, key, sizeof(key), 3U) != 0) {
-        fprintf(stderr, "ChaCha-Poly context initialization failed\n");
+    if(chachapoly_init(&encrypt_ctx, key, sizeof(key), 0U) != 0) {
+        fprintf(stderr, "serial encrypt context initialization failed\n");
         return 1;
     }
-
-    if(chachapoly_parallel_workers(&decrypt_ctx_1) != 1U ||
-       chachapoly_parallel_workers(&decrypt_ctx_3) != 3U) {
-        fprintf(stderr, "requested ChaCha worker pools were not created\n");
-        chachapoly_cleanup(&decrypt_ctx_3);
-        chachapoly_cleanup(&decrypt_ctx_1);
-        chachapoly_cleanup(&encrypt_ctx);
-        return 1;
-    }
-
-    for(size_t i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
-        if(test_case(&encrypt_ctx, &decrypt_ctx_1, 0x1100U + (unsigned int)i,
-                     lengths[i]) != 0 ||
-           test_case(&encrypt_ctx, &decrypt_ctx_3, 0x2200U + (unsigned int)i,
-                     lengths[i]) != 0) {
-            chachapoly_cleanup(&decrypt_ctx_3);
-            chachapoly_cleanup(&decrypt_ctx_1);
+    for(i = 0; i < sizeof(worker_counts) / sizeof(worker_counts[0]); i++) {
+        if(chachapoly_init(&decrypt_ctx[i], key, sizeof(key),
+                           worker_counts[i]) != 0) {
+            fprintf(stderr, "ChaCha worker pool initialization failed (%u)\n",
+                    worker_counts[i]);
+            for(j = 0; j < 3U; j++)
+                chachapoly_cleanup(&decrypt_ctx[j]);
+            chachapoly_cleanup(&encrypt_ctx);
+            return 1;
+        }
+        if(chachapoly_parallel_workers(&decrypt_ctx[i]) != worker_counts[i]) {
+            fprintf(stderr, "requested %u ChaCha workers were not created\n",
+                    worker_counts[i]);
+            for(j = 0; j < 3U; j++)
+                chachapoly_cleanup(&decrypt_ctx[j]);
             chachapoly_cleanup(&encrypt_ctx);
             return 1;
         }
     }
 
-    chachapoly_cleanup(&decrypt_ctx_3);
-    chachapoly_cleanup(&decrypt_ctx_1);
+    for(i = 0; i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+        for(j = 0; j < sizeof(worker_counts) / sizeof(worker_counts[0]); j++) {
+            if(test_case(&encrypt_ctx, &decrypt_ctx[j],
+                         0x4800U + (unsigned int)(i * 16U + j),
+                         lengths[i]) != 0) {
+                for(j = 0; j < 3U; j++)
+                    chachapoly_cleanup(&decrypt_ctx[j]);
+                chachapoly_cleanup(&encrypt_ctx);
+                return 1;
+            }
+        }
+    }
+
+    for(i = 0; i < 3U; i++)
+        chachapoly_cleanup(&decrypt_ctx[i]);
     chachapoly_cleanup(&encrypt_ctx);
     puts("PASS: ChaCha20-Poly1305 serial/parallel equivalence, tails and tag rejection");
     return 0;
