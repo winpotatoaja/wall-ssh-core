@@ -8,6 +8,30 @@ dibuktikan oleh hasil pengujian yang tercatat.
 Terakhir diperbarui: 2026-11-23  
 Branch pengerjaan: `benchmark/r39-internet-speedtest`
 
+## r49 — Poly1305 dipindahkan ke worker dan overlap dengan dekripsi ChaCha20
+
+**Status: patch dan regression sudah disiapkan; validasi native/SDK MIPS menunggu hasil workflow. Belum ada klaim kenaikan throughput.**
+
+Pada paket S2C minimal 4 KiB dan setidaknya dua crypto worker, r49 memakai satu
+worker khusus untuk menghitung Poly1305 dari snapshot ciphertext, sementara
+worker sisanya mendekripsi rentang blok ChaCha20 yang terpisah. SSH Owner hanya
+menyiapkan state, dispatch, menunggu completion, lalu memeriksa tag; Owner tidak
+menghitung payload ChaCha20 maupun Poly1305.
+
+- 1 vCPU: fallback serial pada Owner, tanpa crypto worker.
+- 2 vCPU: satu worker Poly1305 + satu worker ChaCha20.
+- 3 vCPU: satu worker Poly1305 + dua worker ChaCha20.
+- 4 vCPU atau lebih: satu worker Poly1305 + tiga worker ChaCha20; pool tetap dibatasi empat thread.
+- Poly1305 membaca snapshot privat hingga batas paket libssh2 35.000 byte. Payload boleh diproses in-place secara bersamaan karena Owner tidak meneruskan paket sebelum semua worker selesai dan tag cocok.
+- Tag salah menyebabkan AAD/ciphertext asli dipulihkan sebelum fungsi mengembalikan error. Jika worker gagal dan belum quiescent, buffer bersama tidak dibersihkan di bawah worker yang masih aktif; teardown pool tetap melakukan join.
+- Paket kecil atau kondisi di luar batas offload memakai fallback r48: autentikasi serial sebelum transformasi payload.
+- PERF menambahkan `libssh2_chacha_poly1305_offloaded_packets` agar pengujian dapat memastikan jalur offload benar-benar dipakai.
+
+Regression membandingkan enkripsi serial dengan dekripsi 1–4 worker, menguji ukuran
+di sekitar ambang 4 KiB, tail blok ChaCha, serta memastikan tag rusak ditolak
+tanpa perubahan pada buffer paket. Validasi belum boleh dianggap lulus sampai
+native regression dan OpenWrt 24.10.7 `mipsel_24kc` SDK berhasil.
+
 ## r48 — seluruh payload ChaCha20 dikerjakan worker, bukan SSH Owner
 
 **Status: implementasi disiapkan; menunggu validasi SDK MIPS dan QEMU 4-vCPU.**
