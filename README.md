@@ -10,7 +10,7 @@ Branch pengerjaan: `benchmark/r39-internet-speedtest`
 
 ## r49 — Poly1305 dipindahkan ke worker dan overlap dengan dekripsi ChaCha20
 
-**Status: fallback fix r49 siap untuk validasi ulang native dan OpenWrt MIPS SDK. Belum ada klaim kenaikan throughput.**
+**Status: native regression dan OpenWrt 24.10.7 MIPS SDK r49 lulus pada run #615. Artifact IPK MIPS tersedia; validasi QEMU VM sedang dijalankan. Belum ada klaim kenaikan throughput karena benchmark bandwidth khusus belum dijalankan.**
 
 **Hasil validasi awal SDK #609 (45223162174):** native relay regressions lulus,
 SDK berhasil diunduh, dan patched libssh2 berhasil dikonfigurasi untuk MIPS.
@@ -19,7 +19,7 @@ worker r49 memakai `task_kind`, sedangkan jalur fallback satu-worker r48 belum
 mengisi task type sehingga worker menyelesaikan task tanpa memproses payload.
 Patch r49 diperbaiki untuk menandai task fallback sebagai
 `CHACHA_TASK_DECRYPT`; regression kini juga mencetak jumlah worker saat gagal.
-Perbaikan ini belum tervalidasi sampai regression dan SDK dijalankan ulang.
+Validasi ulang pada SDK run #615 (45224569468) lulus, termasuk regression native, regression ChaCha20-Poly1305, cross-compile MIPS, dan pembuatan IPK. Artifact IPK serta helper tersedia untuk tahap QEMU VM.
 
 
 Pada paket S2C minimal 4 KiB dan setidaknya dua crypto worker, r49 memakai satu
