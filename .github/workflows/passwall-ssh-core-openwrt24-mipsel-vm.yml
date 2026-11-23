@@ -129,7 +129,7 @@ jobs:
           fi
           echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
           IPK="$(find bin/packages -type f -name 'passwall-ssh-core*.ipk' | head -n 1)"
-          LIBSSH2_IPK="$(find bin/packages -type f -name 'libssh2_1.11.0-1_mipsel_24kc.ipk' | head -n 1)"
+          LIBSSH2_IPK="$(find bin/packages -type f -name 'libssh2-1_1.11.0-r1_mipsel_24kc.ipk' | head -n 1)"
           test -n "$IPK"
           test -n "$LIBSSH2_IPK"
           mkdir -p "$GITHUB_WORKSPACE/test-results"
@@ -190,7 +190,7 @@ jobs:
           name: passwall-ssh-core-openwrt-24.10.7-mipsel-ipk
           path: |
             test-results/passwall-ssh-core*.ipk
-            test-results/libssh2_1.11.0-1_mipsel_24kc.ipk
+            test-results/libssh2-1_1.11.0-r1_mipsel_24kc.ipk
             test-results/build-source.sha
             test-results/ipk.sha256
             test-results/socks-halfclose
