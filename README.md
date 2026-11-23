@@ -5,12 +5,12 @@ keputusan, dan pekerjaan tersisa dicatat berdasarkan lima tahap di bawah. Status
 hanya boleh dinaikkan menjadi **LULUS** setelah seluruh kriteria tahap tersebut
 dibuktikan oleh hasil pengujian yang tercatat.
 
-Terakhir diperbarui: 2026-11-23  
+Terakhir diperbarui: 2026-11-24  
 Branch pengerjaan: `benchmark/r39-internet-speedtest`
 
 ## r49 — Poly1305 dipindahkan ke worker dan overlap dengan dekripsi ChaCha20
 
-**Status: native regression dan OpenWrt 24.10.7 MIPS SDK r49 lulus pada run #615. QEMU run #616 berhasil boot dan menjalankan helper regressions, tetapi startup core gagal karena workflow belum memasang patched libssh2 dari SDK artifact. Perbaikan instalasi library sedang disiapkan; throughput belum diuji.**
+**Status: native regression dan OpenWrt 24.10.7 MIPS SDK r49 lulus pada run #615; QEMU standar lulus pada run #617. Datapacket QEMU run #620 menyelesaikan kedua transfer 100 MB dengan HTTP 200, tetapi job awal berstatus failure karena verifier membaca field PERF yang terpotong oleh buffer logger 2 KiB. Verifier sudah diperbaiki dan mode validasi artifact-only disiapkan agar hasil yang sama dapat divalidasi tanpa transfer ulang.**
 
 **Hasil validasi awal SDK #609 (45223162174):** native relay regressions lulus,
 SDK berhasil diunduh, dan patched libssh2 berhasil dikonfigurasi untuk MIPS.
@@ -22,6 +22,14 @@ Patch r49 diperbaiki untuk menandai task fallback sebagai
 Validasi ulang pada SDK run #615 (45224569468) lulus, termasuk regression native, regression ChaCha20-Poly1305, cross-compile MIPS, dan pembuatan IPK. Artifact IPK serta helper tersedia untuk tahap QEMU VM.
 
 **Diagnosis QEMU #616 (45226008108):** firmware MT7621 berhasil dibangun dan boot. Validasi checksum/artifact, helper regression MIPS, SPSC, worker pool, client lifetime, dan TLS Engine lulus. Core gagal saat startup karena VM workflow hanya mengirim dan memasang IPK `passwall-ssh-core`; IPK patched `libssh2-1_1.11.1-r1_mipsel_24kc.ipk` dari SDK artifact tidak ikut dipasang. Firmware ImageBuilder masih memakai libssh2 bawaan OpenWrt, sehingga dynamic linker tidak menemukan empat API r49 (`libssh2_session_diag_timing_snapshot`, `libssh2_session_diag_timing_enable`, `libssh2_session_callback_set2`, `libssh2_session_set_chacha_workers`). Ini adalah kekurangan alur pemasangan dependency pada workflow VM, bukan kegagalan boot, regression kriptografi, atau bukti bug algoritma r49. Perbaikan workflow: transfer IPK patched libssh2, force-reinstall sebelum core, dan verifikasi keempat simbol pada library runtime. Benchmark internet 100 MB tidak dijalankan.
+
+**Hasil QEMU standar #617:** QEMU MT7621 berhasil boot setelah workflow menginstal patched `libssh2-1` dari SDK artifact #615. Pemeriksaan integrasi standar lulus.
+
+**Hasil Datapacket bandwidth benchmark #620 (45229066437):** direct 100.000.000 byte selesai dalam 3,827 s (`24,93 MiB/s`, HTTP 200, endpoint `79.127.235.9`); SOCKS5 100.000.000 byte selesai dalam 10,686 s (`8,93 MiB/s`, HTTP 200). Keduanya selesai jauh di bawah hard timeout 50 detik dan pasangan byte cocok. Retensi SOCKS5 terhadap direct pada run yang sama adalah 35,8%. Host mencatat tepat satu autentikasi, core tepat satu autentikasi/key establishment dan satu SSH session; cipher aktual `chacha20-poly1305@openssh.com`.
+
+Sampel lima interval aktif selama SOCKS5: `ssh_owner` rata-rata 58,2% satu vCPU; `chacha-dec0/1/2` masing-masing sekitar 13,1%, 13,0%, dan 13,4%; `chacha-poly` sekitar 19,5%. Ini menunjukkan kerja crypto memang terdistribusi ke empat worker pada QEMU 4-vCPU. Hasil speed r49 (`8,93 MiB/s`) belum menunjukkan kenaikan terhadap observasi r48 (`9,58 MiB/s`); perbandingan antar-run bukan A/B terkontrol.
+
+**Mengapa run #620 berstatus failure:** langkah transfer bandwidth dan validasi satu SSH session/cipher lulus. Hanya `Verify S2C timing instrumentation` yang gagal karena `log_raw()` memakai buffer pesan 2.048 byte. Baris `[PERF]` terpotong tepat di akhir `libssh2_chacha20_parallel_us`, sehingga dua field berikutnya yang memang diformat oleh source (`libssh2_chacha20_parallel_bytes` dan `libssh2_chacha20_parallel_packets`) tidak sampai ke file log. Verifier kini menggunakan counter `parallel_us` yang terlihat dan mengharuskan CPU nonzero pada TID ketiga worker ChaCha serta worker Poly1305. Mode `verify_only_run_id` mengambil artifact run #620 untuk validasi ulang tanpa membangun QEMU atau mengulang download 100 MB.
 
 
 Pada paket S2C minimal 4 KiB dan setidaknya dua crypto worker, r49 memakai satu
