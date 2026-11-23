@@ -4,9 +4,9 @@
 #include <libssh2.h>
 
 typedef struct {
-    unsigned long long crypto_decrypt_ns;
-    unsigned long long crypto_decrypt_calls;
-    unsigned long long crypto_decrypt_bytes;
+    unsigned long long decrypt_path_ns;
+    unsigned long long decrypt_path_calls;
+    unsigned long long decrypt_path_bytes;
     unsigned long long transport_read_ns;
     unsigned long long transport_read_calls;
     unsigned long long packet_drain_ns;
