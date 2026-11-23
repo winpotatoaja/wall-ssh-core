@@ -10,7 +10,20 @@ Branch pengerjaan: `phase3/io-worker-pool-foundation`
 
 ## r46 — gunakan ChaCha20-Poly1305 dari libssh2 upstream
 
-**Status: perubahan disiapkan; validasi SDK dan QEMU belum dijalankan.**
+**Status: SDK r46 dan transfer QEMU #67 berhasil; satu pemeriksaan diagnostik workflow sudah diperbaiki.**
+
+### Hasil QEMU #67
+
+- ChaCha20-Poly1305 benar-benar dinegosiasikan.
+- Satu autentikasi dan satu SSH session.
+- Direct: 100.000.000 byte, 19,07 MiB/s, HTTP 200.
+- SOCKS5: 100.000.000 byte, 13,03 MiB/s, HTTP 200.
+- Retensi SOCKS5 terhadap direct: 68,3%.
+- CPU SSH Owner: sekitar 102,5–106,2% dari satu vCPU saat SOCKS5 aktif; empat auxiliary I/O worker tetap 0%.
+
+**Mengapa workflow QEMU #67 tetap berstatus gagal:** semua tes transfer, sesi SSH, dan cipher lulus. Hanya pemeriksaan `Verify S2C timing instrumentation` yang meminta `libssh2_decrypt_path_*` bernilai positif. Itu syarat yang salah untuk ChaCha20-Poly1305. Di libssh2 1.11.1, cipher ChaCha mengatur `LIBSSH2_CRYPT_FLAG_REQUIRES_FULL_PACKET`; `transport.c` lalu memanggil callback `session->remote.crypt->crypt()` langsung, bukan wrapper `decrypt()` yang dihitung oleh diagnostik r43. Akibatnya counter decrypt legacy bernilai nol meskipun data terenkripsi sudah diproses. Counter S2C, transport-read, packet-drain, dan packet-queue justru aktif.
+
+Verifier sudah disesuaikan: counter decrypt legacy boleh nol untuk cipher full-packet, sementara validasi tetap mewajibkan data S2C, transport-read, dan packet-queue aktif. Run #67 tidak diulang supaya tidak membuang kuota untuk mengunduh dua file 100 MB sekali lagi.
 
 SDK r45 #547 berhasil membangun paket, tetapi benchmark QEMU #66 / 45173949790
 gagal sebelum listener SOCKS5 siap. Log core hanya mencapai `Starting Key Exchange`;
