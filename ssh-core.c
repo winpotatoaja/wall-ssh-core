@@ -1494,7 +1494,8 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             "ssh_recv_cb_calls=%llu ssh_recv_s2c_cb_calls=%llu "
             "ssh_recv_syscall_calls=%llu socks_tx_flush_calls=%llu "
             "libssh2_decrypt_path_us=%llu libssh2_decrypt_path_calls=%llu "
-            "libssh2_decrypt_path_bytes=%llu libssh2_transport_read_us=%llu "
+            "libssh2_decrypt_path_bytes=%llu libssh2_decrypt_cipher_calls=%llu "
+            "libssh2_decrypt_cipher_bytes=%llu libssh2_transport_read_us=%llu "
             "libssh2_transport_other_us=%llu libssh2_transport_read_calls=%llu "
             "libssh2_packet_drain_us=%llu libssh2_packet_drain_calls=%llu "
             "libssh2_packet_drain_bytes=%llu libssh2_packet_drain_removed=%llu "
@@ -1553,6 +1554,8 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             (unsigned long long)(libssh2_diag.decrypt_path_ns / 1000U),
             (unsigned long long)libssh2_diag.decrypt_path_calls,
             (unsigned long long)libssh2_diag.decrypt_path_bytes,
+            (unsigned long long)libssh2_diag.decrypt_cipher_calls,
+            (unsigned long long)libssh2_diag.decrypt_cipher_bytes,
             (unsigned long long)(libssh2_diag.transport_read_ns / 1000U),
             (unsigned long long)(libssh2_transport_other_ns / 1000U),
             (unsigned long long)libssh2_diag.transport_read_calls,
@@ -5336,7 +5339,7 @@ static int core_worker_run(int argc, char **argv) {
     struct epoll_event events[MAX_EVENTS];
     if (g_log_perf) {
         libssh2_session_diag_timing_enable(session, 1);
-        log_blue("[LIBSSH2-DIAG] r43 internal timing enabled (libssh2 1.11.0 patched)");
+        log_blue("[LIBSSH2-DIAG] r44 bulk AES-GCM decrypt enabled (libssh2 1.11.0 patched)");
         perf_begin(now_ms());
     }
     int force_next_tick = 0;

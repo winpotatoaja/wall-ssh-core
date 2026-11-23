@@ -8,7 +8,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: openwrt24-mipsel-r43-${{ github.ref }}
+  group: openwrt24-mipsel-r44-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   sdk:
@@ -37,6 +37,9 @@ jobs:
             -Wl,--gc-sections -o /tmp/http-parser-test \
             -lssh2 -lssl -lcrypto
           /tmp/http-parser-test | tee test-results/http-parser-test.log
+          gcc -std=c11 -O2 -g -Wall -Wextra -Werror tests/aesgcm_inplace_test.c \
+            -o /tmp/aesgcm-inplace-test -lcrypto
+          /tmp/aesgcm-inplace-test | tee test-results/aesgcm-inplace-test-native.log
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror -pthread \
             tests/spsc_rb_test.c -o /tmp/spsc-rb-test
           timeout 90s /tmp/spsc-rb-test | tee test-results/spsc-rb-test-native.log
@@ -93,12 +96,14 @@ jobs:
           ./scripts/feeds install libssh2
           echo "CONFIG_PACKAGE_libssh2=y" >> .config
           make defconfig
-          # Extract but do not compile yet: r43 instruments the exact OpenWrt-pinned libssh2 1.11.0 source.
+          # Extract but do not compile yet: r44 instruments the exact OpenWrt-pinned libssh2 1.11.0 source.
           make package/feeds/packages/libssh2/prepare V=s
           LIBSSH2_SRC="$(find build_dir -maxdepth 3 -type d -name 'libssh2-1.11.0' -print -quit)"
           test -n "$LIBSSH2_SRC"
           python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r43_diag.py" "$LIBSSH2_SRC"
           test -s "$LIBSSH2_SRC/.passwall-r43-diag-patched"
+          python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r44_bulk_aesgcm.py" "$LIBSSH2_SRC"
+          test -s "$LIBSSH2_SRC/.passwall-r44-bulk-aesgcm-patched"
           make package/feeds/packages/libssh2/compile -j"$(nproc)" V=s
           test -f "$STAGING/usr/include/openssl/ssl.h"
           test -f "$STAGING/usr/include/libssh2.h"
@@ -108,7 +113,7 @@ jobs:
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_enable'
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_snapshot'
           echo "PASS: patched libssh2 diagnostic API symbols are exported."
-      - name: Build r43 single-session MIPS IPK and I/O worker pool helper
+      - name: Build r44 single-session MIPS IPK and I/O worker pool helper
         shell: bash
         run: |
           set -euo pipefail
@@ -240,7 +245,7 @@ jobs:
                 : "OpenWrt 24.10.7 mipsel_24kc SDK build failed.",
               target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
-      - name: Dispatch single-endpoint r43 Datapacket bandwidth test
+      - name: Dispatch single-endpoint r44 Datapacket bandwidth test
         if: success()
         uses: actions/github-script@v7
         with:
@@ -255,7 +260,7 @@ jobs:
                 source_sha: context.sha
               }
             });
-            core.info("Queued Datapacket-only r43 benchmark using SDK run " + context.runId + " and source " + context.sha);
+            core.info("Queued Datapacket-only r44 benchmark using SDK run " + context.runId + " and source " + context.sha);
   vm:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
     runs-on: ubuntu-26.04
@@ -313,7 +318,7 @@ jobs:
           file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r39' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -q 'Version: 1.0.0-r44' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
           readelf -h test-results/socks-mt-download | grep -q 'MIPS'
           readelf -h test-results/tls-engine-test | grep -q 'MIPS'
@@ -847,8 +852,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r39'; then
-            pass "opkg installed passwall-ssh-core r39 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r44'; then
+            pass "opkg installed passwall-ssh-core r44 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi

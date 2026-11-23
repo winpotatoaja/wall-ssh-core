@@ -7,6 +7,8 @@ typedef struct {
     unsigned long long decrypt_path_ns;
     unsigned long long decrypt_path_calls;
     unsigned long long decrypt_path_bytes;
+    unsigned long long decrypt_cipher_calls;
+    unsigned long long decrypt_cipher_bytes;
     unsigned long long transport_read_ns;
     unsigned long long transport_read_calls;
     unsigned long long packet_drain_ns;

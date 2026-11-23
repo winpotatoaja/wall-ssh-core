@@ -210,6 +210,17 @@ Implementasi yang sudah ada pada branch ini:
 
 **Kesimpulan:** r42 membuktikan receive syscall dan local send bukan bottleneck utama. Mayoritas waktu S2C berada di dalam pemrosesan libssh2_channel_read(). Tahap diagnostik berikutnya harus memisahkan waktu AES-GCM (_libssh2_cipher_crypt) dari transport packet parsing/queue dan drain session->packets sebelum mengubah cipher, buffer, atau arsitektur thread. QEMU belum menggantikan benchmark pada MT7621 fisik.
 
+### r44 — bulk AES-GCM fragment decrypt
+
+**Status implementasi:** patch libssh2 1.11.0 dan uji in-place OpenSSL ditambahkan; validasi native CI, OpenWrt 24.10.7 SDK MIPS, serta QEMU benchmark source-matched masih menunggu hasil Actions.
+
+- Jalur transport khusus `aes128-gcm@openssh.com` / `aes256-gcm@openssh.com` mempertahankan blok pertama untuk membaca panjang paket, kemudian memproses fragmen ciphertext yang tersedia melalui satu callback cipher berukuran penuh, bukan callback berulang per 16 byte.
+- OpenSSL backend menggunakan `EVP_Cipher()` dengan input/output in-place untuk AES-GCM decrypt. Jalur dekripsi tidak lagi menyalin setiap potongan ke `EVP_MAX_BLOCK_LENGTH` temporary buffer lalu menyalinnya kembali. Jalur cipher lain dan AES-GCM encrypt tetap memakai implementasi lama.
+- AAD 4 byte, pemilihan IV yang sudah ada, penempatan tag 16 byte, dan autentikasi final tetap dijalankan oleh state machine GCM yang sama. Tes host dengan payload 24 KiB lulus untuk plaintext, AAD, dan penolakan tag yang dimodifikasi; tes tersebut bukan pengganti validasi di MIPS.
+- Tambahan metrik `libssh2_decrypt_cipher_calls` dan `libssh2_decrypt_cipher_bytes` akan membuktikan perubahan granularitas callback pada hasil QEMU.
+- Satu SSH Owner, satu `LIBSSH2_SESSION`, satu autentikasi, cipher AES-128-GCM, dan buffer S2C 256 KiB tetap dipertahankan. Perubahan ini mengurangi overhead pada jalur serial; **belum membagi dekripsi ke empat vCPU** dan tidak mengizinkan pemanggilan session libssh2 secara paralel.
+
+Kriteria berikutnya: SDK membangun core r44 dan libssh2 yang dipatch, QEMU memasang kedua artifact dari source SHA yang sama, lalu benchmark tunggal Datapacket direct/SOCKS5 100 MB (batas 50 detik per transfer, tanpa retry) harus lulus sebelum ada klaim peningkatan throughput.
 ### r43 — instrumentasi internal libssh2
 
 **Hasil validasi final (23 November 2026):**
