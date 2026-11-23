@@ -209,3 +209,19 @@ Implementasi yang sudah ada pada branch ini:
 - Source libssh2 1.11.0 memang melakukan loop _libssh2_transport_read() sampai EAGAIN sebelum mengiterasi session->packets dan memcpy payload ke buffer channel. OpenSSL backend menjalankan EVP_Cipher() pada jalur _libssh2_cipher_crypt(). Residual r42 mencakup dekripsi/authentication, parsing/framing, packet list, copy/free, serta pekerjaan channel lainnya; bukan waktu AES-GCM murni.
 
 **Kesimpulan:** r42 membuktikan receive syscall dan local send bukan bottleneck utama. Mayoritas waktu S2C berada di dalam pemrosesan libssh2_channel_read(). Tahap diagnostik berikutnya harus memisahkan waktu AES-GCM (_libssh2_cipher_crypt) dari transport packet parsing/queue dan drain session->packets sebelum mengubah cipher, buffer, atau arsitektur thread. QEMU belum menggantikan benchmark pada MT7621 fisik.
+
+### r43 — instrumentasi internal libssh2
+
+- r43 mempertahankan cipher AES-128-GCM dan S2C ring 256 KiB dari r41/r42. Perubahan ini diagnostik; belum ada klaim peningkatan throughput.
+- SDK akan membangun ulang source libssh2 **1.11.0** yang dipakai OpenWrt 24.10.7. Patcher `tools/apply_libssh2_r43_diag.py` diterapkan setelah target prepare dan sebelum compile. Paket artifact SDK berisi dua IPK dari commit/source SHA yang sama: `passwall-ssh-core` r43 dan patched `libssh2 1.11.0-1`.
+- QEMU benchmark memverifikasi checksum kedua IPK, menginstal ulang patched libssh2 secara paksa, memeriksa simbol API diagnostik pada library runtime, lalu menjalankan satu download Datapacket direct dan satu SOCKS5 seperti sebelumnya. Batas tiap transfer 50 detik; tidak ada retry atau sesi SSH tambahan.
+- Metrik baru pada log `[PERF]`:
+  - `libssh2_decrypt_path_us`: durasi helper dekripsi tingkat paket, termasuk pemanggilan cipher dan salinan buffer di helper. **Ini bukan waktu EVP/AES murni.**
+  - `libssh2_transport_read_us`: seluruh waktu pengumpulan, pembongkaran, dekripsi, dan enqueue paket transport.
+  - `libssh2_transport_other_us`: estimasi sisa transport setelah mengurangi decrypt path dan callback receive S2C.
+  - `libssh2_packet_drain_us`: waktu scan/drain `session->packets`, termasuk penyalinan payload dan pelepasan node.
+  - `libssh2_channel_other_us`: estimasi sisa `libssh2_channel_read()` di luar transport read dan queue drain.
+  - `libssh2_packet_queue_current/peak_packets/bytes`: kedalaman antrean saat interval dan puncaknya. Byte current dikurangi pada setiap pembacaan parsial, bukan hanya ketika node dihapus.
+- Semua timer dan counter diagnostik di library hanya aktif setelah autentikasi jika `LOG_PERF=1`. Akses ke session tetap pada satu SSH Owner; tidak ada operasi libssh2 paralel.
+
+**Status r43:** perubahan source, package, SDK/QEMU workflow, dan dokumentasi sudah disiapkan. Validasi compile dan benchmark belum selesai sampai workflow SDK dan benchmark keduanya lulus. Hasil QEMU tetap bukan pengganti uji router MT7621 fisik.
