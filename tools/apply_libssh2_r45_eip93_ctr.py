@@ -93,7 +93,8 @@ void _libssh2_cipher_ctx_dtor(_libssh2_cipher_ctx *ctx);""",
         "#include <sys/types.h>\n"
         "#include <sys/time.h>\n"
         "#include <unistd.h>\n"
-        "#include <linux/if_alg.h>\n",
+        "#include <linux/if_alg.h>\n"
+        "#define PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY 0x00001000U\n",
         "include AF_ALG socket definitions",
     )
 
@@ -110,6 +111,8 @@ _libssh2_eip93_afalg_open(_libssh2_cipher_ctx *ctx,
 
     memset(&sa, 0, sizeof(sa));
     sa.salg_family = AF_ALG;
+    sa.salg_feat = PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY;
+    sa.salg_mask = PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY;
     memcpy(sa.salg_type, "skcipher", sizeof("skcipher"));
     memcpy(sa.salg_name, "ctr(aes-eip93)", sizeof("ctr(aes-eip93)"));
 
