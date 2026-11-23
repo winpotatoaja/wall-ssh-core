@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=42
+PKG_RELEASE:=43
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1
@@ -35,6 +35,7 @@ define Build/Prepare
 	test -s ./ssh-core.c
 	test -s ./tls_engine.c
 	test -s ./tls_engine.h
+	test -s ./libssh2_diag.h
 	test -s ./client_event_token.h
 	test -s ./client_lifetime.h
 	test -s ./client_lifetime.c
@@ -47,6 +48,7 @@ define Build/Prepare
 	$(CP) ./ssh-core.c $(PKG_BUILD_DIR)/ssh-core.c
 	$(CP) ./tls_engine.c $(PKG_BUILD_DIR)/tls_engine.c
 	$(CP) ./tls_engine.h $(PKG_BUILD_DIR)/tls_engine.h
+	$(CP) ./libssh2_diag.h $(PKG_BUILD_DIR)/libssh2_diag.h
 	$(CP) ./client_event_token.h $(PKG_BUILD_DIR)/client_event_token.h
 	$(CP) ./client_lifetime.h $(PKG_BUILD_DIR)/client_lifetime.h
 	$(CP) ./client_lifetime.c $(PKG_BUILD_DIR)/client_lifetime.c
