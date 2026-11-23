@@ -385,6 +385,7 @@ jobs:
           for worker_id in 0 1 2; do
             grep -Eq "tid=[0-9]+/chacha-dec${worker_id}:" "$SAMPLE_LOG"
           done
+          grep -Eq "tid=[0-9]+/chacha-poly:" "$SAMPLE_LOG"
           grep -Fq '[ChaCha] r49 S2C payload: detected_cpus=4 owner_payload_lanes=0 crypto_workers=4 poly1305_workers=1 chacha_payload_workers=3 active_compute_lanes=4 threshold=4096 bytes' "$CORE_LOG"
           awk '
             /^\[PERF\]/ &&
