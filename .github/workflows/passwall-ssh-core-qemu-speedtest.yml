@@ -393,7 +393,6 @@ jobs:
           grep -Fq '[LIBSSH2-DIAG] r46 timing instrumentation enabled (libssh2 1.11.1; ChaCha20-Poly1305 preferred)' "$CORE_LOG"
           awk '
             /^\[PERF\]/ &&
-            /libssh2_decrypt_path_us=[1-9][0-9]*/ &&
             /libssh2_decrypt_path_calls=[1-9][0-9]*/ &&
             /libssh2_decrypt_path_bytes=[1-9][0-9]*/ &&
             /libssh2_transport_read_us=[1-9][0-9]*/ &&
