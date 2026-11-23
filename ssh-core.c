@@ -4,6 +4,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <libssh2.h>
+#ifdef SSH_CORE_MIPSEL_24KC
+#include <linux/if_alg.h>
+#endif
 #include "libssh2_diag.h"
 #include <limits.h>
 #include <netdb.h>
@@ -151,6 +154,48 @@ static __thread int g_log_backpressure = 0;
 /* Set when a pending operation makes further libssh2 I/O unsafe. */
 static __thread int g_skip_libssh2_cleanup = 0;
 static __thread const char *g_kbd_password = "";
+
+#ifdef SSH_CORE_MIPSEL_24KC
+/*
+ * Only report EIP93 when CryptoAPI can bind the exact kernel driver, apply an
+ * AES-128 key, and create an operation socket. A generic ctr(aes) software
+ * fallback must never cause the relay to select AES-CTR as an offload path.
+ */
+static int eip93_ctr_cryptoapi_probe(void) {
+    struct sockaddr_alg sa;
+    unsigned char probe_key[16] = {0};
+    int tfm_fd = -1;
+    int op_fd = -1;
+    int available = 0;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.salg_family = AF_ALG;
+    memcpy(sa.salg_type, "skcipher", sizeof("skcipher"));
+    memcpy(sa.salg_name, "ctr(aes-eip93)", sizeof("ctr(aes-eip93)"));
+
+    tfm_fd = socket(AF_ALG, SOCK_SEQPACKET, 0);
+    if (tfm_fd < 0)
+        goto done;
+    if (bind(tfm_fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
+        goto done;
+    if (setsockopt(tfm_fd, SOL_ALG, ALG_SET_KEY,
+                   probe_key, sizeof(probe_key)) < 0)
+        goto done;
+    op_fd = accept(tfm_fd, NULL, 0);
+    if (op_fd < 0)
+        goto done;
+    available = 1;
+
+done:
+    if (op_fd >= 0)
+        close(op_fd);
+    if (tfm_fd >= 0)
+        close(tfm_fd);
+    OPENSSL_cleanse(probe_key, sizeof(probe_key));
+    return available;
+}
+#endif
+
 
 /* Sentinel tag untuk O(1) epoll dispatch */
 static __thread int g_listen_tag = 0;
@@ -1495,7 +1540,10 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             "ssh_recv_syscall_calls=%llu socks_tx_flush_calls=%llu "
             "libssh2_decrypt_path_us=%llu libssh2_decrypt_path_calls=%llu "
             "libssh2_decrypt_path_bytes=%llu libssh2_decrypt_cipher_calls=%llu "
-            "libssh2_decrypt_cipher_bytes=%llu libssh2_transport_read_us=%llu "
+            "libssh2_decrypt_cipher_bytes=%llu "
+            "libssh2_eip93_ctr_hw_calls=%llu libssh2_eip93_ctr_hw_bytes=%llu "
+            "libssh2_eip93_ctr_sw_calls=%llu libssh2_eip93_ctr_sw_bytes=%llu "
+            "libssh2_transport_read_us=%llu "
             "libssh2_transport_other_us=%llu libssh2_transport_read_calls=%llu "
             "libssh2_packet_drain_us=%llu libssh2_packet_drain_calls=%llu "
             "libssh2_packet_drain_bytes=%llu libssh2_packet_drain_removed=%llu "
@@ -1556,6 +1604,10 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             (unsigned long long)libssh2_diag.decrypt_path_bytes,
             (unsigned long long)libssh2_diag.decrypt_cipher_calls,
             (unsigned long long)libssh2_diag.decrypt_cipher_bytes,
+            (unsigned long long)libssh2_diag.eip93_ctr_hw_calls,
+            (unsigned long long)libssh2_diag.eip93_ctr_hw_bytes,
+            (unsigned long long)libssh2_diag.eip93_ctr_sw_calls,
+            (unsigned long long)libssh2_diag.eip93_ctr_sw_bytes,
             (unsigned long long)(libssh2_diag.transport_read_ns / 1000U),
             (unsigned long long)(libssh2_transport_other_ns / 1000U),
             (unsigned long long)libssh2_diag.transport_read_calls,
@@ -5087,16 +5139,15 @@ static int core_worker_run(int argc, char **argv) {
     log_blue("Starting Key Exchange");
 
 #ifdef SSH_CORE_MIPSEL_24KC
-    /*
-     * The r40 Datapacket run confirmed that AES-128-CTR + HMAC-SHA2-256
-     * is slower than the already-measured AES-GCM path on the MIPS software
-     * crypto backend (5.63 vs 8.88 MiB/s SOCKS5). Restore AES-GCM first for
-     * MT7621; keep CTR as a compatibility fallback. The S2C ring is also
-     * doubled to 256 KiB to reduce relay-pump/read-call overhead per batch.
-     * Other architectures keep their existing cipher preference order.
-     */
-    const char *ssh_cipher_pref =
-        "aes128-gcm@openssh.com,aes128-ctr,aes256-ctr,chacha20-poly1305@openssh.com";
+    int eip93_ctr_available = eip93_ctr_cryptoapi_probe();
+    const char *ssh_cipher_pref = eip93_ctr_available
+        ? "aes128-ctr,aes128-gcm@openssh.com,aes256-ctr,chacha20-poly1305@openssh.com"
+        : "aes128-gcm@openssh.com,aes128-ctr,aes256-ctr,chacha20-poly1305@openssh.com";
+    if (eip93_ctr_available) {
+        log_blue("[EIP93] exact driver ctr(aes-eip93) is available; AES-128-CTR offload preferred");
+    } else {
+        log_yellow("[EIP93] exact driver ctr(aes-eip93) unavailable; retaining AES-128-GCM fallback");
+    }
 #else
     const char *ssh_cipher_pref =
         "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr";
@@ -5107,7 +5158,9 @@ static int core_worker_run(int argc, char **argv) {
         session, LIBSSH2_METHOD_CRYPT_SC, ssh_cipher_pref);
 #ifdef SSH_CORE_MIPSEL_24KC
     if (cipher_cs_rc == 0 && cipher_sc_rc == 0) {
-        log_blue("MT7621 SSH cipher preference: AES-128-GCM first (AES-CTR fallback)");
+        log_blue("MT7621 SSH cipher preference: %s first",
+                 eip93_ctr_available ? "AES-128-CTR (EIP93 exact driver)"
+                                     : "AES-128-GCM (EIP93 unavailable)");
     } else {
         log_yellow("MT7621 SSH cipher preference could not be applied (cs=%d sc=%d); using libssh2 defaults",
                    cipher_cs_rc, cipher_sc_rc);
@@ -5339,7 +5392,7 @@ static int core_worker_run(int argc, char **argv) {
     struct epoll_event events[MAX_EVENTS];
     if (g_log_perf) {
         libssh2_session_diag_timing_enable(session, 1);
-        log_blue("[LIBSSH2-DIAG] r44 bulk AES-GCM decrypt enabled (libssh2 1.11.0 patched)");
+        log_blue("[LIBSSH2-DIAG] r45 EIP93 AES-128-CTR hardware/software accounting enabled (libssh2 1.11.0 patched)");
         perf_begin(now_ms());
     }
     int force_next_tick = 0;
