@@ -25,7 +25,7 @@ Validasi ulang pada SDK run #615 (45224569468) lulus, termasuk regression native
 
 **Hasil QEMU standar #617:** QEMU MT7621 berhasil boot setelah workflow menginstal patched `libssh2-1` dari SDK artifact #615. Pemeriksaan integrasi standar lulus.
 
-**Hasil Datapacket bandwidth benchmark #620 (45229066437):** direct 100.000.000 byte selesai dalam 3,827 s (`24,93 MiB/s`, HTTP 200, endpoint `79.127.235.9`); SOCKS5 100.000.000 byte selesai dalam 10,686 s (`8,93 MiB/s`, HTTP 200). Keduanya selesai jauh di bawah hard timeout 50 detik dan pasangan byte cocok. Retensi SOCKS5 terhadap direct pada run yang sama adalah 35,8%. Host mencatat tepat satu autentikasi, core tepat satu autentikasi/key establishment dan satu SSH session; cipher aktual `chacha20-poly1305@openssh.com`.
+**Hasil Datapacket bandwidth benchmark #70 (45229066437):** direct 100.000.000 byte selesai dalam 3,827 s (`24,93 MiB/s`, HTTP 200, endpoint `79.127.235.9`); SOCKS5 100.000.000 byte selesai dalam 10,686 s (`8,93 MiB/s`, HTTP 200). Keduanya selesai jauh di bawah hard timeout 50 detik dan pasangan byte cocok. Retensi SOCKS5 terhadap direct pada run yang sama adalah 35,8%. Host mencatat tepat satu autentikasi, core tepat satu autentikasi/key establishment dan satu SSH session; cipher aktual `chacha20-poly1305@openssh.com`.
 
 Sampel lima interval aktif selama SOCKS5: `ssh_owner` rata-rata 58,2% satu vCPU; `chacha-dec0/1/2` masing-masing sekitar 13,1%, 13,0%, dan 13,4%; `chacha-poly` sekitar 19,5%. Ini menunjukkan kerja crypto memang terdistribusi ke empat worker pada QEMU 4-vCPU. Hasil speed r49 (`8,93 MiB/s`) belum menunjukkan kenaikan terhadap observasi r48 (`9,58 MiB/s`); perbandingan antar-run bukan A/B terkontrol.
 
