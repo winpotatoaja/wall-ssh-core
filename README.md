@@ -10,7 +10,7 @@ Branch pengerjaan: `benchmark/r39-internet-speedtest`
 
 ## r49 — Poly1305 dipindahkan ke worker dan overlap dengan dekripsi ChaCha20
 
-**Status: patch dan regression sudah disiapkan; validasi native/SDK MIPS menunggu hasil workflow. Belum ada klaim kenaikan throughput.**
+**Status: patch dan regression sudah disiapkan; native regression dan OpenWrt MIPS SDK dijalankan melalui GitHub Actions. Belum ada klaim kenaikan throughput.**
 
 Pada paket S2C minimal 4 KiB dan setidaknya dua crypto worker, r49 memakai satu
 worker khusus untuk menghitung Poly1305 dari snapshot ciphertext, sementara
