@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #define TEST_BYTES 65536U
@@ -169,7 +170,9 @@ int main(void) {
     opfd = open_alg(driver, key);
     if (opfd < 0) {
         if (errno == ENOENT || errno == EAFNOSUPPORT ||
-            errno == EOPNOTSUPP || errno == ENODEV) {
+            errno == EOPNOTSUPP || errno == ENODEV ||
+            errno == ENOPROTOOPT || errno == EPROTONOSUPPORT ||
+            errno == ENOSYS || errno == EPERM || errno == EACCES) {
             printf("SKIP: AF_ALG driver '%s' is unavailable on this host\n", driver);
             return 0;
         }
