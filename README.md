@@ -263,3 +263,22 @@ Sumber upstream: [transport.c](https://github.com/libssh2/libssh2/blob/libssh2-1
 **Arah optimasi berikutnya:** eksperimen r44 sebaiknya memprioritaskan jalur bulk AES-GCM—memproses ciphertext packet sebagai buffer besar melalui EVP, dengan perlakuan khusus yang benar untuk AAD 4 byte, authentication tag 16 byte, IV/nonce per packet, dan verifikasi tag. Jangan mengganti cipher atau mengubah ring buffer sekaligus. Setelah bulk path terbukti benar lewat tes vector/interoperabilitas SSH, lakukan A/B pada node Datapacket yang sama. Implementasi chacha20-poly1305@openssh.com tetap eksperimen terpisah karena libssh2 1.11.0 belum mendukungnya.
 
 **Status r43:** SDK MIPS dan QEMU bandwidth/diagnostic benchmark LULUS. Optimasi throughput dan validasi pada router MT7621 fisik tetap terbuka.
+
+### r45 — eksperimen offload AES-128-CTR melalui MT7621 EIP93
+
+**IMPLEMENTASI DI-BRANCH — SDK/QEMU DAN UJI FISIK MENUNGGU**
+
+**Tujuan:** mengurangi beban decrypt serial pada satu SSH Owner dengan menggunakan akselerator AES MT7621 bila driver kernel benar-benar tersedia. EIP93 tidak mendukung AES-GCM untuk jalur ini, sehingga eksperimen r45 menggunakan AES-128-CTR dengan MAC SSH terpisah. AES-GCM tetap menjadi fallback otomatis.
+
+Perubahan yang disiapkan:
+- Paket MIPS mipsel_24kc menambahkan dependensi kmod-crypto-user dan kmod-crypto-hw-eip93.
+- Saat startup, core mencoba bind AF_ALG ke nama driver spesifik ctr(aes-eip93), memasang kunci AES-128, dan membuka operation socket. Nama generik ctr(aes) tidak pernah dipakai untuk mendeteksi hardware.
+- Jika driver spesifik tidak tersedia, urutan cipher tetap memprioritaskan aes128-gcm@openssh.com. Jika tersedia, AES-128-CTR diprioritaskan; cipher aktual setelah KEX tetap dicatat dalam log.
+- Patcher libssh2 1.11.0 menambahkan backend AF_ALG yang hanya meminta ctr(aes-eip93). Potongan di bawah 1 KiB memakai OpenSSL software sambil meneruskan counter IV; fragmen besar yang block-aligned diproses sebagai satu operasi AF_ALG. Jalur encrypt dan decrypt dibatch agar tidak mengirim potongan 16 byte ke driver.
+- Karena konfigurasi OpenWrt menetapkan software fallback AES-128 sampai 512 byte, batas 1 KiB dipakai untuk menghindari jalur request kecil yang sengaja dialihkan ke software oleh driver.
+- Diagnostik membedakan eip93_ctr_hw_bytes dan eip93_ctr_sw_bytes. Non-zero hardware bytes hanya dicatat setelah operasi pada backend driver spesifik berhasil, bukan hanya karena nama cipher dipilih.
+- Native test tests/afalg_ctr_test.c menguji AES-CTR NIST known-answer, operasi 64 KiB, kontinuitas IV antara batch 1 KiB, dan decrypt round-trip. SDK juga membangun helper statis MIPS afalg-ctr-test untuk uji pada router; jalankan AFALG_CTR_DRIVER='ctr(aes-eip93)' ./afalg-ctr-test.
+
+**Batas validasi:** QEMU MT7621 hanya memvalidasi fallback atau jalur yang benar-benar disediakan emulator. Keberhasilan SDK dan QEMU tidak membuktikan EIP93 bekerja di router fisik. Kriteria bukti hardware adalah helper MIPS berhasil dengan AFALG_CTR_DRIVER=ctr(aes-eip93), log core menunjukkan AES-128-CTR, dan interval PERF mencatat libssh2_eip93_ctr_hw_bytes non-zero. Jika driver spesifik gagal di-bind atau dijalankan, core harus tetap menggunakan AES-GCM fallback.
+
+Pengujian benchmark tetap dibatasi ke satu endpoint Datapacket, masing-masing satu download direct dan satu SOCKS5 berukuran 100 MB, timeout 50 detik per transfer, tanpa retry, satu autentikasi dan satu SSH session. Hasil kecepatan dan kelulusan build belum tersedia pada tahap pencatatan ini.
