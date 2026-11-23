@@ -373,6 +373,20 @@ def patch(root: Path) -> None:
     unsigned long long chacha20_parallel_bytes;
     unsigned long long chacha20_parallel_packets;
 } LIBSSH2_DIAG_TIMING;""", "public ChaCha timing snapshot layout")
+    replace_once(priv,
+"""    unsigned long long chacha20_parallel_packets;
+} LIBSSH2_DIAG_TIMING;""",
+"""    unsigned long long chacha20_parallel_packets;
+} LIBSSH2_DIAG_TIMING;
+
+LIBSSH2_API void
+libssh2_session_diag_timing_enable(LIBSSH2_SESSION *session, int enabled);
+LIBSSH2_API int
+libssh2_session_diag_timing_snapshot(LIBSSH2_SESSION *session,
+                                     LIBSSH2_DIAG_TIMING *timing, int reset);
+LIBSSH2_API void
+libssh2_session_set_chacha_workers(LIBSSH2_SESSION *session,
+                                   unsigned int workers);""", "declare diagnostic APIs before definitions")
 
     chacha_h = root / "src/chacha.h"
     replace_once(chacha_h,
@@ -707,14 +721,25 @@ out:
 
     session_c = root / "src/session.c"
     replace_once(session_c,
+"""{
+    LIBSSH2_PACKET *packet;
+    if(!session)
+        return;
+""",
+"""{
+    LIBSSH2_PACKET *packet;
+    unsigned int requested_workers;
+    unsigned int active_workers;
+    if(!session)
+        return;
+""", "move ChaCha config declarations to function start")
+    replace_once(session_c,
 """    memset(&session->passwall_diag, 0, sizeof(session->passwall_diag));
     if(!enabled)
         return;
 
     packet = _libssh2_list_first(&session->packets);""",
-"""    unsigned int requested_workers;
-    unsigned int active_workers;
-    requested_workers = session->passwall_diag.chacha_workers_requested;
+"""    requested_workers = session->passwall_diag.chacha_workers_requested;
     active_workers = session->passwall_diag.chacha_workers_active;
     memset(&session->passwall_diag, 0, sizeof(session->passwall_diag));
     session->passwall_diag.chacha_workers_requested = requested_workers;
