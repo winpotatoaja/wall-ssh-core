@@ -5336,6 +5336,7 @@ static int core_worker_run(int argc, char **argv) {
     struct epoll_event events[MAX_EVENTS];
     if (g_log_perf) {
         libssh2_session_diag_timing_enable(session, 1);
+        log_blue("[LIBSSH2-DIAG] r43 internal timing enabled (libssh2 1.11.0 patched)");
         perf_begin(now_ms());
     }
     int force_next_tick = 0;
