@@ -271,7 +271,7 @@ main() {
     done
     if [ "$CRYPTO_WORKERS_READY" -ne 1 ]; then
         echo "ERROR: ChaCha decrypt worker pool did not become active; skipping both 100 MB downloads"
-        grep -E '\\[PERF\\]|ChaCha|SSH Cipher' "$RESULT/core.log" 2>/dev/null || :
+        grep -E '\[PERF\]|ChaCha|SSH Cipher' "$RESULT/core.log" 2>/dev/null || :
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
     fi
