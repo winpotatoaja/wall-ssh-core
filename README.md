@@ -6,7 +6,41 @@ hanya boleh dinaikkan menjadi **LULUS** setelah seluruh kriteria tahap tersebut
 dibuktikan oleh hasil pengujian yang tercatat.
 
 Terakhir diperbarui: 2026-11-23  
-Branch pengerjaan: `phase3/io-worker-pool-foundation`
+Branch pengerjaan: `benchmark/r39-internet-speedtest`
+
+## r47 — paralelisme dekripsi ChaCha20 dalam satu paket SSH
+
+**Status: implementasi sudah masuk source; validasi SDK MIPS pasca-perbaikan header masih menunggu. Belum ada klaim speedup.**
+
+r47 memusatkan optimasi pada jalur download S2C yang sebelumnya membuat `ssh_owner`
+menghabiskan sekitar satu vCPU. Worker I/O lama hanya menangani pembacaan socket
+C2S, sehingga tidak ikut mengerjakan dekripsi paket SSH.
+
+Perubahan r47:
+- Tetap mempertahankan tepat satu `LIBSSH2_SESSION` dan satu SSH Owner. Tidak ada
+  pemanggilan libssh2 atau perubahan state channel dari thread tambahan.
+- Setelah Poly1305 memverifikasi seluruh ciphertext, blok payload ChaCha20 yang
+  independen dibagi ke lane Owner dan maksimal tiga worker khusus crypto.
+- Jumlah worker crypto mengikuti CPU yang terdeteksi: satu CPU memakai jalur serial;
+  dua CPU memakai satu worker tambahan; empat CPU memakai tiga worker tambahan.
+- Paket di bawah 4096 byte tetap serial. Jika pool tidak berhasil dibuat, cipher
+  kembali memakai jalur serial.
+- Worker crypto dihancurkan bersama context cipher saat rekey/cleanup.
+- Diagnostik baru memisahkan waktu Poly1305, key/header ChaCha, payload serial,
+  payload paralel, jumlah byte dan jumlah paket paralel.
+
+**Catatan validasi:** SDK run #571 / `45194372103` gagal pada kompilasi libssh2
+karena patcher awal menggunakan tipe internal `chacha_ctx/u8/u32` di header publik.
+Patcher sudah dikoreksi agar memakai `struct chacha_ctx/u_char/u_int`; warning
+deklarasi campuran C90 pada worker juga sudah dirapikan. Run #571 memakai commit
+sebelum koreksi tersebut, jadi belum memvalidasi revisi patcher saat ini.
+
+Kriteria berikutnya: native crypto regression harus lulus untuk payload kecil,
+batas blok, 4 KiB, dan 32 KiB; MIPS SDK harus membangun libssh2 dan IPK r47;
+kemudian runtime MT7621 QEMU harus membuktikan worker aktif, counter paralel
+bertambah, checksum/ukuran transfer tetap benar, dan CPU tidak lagi seluruhnya
+bertumpu pada satu vCPU. Pengujian internet 100 MB tidak dijalankan otomatis pada
+build SDK agar tidak membuang kuota; hanya dijalankan melalui pemicu eksplisit.
 
 ## r46 — gunakan ChaCha20-Poly1305 dari libssh2 upstream
 
