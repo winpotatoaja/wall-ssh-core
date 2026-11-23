@@ -10,7 +10,7 @@ Branch pengerjaan: `benchmark/r39-internet-speedtest`
 
 ## r49 — Poly1305 dipindahkan ke worker dan overlap dengan dekripsi ChaCha20
 
-**Status: native regression dan OpenWrt 24.10.7 MIPS SDK r49 lulus pada run #615. Artifact IPK MIPS tersedia; validasi QEMU VM sedang dijalankan. Belum ada klaim kenaikan throughput karena benchmark bandwidth khusus belum dijalankan.**
+**Status: native regression dan OpenWrt 24.10.7 MIPS SDK r49 lulus pada run #615. QEMU run #616 berhasil boot dan menjalankan helper regressions, tetapi startup core gagal karena workflow belum memasang patched libssh2 dari SDK artifact. Perbaikan instalasi library sedang disiapkan; throughput belum diuji.**
 
 **Hasil validasi awal SDK #609 (45223162174):** native relay regressions lulus,
 SDK berhasil diunduh, dan patched libssh2 berhasil dikonfigurasi untuk MIPS.
@@ -20,6 +20,8 @@ mengisi task type sehingga worker menyelesaikan task tanpa memproses payload.
 Patch r49 diperbaiki untuk menandai task fallback sebagai
 `CHACHA_TASK_DECRYPT`; regression kini juga mencetak jumlah worker saat gagal.
 Validasi ulang pada SDK run #615 (45224569468) lulus, termasuk regression native, regression ChaCha20-Poly1305, cross-compile MIPS, dan pembuatan IPK. Artifact IPK serta helper tersedia untuk tahap QEMU VM.
+
+**Diagnosis QEMU #616 (45226008108):** firmware MT7621 berhasil dibangun dan boot. Validasi checksum/artifact, helper regression MIPS, SPSC, worker pool, client lifetime, dan TLS Engine lulus. Core gagal saat startup karena VM workflow hanya mengirim dan memasang IPK `passwall-ssh-core`; IPK patched `libssh2-1_1.11.1-r1_mipsel_24kc.ipk` dari SDK artifact tidak ikut dipasang. Firmware ImageBuilder masih memakai libssh2 bawaan OpenWrt, sehingga dynamic linker tidak menemukan empat API r49 (`libssh2_session_diag_timing_snapshot`, `libssh2_session_diag_timing_enable`, `libssh2_session_callback_set2`, `libssh2_session_set_chacha_workers`). Ini adalah kekurangan alur pemasangan dependency pada workflow VM, bukan kegagalan boot, regression kriptografi, atau bukti bug algoritma r49. Perbaikan workflow: transfer IPK patched libssh2, force-reinstall sebelum core, dan verifikasi keempat simbol pada library runtime. Benchmark internet 100 MB tidak dijalankan.
 
 
 Pada paket S2C minimal 4 KiB dan setidaknya dua crypto worker, r49 memakai satu
