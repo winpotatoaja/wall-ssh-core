@@ -4,10 +4,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <libssh2.h>
-#ifdef SSH_CORE_MIPSEL_24KC
-#include <linux/if_alg.h>
-#define PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY 0x00001000U
-#endif
 #include "libssh2_diag.h"
 #include <limits.h>
 #include <netdb.h>
@@ -158,114 +154,7 @@ static __thread int g_log_backpressure = 0;
 static __thread int g_skip_libssh2_cleanup = 0;
 static __thread const char *g_kbd_password = "";
 
-#ifdef SSH_CORE_MIPSEL_24KC
-/*
- * Only report EIP93 when CryptoAPI can bind the exact kernel driver, apply an
- * AES-128 key, and create an operation socket. A generic ctr(aes) software
- * fallback must never cause the relay to select AES-CTR as an offload path.
- */
-static int eip93_ctr_cryptoapi_probe(void) {
-    struct sockaddr_alg sa;
-    unsigned char probe_key[16] = {0};
-    unsigned char iv[16] = {0};
-    unsigned char input[1024] = {0};
-    unsigned char output[1024];
-    union {
-        struct cmsghdr align;
-        unsigned char bytes[
-            CMSG_SPACE(sizeof(uint32_t)) +
-            CMSG_SPACE(sizeof(struct af_alg_iv) + sizeof(iv))
-        ];
-    } control;
-    struct iovec iov;
-    struct msghdr msg;
-    struct cmsghdr *cmsg;
-    struct af_alg_iv *alg_iv;
-    struct timeval timeout = { 2, 0 };
-    uint32_t operation = ALG_OP_ENCRYPT;
-    ssize_t sent;
-    size_t received = 0;
-    int tfm_fd = -1;
-    int op_fd = -1;
-    int available = 0;
 
-    memset(&sa, 0, sizeof(sa));
-    sa.salg_family = AF_ALG;
-    sa.salg_feat = PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY;
-    sa.salg_mask = PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY;
-    memcpy(sa.salg_type, "skcipher", sizeof("skcipher"));
-    memcpy(sa.salg_name, "ctr(aes-eip93)", sizeof("ctr(aes-eip93)"));
-
-    tfm_fd = socket(AF_ALG, SOCK_SEQPACKET, 0);
-    if (tfm_fd < 0)
-        goto done;
-    if (bind(tfm_fd, (struct sockaddr *)&sa, sizeof(sa)) < 0)
-        goto done;
-    if (setsockopt(tfm_fd, SOL_ALG, ALG_SET_KEY,
-                   probe_key, sizeof(probe_key)) < 0)
-        goto done;
-    op_fd = accept(tfm_fd, NULL, 0);
-    if (op_fd < 0)
-        goto done;
-    if (setsockopt(op_fd, SOL_SOCKET, SO_RCVTIMEO,
-                   &timeout, sizeof(timeout)) < 0 ||
-        setsockopt(op_fd, SOL_SOCKET, SO_SNDTIMEO,
-                   &timeout, sizeof(timeout)) < 0)
-        goto done;
-
-    memset(&control, 0, sizeof(control));
-    memset(&msg, 0, sizeof(msg));
-    iov.iov_base = input;
-    iov.iov_len = sizeof(input);
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = control.bytes;
-    msg.msg_controllen = sizeof(control.bytes);
-
-    cmsg = CMSG_FIRSTHDR(&msg);
-    if (!cmsg)
-        goto done;
-    cmsg->cmsg_level = SOL_ALG;
-    cmsg->cmsg_type = ALG_SET_OP;
-    cmsg->cmsg_len = CMSG_LEN(sizeof(operation));
-    memcpy(CMSG_DATA(cmsg), &operation, sizeof(operation));
-
-    cmsg = CMSG_NXTHDR(&msg, cmsg);
-    if (!cmsg)
-        goto done;
-    cmsg->cmsg_level = SOL_ALG;
-    cmsg->cmsg_type = ALG_SET_IV;
-    cmsg->cmsg_len = CMSG_LEN(sizeof(struct af_alg_iv) + sizeof(iv));
-    alg_iv = (struct af_alg_iv *)CMSG_DATA(cmsg);
-    alg_iv->ivlen = sizeof(iv);
-    memcpy(alg_iv->iv, iv, sizeof(iv));
-
-    do {
-        sent = sendmsg(op_fd, &msg, 0);
-    } while (sent < 0 && errno == EINTR);
-    if (sent != (ssize_t)sizeof(input))
-        goto done;
-
-    while (received < sizeof(output)) {
-        ssize_t n = recv(op_fd, output + received,
-                         sizeof(output) - received, 0);
-        if (n < 0 && errno == EINTR)
-            continue;
-        if (n <= 0)
-            goto done;
-        received += (size_t)n;
-    }
-    available = 1;
-
-done:
-    if (op_fd >= 0)
-        close(op_fd);
-    if (tfm_fd >= 0)
-        close(tfm_fd);
-    OPENSSL_cleanse(probe_key, sizeof(probe_key));
-    OPENSSL_cleanse(output, sizeof(output));
-    return available;
-}
 #endif
 
 
@@ -1611,10 +1500,7 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             "ssh_recv_cb_calls=%llu ssh_recv_s2c_cb_calls=%llu "
             "ssh_recv_syscall_calls=%llu socks_tx_flush_calls=%llu "
             "libssh2_decrypt_path_us=%llu libssh2_decrypt_path_calls=%llu "
-            "libssh2_decrypt_path_bytes=%llu libssh2_decrypt_cipher_calls=%llu "
-            "libssh2_decrypt_cipher_bytes=%llu "
-            "libssh2_eip93_ctr_hw_calls=%llu libssh2_eip93_ctr_hw_bytes=%llu "
-            "libssh2_eip93_ctr_sw_calls=%llu libssh2_eip93_ctr_sw_bytes=%llu "
+            "libssh2_decrypt_path_bytes=%llu "
             "libssh2_transport_read_us=%llu "
             "libssh2_transport_other_us=%llu libssh2_transport_read_calls=%llu "
             "libssh2_packet_drain_us=%llu libssh2_packet_drain_calls=%llu "
@@ -1674,13 +1560,7 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             (unsigned long long)(libssh2_diag.decrypt_path_ns / 1000U),
             (unsigned long long)libssh2_diag.decrypt_path_calls,
             (unsigned long long)libssh2_diag.decrypt_path_bytes,
-            (unsigned long long)libssh2_diag.decrypt_cipher_calls,
-            (unsigned long long)libssh2_diag.decrypt_cipher_bytes,
-            (unsigned long long)libssh2_diag.eip93_ctr_hw_calls,
-            (unsigned long long)libssh2_diag.eip93_ctr_hw_bytes,
-            (unsigned long long)libssh2_diag.eip93_ctr_sw_calls,
-            (unsigned long long)libssh2_diag.eip93_ctr_sw_bytes,
-            (unsigned long long)(libssh2_diag.transport_read_ns / 1000U),
+(unsigned long long)(libssh2_diag.transport_read_ns / 1000U),
             (unsigned long long)(libssh2_transport_other_ns / 1000U),
             (unsigned long long)libssh2_diag.transport_read_calls,
             (unsigned long long)(libssh2_diag.packet_drain_ns / 1000U),
@@ -5210,37 +5090,20 @@ static int core_worker_run(int argc, char **argv) {
     log_blue("SSH Client : %s (libssh2)", SSH_CLIENT_BANNER + 8);
     log_blue("Starting Key Exchange");
 
-#ifdef SSH_CORE_MIPSEL_24KC
-    int eip93_ctr_available = eip93_ctr_cryptoapi_probe();
-    const char *ssh_cipher_pref = eip93_ctr_available
-        ? "aes128-ctr,aes128-gcm@openssh.com,aes256-ctr,chacha20-poly1305@openssh.com"
-        : "aes128-gcm@openssh.com,aes128-ctr,aes256-ctr,chacha20-poly1305@openssh.com";
-    if (eip93_ctr_available) {
-        log_blue("[EIP93] exact driver ctr(aes-eip93) is available; AES-128-CTR offload preferred");
-    } else {
-        log_yellow("[EIP93] exact driver ctr(aes-eip93) unavailable; retaining AES-128-GCM fallback");
-    }
-#else
     const char *ssh_cipher_pref =
         "chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes128-ctr,aes256-ctr";
-#endif
     int cipher_cs_rc = libssh2_session_method_pref(
         session, LIBSSH2_METHOD_CRYPT_CS, ssh_cipher_pref);
     int cipher_sc_rc = libssh2_session_method_pref(
         session, LIBSSH2_METHOD_CRYPT_SC, ssh_cipher_pref);
-#ifdef SSH_CORE_MIPSEL_24KC
     if (cipher_cs_rc == 0 && cipher_sc_rc == 0) {
-        log_blue("MT7621 SSH cipher preference: %s first",
-                 eip93_ctr_available ? "AES-128-CTR (EIP93 exact driver)"
-                                     : "AES-128-GCM (EIP93 unavailable)");
+        log_blue("SSH cipher preference: chacha20-poly1305@openssh.com first; AES fallback enabled");
     } else {
-        log_yellow("MT7621 SSH cipher preference could not be applied (cs=%d sc=%d); using libssh2 defaults",
+        log_yellow("SSH cipher preference could not be applied (cs=%d sc=%d); using libssh2 defaults",
                    cipher_cs_rc, cipher_sc_rc);
     }
-#else
     (void)cipher_cs_rc;
     (void)cipher_sc_rc;
-#endif
 
     {
         long long deadline = now_ms() + HANDSHAKE_TIMEOUT_MS;
@@ -5464,7 +5327,7 @@ static int core_worker_run(int argc, char **argv) {
     struct epoll_event events[MAX_EVENTS];
     if (g_log_perf) {
         libssh2_session_diag_timing_enable(session, 1);
-        log_blue("[LIBSSH2-DIAG] r45 EIP93 AES-128-CTR hardware/software accounting enabled (libssh2 1.11.0 patched)");
+        log_blue("[LIBSSH2-DIAG] r46 timing instrumentation enabled (libssh2 1.11.1; ChaCha20-Poly1305 preferred)");
         perf_begin(now_ms());
     }
     int force_next_tick = 0;
