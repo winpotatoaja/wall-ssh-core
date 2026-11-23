@@ -190,7 +190,7 @@ jobs:
           install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/etc/dropbear/authorized_keys"
           install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/root/.ssh/authorized_keys"
           cd "$IB_DIR"
-          make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2 kmod-crypto-user kmod-crypto-hw-eip93" FILES="$FILES_DIR"
+          make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2" FILES="$FILES_DIR"
           echo "ImageBuilder completed; available firmware images:"
           find bin/targets/ramips/mt7621 -maxdepth 1 -type f -printf '%f (%s bytes)\\n' | sort
           SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*sysupgrade.bin' -print -quit)"
