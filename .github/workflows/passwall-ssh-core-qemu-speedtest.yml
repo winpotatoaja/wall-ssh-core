@@ -371,6 +371,7 @@ jobs:
           test -s "$CORE_LOG"
           if grep -Fq '[EIP93] exact driver ctr(aes-eip93) is available' "$CORE_LOG"; then
             grep -Fq 'SSH Cipher: aes128-ctr' "$CORE_LOG"
+            grep -Eq 'SSH Cipher: aes128-ctr \\| MAC: hmac-' "$CORE_LOG"
             awk '/^\[PERF\]/ && /libssh2_eip93_ctr_hw_bytes=[1-9][0-9]*/ { found=1 } END { exit !found }' "$CORE_LOG"
             echo "PASS: QEMU negotiated AES-128-CTR and recorded bytes through the exact EIP93 backend."
           else
