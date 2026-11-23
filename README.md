@@ -212,15 +212,18 @@ Implementasi yang sudah ada pada branch ini:
 
 ### r44 — bulk AES-GCM fragment decrypt
 
-**Status implementasi:** patch libssh2 1.11.0 dan uji in-place OpenSSL ditambahkan. SDK attempt pertama #508 berhenti di patcher karena anchor untuk struktur snapshot tidak unik; patcher kini menargetkan typedef snapshot dengan konteks yang spesifik. Validasi native CI, OpenWrt 24.10.7 SDK MIPS, serta QEMU benchmark source-matched masih menunggu hasil Actions.
+<badge color="success">SDK dan QEMU LULUS — throughput belum meningkat</badge>
 
-- Jalur transport khusus `aes128-gcm@openssh.com` / `aes256-gcm@openssh.com` mempertahankan blok pertama untuk membaca panjang paket, kemudian memproses fragmen ciphertext yang tersedia melalui satu callback cipher berukuran penuh, bukan callback berulang per 16 byte.
-- OpenSSL backend menggunakan `EVP_Cipher()` dengan input/output in-place untuk AES-GCM decrypt. Jalur dekripsi tidak lagi menyalin setiap potongan ke `EVP_MAX_BLOCK_LENGTH` temporary buffer lalu menyalinnya kembali. Jalur cipher lain dan AES-GCM encrypt tetap memakai implementasi lama.
-- AAD 4 byte, pemilihan IV yang sudah ada, penempatan tag 16 byte, dan autentikasi final tetap dijalankan oleh state machine GCM yang sama. Tes host dengan payload 24 KiB lulus untuk plaintext, AAD, dan penolakan tag yang dimodifikasi; tes tersebut bukan pengganti validasi di MIPS.
-- Tambahan metrik `libssh2_decrypt_cipher_calls` dan `libssh2_decrypt_cipher_bytes` akan membuktikan perubahan granularitas callback pada hasil QEMU.
-- Satu SSH Owner, satu `LIBSSH2_SESSION`, satu autentikasi, cipher AES-128-GCM, dan buffer S2C 256 KiB tetap dipertahankan. Perubahan ini mengurangi overhead pada jalur serial; **belum membagi dekripsi ke empat vCPU** dan tidak mengizinkan pemanggilan session libssh2 secara paralel.
+**Hasil validasi final (23 November 2026):**
 
-Kriteria berikutnya: SDK membangun core r44 dan libssh2 yang dipatch, QEMU memasang kedua artifact dari source SHA yang sama, lalu benchmark tunggal Datapacket direct/SOCKS5 100 MB (batas 50 detik per transfer, tanpa retry) harus lulus sebelum ada klaim peningkatan throughput.
+- Native regression termasuk tes in-place AES-GCM 24 KiB, AAD, dan invalid-tag rejection lulus pada SDK run #509 (45095624630). Build OpenWrt 24.10.7 SDK `mipsel_24kc` juga lulus, termasuk libssh2 1.11.0 yang dipatch, core r44, dan helper I/O worker.
+- Artifact SDK #509: `14783167575`, source SHA `c2f2f24a52466e00eb116b7904d0ad8def4e8297`. Paket `passwall-ssh-core_1.0.0-r44_mipsel_24kc.ipk` SHA-256 `ab03abc97299c1066e72e28fe77f344b4c7691fe662f417a6da6f702813084be`; paket `libssh2-1_1.11.0-r1_mipsel_24kc.ipk` SHA-256 `264d941f25f6ada6b43444569a02f8bf52528e49440e0a3a36a7bfafef03d050`.
+- QEMU run #65 (45095948507) sukses dengan kedua IPK dari source SHA yang sama; artifact hasil `14783835785`. Satu transfer direct dan satu SOCKS5 masing-masing menyelesaikan 100.000.000 byte, HTTP 200, dalam batas 50 detik. Direct 27,05 MiB/s; SOCKS5 8,28 MiB/s. Satu autentikasi, satu key establishment, satu SSH session, dan cipher aktual `aes128-gcm@openssh.com` diverifikasi.
+- Hasil SOCKS5 r44 (8,28 MiB/s) praktis sama dengan r43 (8,35 MiB/s; sekitar -0,8%). Direct r44 27,05 MiB/s tidak dapat dibandingkan langsung dengan r43 14,45 MiB/s karena IP node Datapacket berbeda (`79.127.235.11` vs `79.127.213.228`). **Tidak ada klaim speedup throughput untuk r44.**
+- Jalur bulk terbukti aktif: pada tujuh interval transfer steady, 88.177.152 byte ciphertext diproses melalui 7.840 callback (rata-rata sekitar 11.247 byte/callback), bukan satu callback per blok AES 16 byte. Namun durasi decrypt path mencapai 7,435 detik dari 8,826 detik interval aktif tersebut (84,2%). Ini menunjukkan pengurangan overhead pemanggilan/copy belum menghilangkan biaya komputasi decrypt AES-GCM.
+- Sampling 4 vCPU menunjukkan thread `ssh_owner` sekitar 95–105% satu vCPU, sementara keempat auxiliary I/O worker tetap 0%. Ini konsisten dengan satu SSH Owner yang menjalankan libssh2 secara serial; menambah worker I/O tidak memparalelkan state `LIBSSH2_SESSION`.
+
+**Kesimpulan dan arah berikutnya:** r44 berhasil mengurangi granularitas callback dan menghindari temporary-buffer copy pada jalur AES-GCM, tetapi throughput tetap dibatasi CPU decrypt serial. Tahap optimasi berikutnya harus menargetkan backend/cipher crypto, bukan sekadar menambah worker. Evaluasi offload MT7621 perlu memakai cipher yang memang didukung EIP93 (misalnya AES-CTR plus MAC melalui jalur Crypto API/AF_ALG); driver EIP93 OpenWrt tidak menyediakan AES-GCM untuk jalur SSH ini. Hasil QEMU belum menggantikan validasi router MT7621 fisik.
 ### r43 — instrumentasi internal libssh2
 
 **Hasil validasi final (23 November 2026):**
