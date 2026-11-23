@@ -100,10 +100,10 @@ main(void)
         0U, 1U, 63U, 64U, 65U, 4095U, 4096U, 4097U,
         8191U, 8192U, 16384U, MAX_PAYLOAD
     };
-    static const unsigned int worker_counts[] = { 1U, 2U, 4U };
+    static const unsigned int worker_counts[] = { 1U, 2U, 3U, 4U };
     unsigned char key[64];
     struct chachapoly_ctx encrypt_ctx;
-    struct chachapoly_ctx decrypt_ctx[3];
+    struct chachapoly_ctx decrypt_ctx[4];
     size_t i, j;
 
     memset(&encrypt_ctx, 0, sizeof(encrypt_ctx));
@@ -120,7 +120,7 @@ main(void)
                            worker_counts[i]) != 0) {
             fprintf(stderr, "ChaCha worker pool initialization failed (%u)\n",
                     worker_counts[i]);
-            for(j = 0; j < 3U; j++)
+            for(j = 0; j < 4U; j++)
                 chachapoly_cleanup(&decrypt_ctx[j]);
             chachapoly_cleanup(&encrypt_ctx);
             return 1;
@@ -128,7 +128,7 @@ main(void)
         if(chachapoly_parallel_workers(&decrypt_ctx[i]) != worker_counts[i]) {
             fprintf(stderr, "requested %u ChaCha workers were not created\n",
                     worker_counts[i]);
-            for(j = 0; j < 3U; j++)
+            for(j = 0; j < 4U; j++)
                 chachapoly_cleanup(&decrypt_ctx[j]);
             chachapoly_cleanup(&encrypt_ctx);
             return 1;
@@ -140,7 +140,7 @@ main(void)
             if(test_case(&encrypt_ctx, &decrypt_ctx[j],
                          0x4800U + (unsigned int)(i * 16U + j),
                          lengths[i]) != 0) {
-                for(j = 0; j < 3U; j++)
+                for(j = 0; j < 4U; j++)
                     chachapoly_cleanup(&decrypt_ctx[j]);
                 chachapoly_cleanup(&encrypt_ctx);
                 return 1;
@@ -148,7 +148,7 @@ main(void)
         }
     }
 
-    for(i = 0; i < 3U; i++)
+    for(i = 0; i < 4U; i++)
         chachapoly_cleanup(&decrypt_ctx[i]);
     chachapoly_cleanup(&encrypt_ctx);
     puts("PASS: ChaCha20-Poly1305 serial/parallel equivalence, tails and tag rejection");
