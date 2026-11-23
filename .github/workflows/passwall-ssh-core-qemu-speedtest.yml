@@ -379,7 +379,10 @@ jobs:
         run: |
           set -euo pipefail
           CORE_LOG=bandwidth-results/qemu-speedtest/core.log
+          SAMPLE_LOG=bandwidth-results/qemu-speedtest/samples.log
           test -s "$CORE_LOG"
+          test -s "$SAMPLE_LOG"
+          grep -Eq 'tid=[0-9]+/chacha-dec[0-2]:' "$SAMPLE_LOG"
           awk '
             /^\[PERF\]/ &&
             /s2c_read_bytes=[1-9][0-9]*/ &&
