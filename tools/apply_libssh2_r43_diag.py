@@ -51,6 +51,25 @@ def patch(root: Path) -> None:
 /* session.state bits */""",
 """};
 
+/* Public snapshot layout shared with the app's libssh2_diag.h. */
+typedef struct {
+    unsigned long long crypto_decrypt_ns;
+    unsigned long long crypto_decrypt_calls;
+    unsigned long long crypto_decrypt_bytes;
+    unsigned long long transport_read_ns;
+    unsigned long long transport_read_calls;
+    unsigned long long packet_drain_ns;
+    unsigned long long packet_drain_calls;
+    unsigned long long packet_drain_bytes;
+    unsigned long long packet_drain_removed;
+    unsigned long long packet_queue_packets_current;
+    unsigned long long packet_queue_bytes_current;
+    unsigned long long packet_queue_packets_peak;
+    unsigned long long packet_queue_bytes_peak;
+    unsigned long long packet_queue_enqueued_packets;
+    unsigned long long packet_queue_enqueued_bytes;
+} LIBSSH2_DIAG_TIMING;
+
 /* High-resolution monotonic clock; called only while r43 diagnostics are enabled. */
 static inline unsigned long long
 _libssh2_diag_now_ns(void)
@@ -204,9 +223,7 @@ decrypt_impl(LIBSSH2_SESSION * session, unsigned char *source,
 """    return LIBSSH2_ERROR_NONE;         /* all is fine */
 }
 
-
-
- /*
+/*
  * fullpacket()""",
 """    return LIBSSH2_ERROR_NONE;         /* all is fine */
 }
