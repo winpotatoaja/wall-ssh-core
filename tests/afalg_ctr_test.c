@@ -240,7 +240,7 @@ int main(void) {
         goto done;
     }
 
-    printf("PASS: AF_ALG %s AES-128-CTR KAT, 64 KiB batching, "
+    printf("PASS: AF_ALG %s AES-128-CTR KAT, 32 KiB batching, "
            "split-IV continuity, and decrypt round-trip\n", driver);
 
 done:
