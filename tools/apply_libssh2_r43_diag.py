@@ -27,9 +27,9 @@ def patch(root: Path) -> None:
     struct {
         int enabled;
         unsigned int transport_depth;
-        unsigned long long crypto_decrypt_ns;
-        unsigned long long crypto_decrypt_calls;
-        unsigned long long crypto_decrypt_bytes;
+        unsigned long long decrypt_path_ns;
+        unsigned long long decrypt_path_calls;
+        unsigned long long decrypt_path_bytes;
         unsigned long long transport_read_ns;
         unsigned long long transport_read_calls;
         unsigned long long packet_drain_ns;
@@ -53,9 +53,9 @@ def patch(root: Path) -> None:
 
 /* Public snapshot layout shared with the app's libssh2_diag.h. */
 typedef struct {
-    unsigned long long crypto_decrypt_ns;
-    unsigned long long crypto_decrypt_calls;
-    unsigned long long crypto_decrypt_bytes;
+    unsigned long long decrypt_path_ns;
+    unsigned long long decrypt_path_calls;
+    unsigned long long decrypt_path_bytes;
     unsigned long long transport_read_ns;
     unsigned long long transport_read_calls;
     unsigned long long packet_drain_ns;
@@ -212,31 +212,44 @@ _libssh2_diag_packet_dequeued(LIBSSH2_SESSION *session, size_t data_len)
 
     transport = root / "src/transport.c"
     replace_once(transport,
-"""        if(session->remote.crypt->crypt(session, source, decryptlen,
-                                        &session->remote.crypt_abstract,
-                                        lowerfirstlast)) {
-            LIBSSH2_FREE(session, p->payload);
-            return LIBSSH2_ERROR_DECRYPT;
-        }""",
-"""        unsigned long long crypto_started = session->passwall_diag.enabled
-            ? _libssh2_diag_now_ns() : 0;
-        int crypto_rc = session->remote.crypt->crypt(
-            session, source, decryptlen, &session->remote.crypt_abstract,
-            lowerfirstlast);
-        if(session->passwall_diag.enabled) {
-            unsigned long long crypto_ended = _libssh2_diag_now_ns();
-            session->passwall_diag.crypto_decrypt_calls++;
-            session->passwall_diag.crypto_decrypt_bytes +=
-                (unsigned long long)decryptlen;
-            if(crypto_started && crypto_ended >= crypto_started)
-                session->passwall_diag.crypto_decrypt_ns +=
-                    crypto_ended - crypto_started;
-        }
-        if(crypto_rc) {
-            LIBSSH2_FREE(session, p->payload);
-            return LIBSSH2_ERROR_DECRYPT;
-        }""",
-                 "time exact cipher callback")
+"""static int
+decrypt(LIBSSH2_SESSION * session, unsigned char *source,
+        unsigned char *dest, ssize_t len, int firstlast)""",
+"""static int
+decrypt_impl(LIBSSH2_SESSION * session, unsigned char *source,
+             unsigned char *dest, ssize_t len, int firstlast)""",
+                 "rename decrypt implementation")
+    replace_once(transport,
+"""    return LIBSSH2_ERROR_NONE;         /* all is fine */
+}
+
+/*
+ * fullpacket()""",
+"""    return LIBSSH2_ERROR_NONE;         /* all is fine */
+}
+
+static int
+decrypt(LIBSSH2_SESSION *session, unsigned char *source,
+        unsigned char *dest, ssize_t len, int firstlast)
+{
+    unsigned long long started = session->passwall_diag.enabled
+        ? _libssh2_diag_now_ns() : 0;
+    int rc = decrypt_impl(session, source, dest, len, firstlast);
+
+    if(session->passwall_diag.enabled) {
+        unsigned long long ended = _libssh2_diag_now_ns();
+        session->passwall_diag.decrypt_path_calls++;
+        if(len > 0)
+            session->passwall_diag.decrypt_path_bytes += (unsigned long long)len;
+        if(started && ended >= started)
+            session->passwall_diag.decrypt_path_ns += ended - started;
+    }
+    return rc;
+}
+
+/*
+ * fullpacket()""",
+                 "time packet decrypt helper path")
     replace_once(transport,
 """int _libssh2_transport_read(LIBSSH2_SESSION * session)
 {""",
@@ -320,12 +333,12 @@ libssh2_session_diag_timing_snapshot(LIBSSH2_SESSION *session,
     if(!session || !timing)
         return -1;
 
-    timing->crypto_decrypt_ns =
-        session->passwall_diag.crypto_decrypt_ns;
-    timing->crypto_decrypt_calls =
-        session->passwall_diag.crypto_decrypt_calls;
-    timing->crypto_decrypt_bytes =
-        session->passwall_diag.crypto_decrypt_bytes;
+    timing->decrypt_path_ns =
+        session->passwall_diag.decrypt_path_ns;
+    timing->decrypt_path_calls =
+        session->passwall_diag.decrypt_path_calls;
+    timing->decrypt_path_bytes =
+        session->passwall_diag.decrypt_path_bytes;
     timing->transport_read_ns =
         session->passwall_diag.transport_read_ns;
     timing->transport_read_calls =
@@ -352,9 +365,9 @@ libssh2_session_diag_timing_snapshot(LIBSSH2_SESSION *session,
         session->passwall_diag.packet_queue_enqueued_bytes;
 
     if(reset) {
-        session->passwall_diag.crypto_decrypt_ns = 0;
-        session->passwall_diag.crypto_decrypt_calls = 0;
-        session->passwall_diag.crypto_decrypt_bytes = 0;
+        session->passwall_diag.decrypt_path_ns = 0;
+        session->passwall_diag.decrypt_path_calls = 0;
+        session->passwall_diag.decrypt_path_bytes = 0;
         session->passwall_diag.transport_read_ns = 0;
         session->passwall_diag.transport_read_calls = 0;
         session->passwall_diag.packet_drain_ns = 0;
