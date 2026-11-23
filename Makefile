@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=passwall-ssh-core
 PKG_VERSION:=1.0.0
-PKG_RELEASE:=45
+PKG_RELEASE:=46
 
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 PKG_BUILD_PARALLEL:=1
@@ -10,15 +10,13 @@ PKG_BUILD_PARALLEL:=1
 include $(INCLUDE_DIR)/package.mk
 
 # OpenWrt package architectures expose mipsel_24kc through ARCH_PACKAGES.
-# Keep the MIPS-specific SSH crypto backend and its kernel AF_ALG/EIP93
-# dependencies scoped to the MT7621 mipsel_24kc ABI.
+# Keep the MIPS-specific TLS cipher preference and atomic helper scoped to
+# the MT7621 mipsel_24kc ABI.
 CORE_ARCH_CPPFLAGS:=
 CORE_ARCH_LDLIBS:=
-CORE_ARCH_DEPENDS:=
 ifneq ($(filter mipsel_24kc,$(ARCH_PACKAGES) $(CONFIG_ARCH) $(ARCH)),)
   CORE_ARCH_CPPFLAGS+=-DSSH_CORE_MIPSEL_24KC=1
   CORE_ARCH_LDLIBS+=-latomic
-  CORE_ARCH_DEPENDS+= +kmod-crypto-user +kmod-crypto-hw-eip93
 endif
 
 define Package/passwall-ssh-core
