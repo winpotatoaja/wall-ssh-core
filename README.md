@@ -212,26 +212,40 @@ Implementasi yang sudah ada pada branch ini:
 
 ### r43 — instrumentasi internal libssh2
 
-**Catatan perbaikan build dan evaluasi cipher (23 November 2026):**
+**Hasil validasi final (23 November 2026):**
 
-- SDK run `45088480296` berhenti pada tahap native regression, sebelum mengunduh SDK atau mengompilasi libssh2. Penyebabnya dua pemanggilan `perf_log_interval()` di `tests/http_parser_test.c` masih memakai signature lama; fungsi sekarang menerima `LIBSSH2_SESSION *diag_session`. Test harness diperbaiki dengan mengirim `NULL` (jalur snapshot diagnostik memang opsional). Belum ada perubahan runtime relay dari perbaikan ini.
-- SDK run `45088869971` melewati kompilasi C tetapi gagal saat link karena native test terhubung ke libssh2 Ubuntu yang belum memiliki simbol privat `libssh2_session_diag_timing_snapshot`. Test harness kini menyediakan stub no-op khusus native parser test yang mengisi snapshot nol. Build OpenWrt tetap memakai library libssh2 patched dari SDK; stub ini tidak masuk ke paket produksi.
-- SDK run `45089285496` lulus seluruh native regression, membangun OpenSSL/zlib/libssh2 MIPS, mengekspor dua simbol diagnostik, dan menghasilkan IPK core r43. Kegagalan terjadi sesudahnya karena workflow mencari nama file libssh2 yang salah. OpenWrt memberi nama paket ABI `libssh2-1_1.11.0-r1_mipsel_24kc.ipk` dengan metadata `Package: libssh2-1`, `Version: 1.11.0-r1`; SDK artifact path dan QEMU installer/verifier telah disesuaikan. Build SDK belum dinyatakan lulus sampai retry melewati seluruh pembuatan artifact dan helper.
-- Benchmark wolfSSL pada GL-AR300M16/QCA9531 MIPS 24Kc 650 MHz menunjukkan ChaCha20-Poly1305 15,42 MiB/s dan OpenSSL AES-128-GCM 5,04 MiB/s dengan blok 16 KiB. Ini mendukung eksperimen ChaCha pada CPU MIPS tanpa AES instructions, tetapi bukan hasil benchmark SSH `libssh2` atau MT7621.
-- Hambatan integrasi: OpenWrt package saat ini memakai libssh2 1.11.0, dan source cipher table-nya tidak mengimplementasikan `chacha20-poly1305@openssh.com`. Mengubah urutan cipher atau konfigurasi OpenSSL saja tidak dapat mengaktifkannya. Diperlukan implementasi protokol SSH ChaCha20-Poly1305 di libssh2 (atau penggantian backend SSH yang kompatibel) beserta tes interoperabilitas dan performa.
-- MT7621 EIP93 mendaftarkan AES-ECB/CBC/CTR dan sejumlah authenc/IPsec transform, bukan AES-GCM atau ChaCha20-Poly1305. Selain itu, keberadaan driver kernel Crypto API tidak otomatis berarti `EVP_Cipher()` OpenSSL/libssh2 menggunakan hardware tersebut. Jalur itu harus dibuktikan terpisah.
-- Negosiasi ChaCha TLS/HTTPS adalah lapisan berbeda dari cipher SSH. Cipher TLS yang ditawarkan dan dipilih bergantung pada dukungan serta kebijakan client/server; tidak boleh diasumsikan otomatis mengubah cipher SSH di dalam sesi.
+- SDK run #505 (45089937167) sukses dari source SHA db67210a0c790fd18e65133bae31bd99bd56654a. Native regression, build OpenSSL/zlib, patched libssh2 1.11.0, ekspor kedua simbol diagnostik, build core r43, dan seluruh cross-build helper MIPS lulus. Artifact 14780852255 berisi passwall-ssh-core_1.0.0-r43_mipsel_24kc.ipk serta libssh2-1_1.11.0-r1_mipsel_24kc.ipk; checksum SHA-256 keduanya diverifikasi.
+- QEMU benchmark run #64 (45090529026) sukses dan menggunakan SDK artifact dari source SHA yang sama. Artifact hasil 14781795383. Semua tahapan QEMU lulus, termasuk verifikasi satu autentikasi SSH yang diterima, satu session/key establishment, cipher aktual, dan timing internal libssh2. Run benchmark #63 dibatalkan saat dua dispatch SDK berdekatan; run #64 adalah hasil final.
+- Datapacket 100.000.000 byte, HTTP 200: direct 6,602 s / 14,45 MiB/s; SOCKS5 11,428 s / 8,35 MiB/s. Pair lulus dengan byte count sama. SOCKS mempertahankan 57,8% dari direct pada run ini.
+- Dibanding r42, hasil SOCKS5 r43 secara mentah naik dari 6,93 menjadi 8,35 MiB/s (+20,5%). Ini belum membuktikan speedup dari perubahan kode: server direct r42 adalah 79.127.235.12, sedangkan r43 79.127.213.228; baseline direct masing-masing 23,82 dan 14,45 MiB/s. Endpoint Datapacket memilih node berbeda dan pengujian bukan A/B pada node yang dikunci.
+- Emulator preset MT7621A melaporkan empat vCPU. Selama transfer, ssh_owner berada di sekitar 100–107,5% satu vCPU; empat auxiliary I/O worker tetap 0%. Proses tetap satu SSH Owner, satu autentikasi, dan satu session. Ini mengonfirmasi batas serial pada SSH Owner dalam QEMU, bukan bukti pengukuran pada router MT7621 fisik.
 
-- r43 mempertahankan cipher AES-128-GCM dan S2C ring 256 KiB dari r41/r42. Perubahan ini diagnostik; belum ada klaim peningkatan throughput.
-- SDK akan membangun ulang source libssh2 **1.11.0** yang dipakai OpenWrt 24.10.7. Patcher `tools/apply_libssh2_r43_diag.py` diterapkan setelah target prepare dan sebelum compile. Paket artifact SDK berisi dua IPK dari commit/source SHA yang sama: `passwall-ssh-core` r43 dan patched `libssh2 1.11.0-1`.
-- QEMU benchmark memverifikasi checksum kedua IPK, menginstal ulang patched libssh2 secara paksa, memeriksa simbol API diagnostik pada library runtime, lalu menjalankan satu download Datapacket direct dan satu SOCKS5 seperti sebelumnya. Batas tiap transfer 50 detik; tidak ada retry atau sesi SSH tambahan.
-- Metrik baru pada log `[PERF]`:
-  - `libssh2_decrypt_path_us`: durasi helper dekripsi tingkat paket, termasuk pemanggilan cipher dan salinan buffer di helper. **Ini bukan waktu EVP/AES murni.**
-  - `libssh2_transport_read_us`: seluruh waktu pengumpulan, pembongkaran, dekripsi, dan enqueue paket transport.
-  - `libssh2_transport_other_us`: estimasi sisa transport setelah mengurangi decrypt path dan callback receive S2C.
-  - `libssh2_packet_drain_us`: waktu scan/drain `session->packets`, termasuk penyalinan payload dan pelepasan node.
-  - `libssh2_channel_other_us`: estimasi sisa `libssh2_channel_read()` di luar transport read dan queue drain.
-  - `libssh2_packet_queue_current/peak_packets/bytes`: kedalaman antrean saat interval dan puncaknya. Byte current dikurangi pada setiap pembacaan parsial, bukan hanya ketika node dihapus.
-- Semua timer dan counter diagnostik di library hanya aktif setelah autentikasi jika `LOG_PERF=1`. Akses ke session tetap pada satu SSH Owner; tidak ada operasi libssh2 paralel.
+**Hasil instrumentasi internal libssh2:**
 
-**Status r43:** perubahan source, package, SDK/QEMU workflow, dan dokumentasi sudah disiapkan. Validasi compile dan benchmark belum selesai sampai workflow SDK dan benchmark keduanya lulus. Hasil QEMU tetap bukan pengganti uji router MT7621 fisik.
+Sepuluh interval aktif mencakup 100.000.431 byte S2C. Total perf_s2c_read_us adalah 9,553148 s, dengan pembagian berikut:
+
+| Jalur | Waktu | Porsi libssh2_channel_read() |
+|---|---:|---:|
+| libssh2_decrypt_path_us | 8,558728 s | **89,59%** |
+| Receive callback bersarang | 0,363901 s | 3,81% |
+| Sisa transport di luar decrypt dan callback | 0,247212 s | 2,59% |
+| Drain packet queue | 0,263848 s | 2,76% |
+| Sisa pekerjaan channel | 0,119438 s | 1,25% |
+
+Syscall recv() memakai 0,318516 s (3,33% dari channel-read) dan merupakan bagian dari receive callback, bukan biaya tambahan untuk dijumlahkan lagi. Pengiriman S2C ke socket SOCKS memakai 0,288423 s (3,02% dari channel-read) dan tidak menunjukkan EAGAIN atau partial write. Artinya, local socket send dan packet-queue drain bukan bottleneck dominan pada run ini.
+
+**Interpretasi penting:** libssh2_decrypt_path_us adalah durasi helper decrypt(), termasuk pemanggilan crypto backend, loop, dan copy buffer. Ini bukan waktu AES/EVP murni. Namun source libssh2 1.11.0 mengungkap titik yang sangat layak dioptimalkan:
+
+- src/crypt.c mendefinisikan blocksize AES-GCM sebesar 16 byte.
+- src/transport.c memproses data melalui loop per blocksize dan memanggil callback cipher untuk tiap potongan.
+- src/openssl.c menjalankan EVP_Cipher() pada potongan tersebut, menyalin hasil dari temporary buffer, lalu jalur transport menyalinnya lagi ke destination buffer.
+
+Dengan sekitar 100,16 MB pada decrypt helper, jalur ini memproses pada orde 6,26 juta potongan 16-byte. Jadi bottleneck yang tampak bukan semata-mata AES MIPS lambat; biaya pemanggilan EVP yang sangat kecil-kecil dan salinan berulang kemungkinan berperan besar. Timing r43 belum memisahkan waktu EVP murni dari loop/copy, sehingga pembagian itu masih perlu dibuktikan.
+
+Sumber upstream: [transport.c](https://github.com/libssh2/libssh2/blob/libssh2-1.11.0/src/transport.c), [crypt.c](https://github.com/libssh2/libssh2/blob/libssh2-1.11.0/src/crypt.c), dan [openssl.c](https://github.com/libssh2/libssh2/blob/libssh2-1.11.0/src/openssl.c).
+
+**Antrean internal:** puncak byte queue yang tercatat 2.383.182 byte (sekitar 2,27 MiB); rata-rata snapshot current di batas interval sekitar 939 KB. Ada selisih kecil pada accounting akhir: enqueue dikurangi dequeue menunjukkan satu packet/37.493 byte tersisa, sedangkan gauge akhir melaporkan 0 packet/37.476 byte. Karena itu, angka queue berguna untuk menunjukkan read-ahead yang besar, tetapi packet-count/current-byte gauge masih perlu dirapikan sebelum diperlakukan sebagai accounting eksak.
+
+**Arah optimasi berikutnya:** eksperimen r44 sebaiknya memprioritaskan jalur bulk AES-GCM—memproses ciphertext packet sebagai buffer besar melalui EVP, dengan perlakuan khusus yang benar untuk AAD 4 byte, authentication tag 16 byte, IV/nonce per packet, dan verifikasi tag. Jangan mengganti cipher atau mengubah ring buffer sekaligus. Setelah bulk path terbukti benar lewat tes vector/interoperabilitas SSH, lakukan A/B pada node Datapacket yang sama. Implementasi chacha20-poly1305@openssh.com tetap eksperimen terpisah karena libssh2 1.11.0 belum mendukungnya.
+
+**Status r43:** SDK MIPS dan QEMU bandwidth/diagnostic benchmark LULUS. Optimasi throughput dan validasi pada router MT7621 fisik tetap terbuka.
