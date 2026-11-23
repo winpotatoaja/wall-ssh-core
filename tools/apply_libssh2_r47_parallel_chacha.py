@@ -448,9 +448,11 @@ chachapoly_init(struct chachapoly_ctx *ctx, const u_char *key, u_int keylen)
 chachapoly_init(struct chachapoly_ctx *ctx, const u_char *key, u_int keylen,
                 unsigned int parallel_workers)
 {
-    if(!ctx || !key || keylen != (32 + 32)) /* 2 x 256 bit keys */
+    if(!ctx)
         return LIBSSH2_ERROR_INVAL;
     memset(ctx, 0, sizeof(*ctx));
+    if(!key || keylen != (32 + 32)) /* 2 x 256 bit keys */
+        return LIBSSH2_ERROR_INVAL;
     chacha_keysetup(&ctx->main_ctx, key, 256);
     chacha_keysetup(&ctx->header_ctx, key + 32, 256);
     if(parallel_workers > 0U)
