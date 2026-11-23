@@ -63,6 +63,12 @@ chacha_parallel_worker_main(void *opaque)
         return NULL;
 
     while(!pool->stopping) {
+        chacha_ctx local_state;
+        const u8 *source;
+        u8 *destination;
+        u_int offset;
+        u_int length;
+
         while(!pool->stopping && seen_generation == pool->generation) {
             int wait_rc = pthread_cond_wait(&pool->work_ready, &pool->mutex);
             if(wait_rc != 0) {
@@ -77,11 +83,11 @@ chacha_parallel_worker_main(void *opaque)
             break;
 
         seen_generation = pool->generation;
-        chacha_ctx local_state = pool->states[worker->index];
-        const u8 *source = pool->source;
-        u8 *destination = pool->destination;
-        u_int offset = pool->offsets[worker->index];
-        u_int length = pool->lengths[worker->index];
+        local_state = pool->states[worker->index];
+        source = pool->source;
+        destination = pool->destination;
+        offset = pool->offsets[worker->index];
+        length = pool->lengths[worker->index];
 
         (void)pthread_mutex_unlock(&pool->mutex);
         chacha_encrypt_bytes(&local_state, source + offset,
