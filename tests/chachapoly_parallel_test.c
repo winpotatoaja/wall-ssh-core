@@ -29,7 +29,7 @@ pattern_byte(unsigned int seed, size_t offset)
 static int
 test_case(struct chachapoly_ctx *encrypt_ctx,
           struct chachapoly_ctx *decrypt_ctx,
-          unsigned int seed, u_int payload_len)
+          unsigned int seed, u_int payload_len, unsigned int workers)
 {
     size_t packet_len = PACKET_HEADER_LEN + (size_t)payload_len;
     size_t wire_len = packet_len + POLY_TAG_LEN;
@@ -57,11 +57,11 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
 
     if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, wire, wire,
                         payload_len, PACKET_HEADER_LEN, 0) != 0) {
-        fprintf(stderr, "parallel decryption failed for payload %u\n", payload_len);
+        fprintf(stderr, "parallel decryption failed for payload %u with %u workers\n", payload_len, workers);
         goto out;
     }
     if(memcmp(wire, plain, packet_len) != 0) {
-        fprintf(stderr, "plaintext mismatch for payload %u\n", payload_len);
+        fprintf(stderr, "plaintext mismatch for payload %u with %u workers\n", payload_len, workers);
         goto out;
     }
 
@@ -139,7 +139,7 @@ main(void)
         for(j = 0; j < sizeof(worker_counts) / sizeof(worker_counts[0]); j++) {
             if(test_case(&encrypt_ctx, &decrypt_ctx[j],
                          0x4800U + (unsigned int)(i * 16U + j),
-                         lengths[i]) != 0) {
+                         lengths[i], worker_counts[j]) != 0) {
                 for(j = 0; j < 4U; j++)
                     chachapoly_cleanup(&decrypt_ctx[j]);
                 chachapoly_cleanup(&encrypt_ctx);
