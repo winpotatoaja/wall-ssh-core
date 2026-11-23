@@ -10,44 +10,39 @@ Branch pengerjaan: `benchmark/r39-internet-speedtest`
 
 ## r47 — paralelisme dekripsi ChaCha20 dalam satu paket SSH
 
-**Status: implementasi sudah masuk source; validasi SDK MIPS pasca-perbaikan header masih menunggu. Belum ada klaim speedup.**
+**Status: SDK dan QEMU r47 lulus; paralelisme runtime terverifikasi, throughput belum menjadi A/B terkontrol.**
 
-r47 memusatkan optimasi pada jalur download S2C yang sebelumnya membuat `ssh_owner`
-menghabiskan sekitar satu vCPU. Worker I/O lama hanya menangani pembacaan socket
-C2S, sehingga tidak ikut mengerjakan dekripsi paket SSH.
+r47 memecah payload ChaCha20 S2C ke lane Owner dan maksimal tiga worker crypto,
+tanpa menjalankan libssh2 pada thread lain. Poly1305 masih dijalankan serial oleh
+Owner sebelum dekripsi in-place. Worker pool aktif dan dibuat saat key exchange.
 
-Perubahan r47:
-- Tetap mempertahankan tepat satu `LIBSSH2_SESSION` dan satu SSH Owner. Tidak ada
-  pemanggilan libssh2 atau perubahan state channel dari thread tambahan.
-- Setelah Poly1305 memverifikasi seluruh ciphertext, blok payload ChaCha20 yang
-  independen dibagi ke lane Owner dan maksimal tiga worker khusus crypto.
-- Jumlah worker crypto mengikuti CPU yang terdeteksi: satu CPU memakai jalur serial;
-  dua CPU memakai satu worker tambahan; empat CPU memakai tiga worker tambahan.
-- Paket di bawah 4096 byte tetap serial. Jika pool tidak berhasil dibuat, cipher
-  kembali memakai jalur serial.
-- Worker crypto dihancurkan bersama context cipher saat rekey/cleanup.
-- Diagnostik baru memisahkan waktu Poly1305, key/header ChaCha, payload serial,
-  payload paralel, jumlah byte dan jumlah paket paralel.
+### Validasi SDK #586 dan QEMU #68
 
-**Catatan validasi:** SDK run #571 / `45194372103` gagal pada kompilasi libssh2
-karena patcher awal menggunakan tipe internal `chacha_ctx/u8/u32` di header publik.
-Patcher sudah dikoreksi agar memakai `struct chacha_ctx/u_char/u_int`, deklarasi
-worker dirapikan untuk C90, prototype diagnostik ditambahkan, dan thread crypto
-diberi nama `chacha-decN` agar penggunaan CPU tiap lane terlihat.
+- SDK #586 / `45205194833`, source SHA `508e3be82433e0838a7b113de3997c11c64aa2a9`,
+  berhasil membangun IPK `mipsel_24kc` r47 dan patched libssh2 1.11.1.
+- Regression ChaCha serial-encrypt vs parallel-decrypt lulus untuk payload
+  0–32 KiB, termasuk batas blok, ambang 4 KiB, satu/tiga worker, dan tag rusak.
+  Tag yang gagal diverifikasi ditolak tanpa meninggalkan plaintext di buffer.
+- QEMU #68 / `45207007052` lulus: satu autentikasi dan satu SSH session,
+  cipher ChaCha20-Poly1305, serta transfer direct/SOCKS5 masing-masing tepat
+  100.000.000 byte, HTTP 200.
+- Direct 20,30 MiB/s; SOCKS5 9,41 MiB/s; retensi pada run yang sama 46,4%.
+  Endpoint direct berbeda dari r46 (79.127.213.245 vs 79.127.235.51), sehingga
+  angka tersebut bukan bukti bahwa r47 lebih cepat atau lambat dari r46.
+- Empat vCPU terdeteksi. Saat transfer SOCKS5, `ssh_owner` menggunakan sekitar
+  86–88% satu vCPU; tiga worker crypto `chacha-dec0..2` masing-masing sekitar
+  11–12%; empat worker I/O socket tetap 0%. Ini membuktikan sebagian kerja crypto
+  telah keluar dari Owner, tetapi Owner masih merupakan thread terpadat.
+- Counter PERF menunjukkan sekitar 94,5 MB payload diproses melalui jalur
+  ChaCha paralel pada interval transfer. Poly1305 serial masih memakan sekitar
+  180–254 ms per interval aktif satu detik.
 
-SDK run #577 / `45195734454` berhasil membangun libssh2 1.11.1 dan membuat IPK
-`libssh2-1_1.11.1-r1_mipsel_24kc.ipk`, tetapi langkah validasi setelah compile
-gagal karena OpenWrt membersihkan source tree seusai target `compile`. Workflow
-kemudian mencari `libssh2_config.h` yang sudah terhapus. Urutan diperbaiki:
-jalankan target `configure`, compile dan jalankan crypto regression ketika source
-masih ada, baru jalankan target `compile`. Revisi ini belum divalidasi Actions.
-Kriteria berikutnya: native crypto regression harus lulus untuk payload kecil,
-batas blok, 4 KiB, dan 32 KiB; MIPS SDK harus membangun libssh2 dan IPK r47;
-kemudian runtime MT7621 QEMU harus membuktikan worker aktif, counter paralel
-bertambah, checksum/ukuran transfer tetap benar, dan CPU tidak lagi seluruhnya
-bertumpu pada satu vCPU. Pengujian internet 100 MB tidak dijalankan otomatis pada
-build SDK agar tidak membuang kuota; hanya dijalankan melalui pemicu eksplisit.
-
+**Arah optimasi selanjutnya:** jangan menambah thread I/O. Beban serial Poly1305
+adalah kandidat yang layak ditangani berikutnya. r48 akan menguji pemrosesan
+Poly1305 pada worker khusus secara bersamaan dengan transformasi ChaCha, dengan
+ciphertext disalin ke scratch sebelum pekerjaan dimulai agar tag diverifikasi
+terhadap ciphertext asli dan payload yang gagal autentikasi dipulihkan sebelum
+libssh2 menerima hasil.
 ## r46 — gunakan ChaCha20-Poly1305 dari libssh2 upstream
 
 **Status: SDK r46 dan transfer QEMU #67 berhasil; satu pemeriksaan diagnostik workflow sudah diperbaiki.**
