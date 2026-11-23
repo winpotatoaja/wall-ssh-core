@@ -153,6 +153,10 @@ jobs:
           readelf -h "$BIN" | tee "$GITHUB_WORKSPACE/test-results/elf-header.txt"
           CROSS_CC="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -path '*/bin/*-openwrt-linux-musl-gcc' -print | head -n 1)"
           test -n "$CROSS_CC"
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror "$GITHUB_WORKSPACE/tests/afalg_ctr_test.c" -o "$GITHUB_WORKSPACE/test-results/afalg-ctr-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/afalg-ctr-test"
+          file "$GITHUB_WORKSPACE/test-results/afalg-ctr-test" | tee "$GITHUB_WORKSPACE/test-results/afalg-ctr-test-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum afalg-ctr-test > afalg-ctr-test.sha256)
           "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -pthread "$GITHUB_WORKSPACE/tests/spsc_rb_test.c" -o "$GITHUB_WORKSPACE/test-results/spsc-rb-test"
           chmod 0755 "$GITHUB_WORKSPACE/test-results/spsc-rb-test"
           file "$GITHUB_WORKSPACE/test-results/spsc-rb-test" | tee "$GITHUB_WORKSPACE/test-results/spsc-rb-test-file.txt"
@@ -203,6 +207,9 @@ jobs:
             test-results/libssh2-1_1.11.0-r1_mipsel_24kc.ipk
             test-results/build-source.sha
             test-results/ipk.sha256
+            test-results/afalg-ctr-test
+            test-results/afalg-ctr-test.sha256
+            test-results/afalg-ctr-test-file.txt
             test-results/socks-halfclose
             test-results/halfclose.sha256
             test-results/socks-mt-download
