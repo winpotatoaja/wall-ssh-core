@@ -8,7 +8,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: openwrt24-mipsel-r42-${{ github.ref }}
+  group: openwrt24-mipsel-r43-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   sdk:
@@ -93,13 +93,22 @@ jobs:
           ./scripts/feeds install libssh2
           echo "CONFIG_PACKAGE_libssh2=y" >> .config
           make defconfig
+          # Extract but do not compile yet: r43 instruments the exact OpenWrt-pinned libssh2 1.11.0 source.
+          make package/feeds/packages/libssh2/prepare V=s
+          LIBSSH2_SRC="$(find build_dir -maxdepth 3 -type d -name 'libssh2-1.11.0' -print -quit)"
+          test -n "$LIBSSH2_SRC"
+          python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r43_diag.py" "$LIBSSH2_SRC"
+          test -s "$LIBSSH2_SRC/.passwall-r43-diag-patched"
           make package/feeds/packages/libssh2/compile -j"$(nproc)" V=s
           test -f "$STAGING/usr/include/openssl/ssl.h"
           test -f "$STAGING/usr/include/libssh2.h"
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
-      - name: Build r42 single-session MIPS IPK and I/O worker pool helper
+          nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_enable'
+          nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_snapshot'
+          echo "PASS: patched libssh2 diagnostic API symbols are exported."
+      - name: Build r43 single-session MIPS IPK and I/O worker pool helper
         shell: bash
         run: |
           set -euo pipefail
@@ -107,7 +116,7 @@ jobs:
           mkdir -p "$PKG_DIR"
           cp Makefile "$PKG_DIR/Makefile"
           cp ssh-core.c "$PKG_DIR/ssh-core.c"
-          cp tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h client_lifetime.c client_lifetime.h io_worker_completion_tracker.c io_worker_completion_tracker.h "$PKG_DIR/"
+          cp tls_engine.c tls_engine.h libssh2_diag.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h client_lifetime.c client_lifetime.h io_worker_completion_tracker.c io_worker_completion_tracker.h "$PKG_DIR/"
           cd "$GITHUB_WORKSPACE/sdk"
           echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
           make defconfig
@@ -120,11 +129,13 @@ jobs:
           fi
           echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
           IPK="$(find bin/packages -type f -name 'passwall-ssh-core*.ipk' | head -n 1)"
+          LIBSSH2_IPK="$(find bin/packages -type f -name 'libssh2_1.11.0-1_mipsel_24kc.ipk' | head -n 1)"
           test -n "$IPK"
+          test -n "$LIBSSH2_IPK"
           mkdir -p "$GITHUB_WORKSPACE/test-results"
-          cp "$IPK" "$GITHUB_WORKSPACE/test-results/"
+          cp "$IPK" "$LIBSSH2_IPK" "$GITHUB_WORKSPACE/test-results/"
           printf '%s\n' "$GITHUB_SHA" > "$GITHUB_WORKSPACE/test-results/build-source.sha"
-          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum "$(basename "$IPK")" > ipk.sha256)
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum "$(basename "$IPK")" "$(basename "$LIBSSH2_IPK")" > ipk.sha256)
           file "$IPK"
           sha256sum "$IPK"
           BIN="$(find "$GITHUB_WORKSPACE/sdk/build_dir" -type f -name passwall-ssh-core -perm -111 | head -n 1)"
@@ -179,6 +190,7 @@ jobs:
           name: passwall-ssh-core-openwrt-24.10.7-mipsel-ipk
           path: |
             test-results/passwall-ssh-core*.ipk
+            test-results/libssh2_1.11.0-1_mipsel_24kc.ipk
             test-results/build-source.sha
             test-results/ipk.sha256
             test-results/socks-halfclose
@@ -228,7 +240,7 @@ jobs:
                 : "OpenWrt 24.10.7 mipsel_24kc SDK build failed.",
               target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
-      - name: Dispatch single-endpoint r42 Datapacket bandwidth test
+      - name: Dispatch single-endpoint r43 Datapacket bandwidth test
         if: success()
         uses: actions/github-script@v7
         with:
@@ -243,7 +255,7 @@ jobs:
                 source_sha: context.sha
               }
             });
-            core.info("Queued Datapacket-only r42 benchmark using SDK run " + context.runId + " and source " + context.sha);
+            core.info("Queued Datapacket-only r43 benchmark using SDK run " + context.runId + " and source " + context.sha);
   vm:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
     runs-on: ubuntu-26.04
