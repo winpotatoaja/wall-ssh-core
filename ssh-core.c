@@ -1518,7 +1518,7 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             "libssh2_packet_queue_enqueued_packets=%llu "
             "libssh2_packet_queue_enqueued_bytes=%llu "
             "libssh2_chacha_workers_requested=%u libssh2_chacha_workers_active=%u "
-            "libssh2_chacha_poly1305_us=%llu libssh2_chacha20_key_us=%llu "
+            "libssh2_chacha_poly1305_us=%llu libssh2_chacha_poly1305_offloaded_packets=%llu libssh2_chacha20_key_us=%llu "
             "libssh2_chacha20_header_us=%llu libssh2_chacha20_payload_us=%llu "
             "libssh2_chacha20_serial_us=%llu libssh2_chacha20_serial_bytes=%llu "
             "libssh2_chacha20_serial_packets=%llu libssh2_chacha20_parallel_us=%llu "
@@ -1588,6 +1588,7 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             libssh2_diag.chacha_workers_requested,
             libssh2_diag.chacha_workers_active,
             (unsigned long long)(libssh2_diag.chacha_poly1305_ns / 1000U),
+            (unsigned long long)libssh2_diag.chacha_poly1305_offloaded_packets,
             (unsigned long long)(libssh2_diag.chacha20_key_ns / 1000U),
             (unsigned long long)(libssh2_diag.chacha20_header_ns / 1000U),
             (unsigned long long)(libssh2_diag.chacha20_payload_ns / 1000U),
@@ -5100,9 +5101,11 @@ static int core_worker_run(int argc, char **argv) {
     unsigned int chacha_workers =
         chacha_worker_count_for_cpu_count(g_detected_cpu_count);
     libssh2_session_set_chacha_workers(session, chacha_workers);
-    log_blue("[ChaCha] r48 S2C payload: detected_cpus=%ld owner_payload_lanes=%u crypto_workers=%u active_compute_lanes=%u threshold=4096 bytes",
+    log_blue("[ChaCha] r49 S2C payload: detected_cpus=%ld owner_payload_lanes=%u crypto_workers=%u poly1305_workers=%u chacha_payload_workers=%u active_compute_lanes=%u threshold=4096 bytes",
              g_detected_cpu_count, chacha_workers ? 0U : 1U,
-             chacha_workers, chacha_workers ? chacha_workers : 1U);
+             chacha_workers, chacha_workers >= 2U ? 1U : 0U,
+             chacha_workers >= 2U ? chacha_workers - 1U : 0U,
+             chacha_workers ? chacha_workers : 1U);
 #if LIBSSH2_VERSION_NUM >= 0x010b01
     /* libssh2 1.11.1+ has the typed callback API. */
     libssh2_session_callback_set2(session, LIBSSH2_CALLBACK_RECV, (libssh2_cb_generic *)ssh_recv_cb);
