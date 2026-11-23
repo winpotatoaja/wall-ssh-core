@@ -272,7 +272,7 @@ Sumber upstream: [transport.c](https://github.com/libssh2/libssh2/blob/libssh2-1
 
 Perubahan yang disiapkan:
 - Paket MIPS mipsel_24kc menambahkan dependensi kmod-crypto-user dan kmod-crypto-hw-eip93.
-- Saat startup, core mencoba bind AF_ALG ke nama driver spesifik ctr(aes-eip93), memasang kunci AES-128, dan membuka operation socket. Nama generik ctr(aes) tidak pernah dipakai untuk mendeteksi hardware.
+- Saat startup, core bind AF_ALG ke nama driver spesifik ctr(aes-eip93), memasang kunci AES-128, lalu menjalankan request enkripsi 1 KiB dengan timeout 2 detik. Nama generik ctr(aes) tidak pernah dipakai untuk mendeteksi hardware. Driver yang hanya bisa di-bind tetapi tidak dapat menyelesaikan request tidak akan dipilih.
 - Jika driver spesifik tidak tersedia, urutan cipher tetap memprioritaskan aes128-gcm@openssh.com. Jika tersedia, AES-128-CTR diprioritaskan; cipher aktual setelah KEX tetap dicatat dalam log.
 - Patcher libssh2 1.11.0 menambahkan backend AF_ALG yang hanya meminta ctr(aes-eip93). Potongan di bawah 1 KiB memakai OpenSSL software sambil meneruskan counter IV; fragmen besar yang block-aligned diproses sebagai satu operasi AF_ALG. Jalur encrypt dan decrypt dibatch agar tidak mengirim potongan 16 byte ke driver.
 - Karena konfigurasi OpenWrt menetapkan software fallback AES-128 sampai 512 byte, batas 1 KiB dipakai untuk menghindari jalur request kecil yang sengaja dialihkan ke software oleh driver.
