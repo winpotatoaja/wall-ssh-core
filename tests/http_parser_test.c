@@ -2,6 +2,18 @@
 #define SSH_CORE_PARSER_TEST 1
 #include "../ssh-core.c"
 
+/* Native parser tests link against the distro libssh2, not the patched
+ * OpenWrt diagnostic build. Keep the LOG_PERF regression independent from
+ * that private library API; production builds use the real implementation. */
+int libssh2_session_diag_timing_snapshot(LIBSSH2_SESSION *session,
+                                         LIBSSH2_DIAG_TIMING *timing,
+                                         int reset) {
+    (void)session;
+    (void)reset;
+    if (timing) memset(timing, 0, sizeof(*timing));
+    return 0;
+}
+
 #include <sys/un.h>
 
 static int run_case(const char *name, const char *response,
