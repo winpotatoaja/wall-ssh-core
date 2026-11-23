@@ -423,8 +423,9 @@ _libssh2_cipher_crypt(_libssh2_cipher_ctx *ctx,
     transport = root / "src/transport.c"
     replace_once(
         transport,
-        """    if(!CRYPT_FLAG_L(session, PKTLEN_AAD))
-        assert((len % blocksize) == 0);
+        """        memcpy(dest, source, (size_t)len);
+        return LIBSSH2_ERROR_NONE;
+    }
 
     while(len > 0) {""",
         """    /*
