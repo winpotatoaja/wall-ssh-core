@@ -370,8 +370,8 @@ def patch(root: Path) -> None:
 
     chacha_h = root / "src/chacha.h"
     replace_once(chacha_h,
-"""void chacha_encrypt_bytes(chacha_ctx *x, const u8 *m,
-                          u8 *c, u32 bytes);
+"""void chacha_encrypt_bytes(struct chacha_ctx *x, const u_char *m,
+                          u_char *c, u_int bytes);
 
 #endif""",
 """void chacha_encrypt_bytes(chacha_ctx *x, const u8 *m,
