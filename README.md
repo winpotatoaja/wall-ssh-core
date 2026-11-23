@@ -10,7 +10,17 @@ Branch pengerjaan: `benchmark/r39-internet-speedtest`
 
 ## r49 — Poly1305 dipindahkan ke worker dan overlap dengan dekripsi ChaCha20
 
-**Status: patch dan regression sudah disiapkan; native regression dan OpenWrt MIPS SDK dijalankan melalui GitHub Actions. Belum ada klaim kenaikan throughput.**
+**Status: patch fallback diperbaiki setelah regression SDK #609 gagal; menunggu validasi ulang native/SDK. Belum ada klaim kenaikan throughput.**
+
+**Hasil validasi awal SDK #609 (45223162174):** native relay regressions lulus,
+SDK berhasil diunduh, dan patched libssh2 berhasil dikonfigurasi untuk MIPS.
+Regression kriptografi kemudian gagal pada payload 4.096 byte. Audit menemukan
+worker r49 memakai `task_kind`, sedangkan jalur fallback satu-worker r48 belum
+mengisi task type sehingga worker menyelesaikan task tanpa memproses payload.
+Patch r49 diperbaiki untuk menandai task fallback sebagai
+`CHACHA_TASK_DECRYPT`; regression kini juga mencetak jumlah worker saat gagal.
+Perbaikan ini belum tervalidasi sampai regression dan SDK dijalankan ulang.
+
 
 Pada paket S2C minimal 4 KiB dan setidaknya dua crypto worker, r49 memakai satu
 worker khusus untuk menghitung Poly1305 dari snapshot ciphertext, sementara
