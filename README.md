@@ -10,7 +10,7 @@ Branch pengerjaan: `benchmark/r39-internet-speedtest`
 
 ## r49 — Poly1305 dipindahkan ke worker dan overlap dengan dekripsi ChaCha20
 
-**Status: native regression dan OpenWrt 24.10.7 MIPS SDK r49 lulus pada run #615; QEMU standar lulus pada run #617. Datapacket QEMU run #620 menyelesaikan kedua transfer 100 MB dengan HTTP 200, tetapi job awal berstatus failure karena verifier membaca field PERF yang terpotong oleh buffer logger 2 KiB. Verifier sudah diperbaiki dan mode validasi artifact-only disiapkan agar hasil yang sama dapat divalidasi tanpa transfer ulang.**
+**Status: native regression dan OpenWrt 24.10.7 MIPS SDK r49 lulus pada run #615; QEMU standar lulus pada run #617. Datapacket benchmark run #70 menyelesaikan kedua transfer 100 MB dengan HTTP 200, tetapi job awal berstatus failure karena verifier membaca field PERF yang terpotong oleh buffer logger 2 KiB. Verifier sudah diperbaiki dan mode validasi artifact-only disiapkan agar hasil yang sama dapat divalidasi tanpa transfer ulang.**
 
 **Hasil validasi awal SDK #609 (45223162174):** native relay regressions lulus,
 SDK berhasil diunduh, dan patched libssh2 berhasil dikonfigurasi untuk MIPS.
