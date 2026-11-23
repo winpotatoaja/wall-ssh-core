@@ -212,46 +212,31 @@ _libssh2_diag_packet_dequeued(LIBSSH2_SESSION *session, size_t data_len)
 
     transport = root / "src/transport.c"
     replace_once(transport,
-"""static int
-decrypt(LIBSSH2_SESSION * session, unsigned char *source,
-        unsigned char *dest, ssize_t len, int firstlast)""",
-"""static int
-decrypt_impl(LIBSSH2_SESSION * session, unsigned char *source,
-             unsigned char *dest, ssize_t len, int firstlast)""",
-                 "rename decrypt implementation")
-    replace_once(transport,
-"""    return LIBSSH2_ERROR_NONE;         /* all is fine */
-}
-
-/*
- * fullpacket()""",
-"""    return LIBSSH2_ERROR_NONE;         /* all is fine */
-}
-
-static int
-decrypt(LIBSSH2_SESSION *session, unsigned char *source,
-        unsigned char *dest, ssize_t len, int firstlast)
-{
-    unsigned long long started = session->passwall_diag.enabled
-        ? _libssh2_diag_now_ns() : 0;
-    int rc = decrypt_impl(session, source, dest, len, firstlast);
-
-    if(started) {
-        unsigned long long ended = _libssh2_diag_now_ns();
-        if(ended >= started) {
-            session->passwall_diag.crypto_decrypt_ns += ended - started;
+"""        if(session->remote.crypt->crypt(session, source, decryptlen,
+                                        &session->remote.crypt_abstract,
+                                        lowerfirstlast)) {
+            LIBSSH2_FREE(session, p->payload);
+            return LIBSSH2_ERROR_DECRYPT;
+        }""",
+"""        unsigned long long crypto_started = session->passwall_diag.enabled
+            ? _libssh2_diag_now_ns() : 0;
+        int crypto_rc = session->remote.crypt->crypt(
+            session, source, decryptlen, &session->remote.crypt_abstract,
+            lowerfirstlast);
+        if(session->passwall_diag.enabled) {
+            unsigned long long crypto_ended = _libssh2_diag_now_ns();
             session->passwall_diag.crypto_decrypt_calls++;
-            if(len > 0)
-                session->passwall_diag.crypto_decrypt_bytes +=
-                    (unsigned long long)len;
+            session->passwall_diag.crypto_decrypt_bytes +=
+                (unsigned long long)decryptlen;
+            if(crypto_started && crypto_ended >= crypto_started)
+                session->passwall_diag.crypto_decrypt_ns +=
+                    crypto_ended - crypto_started;
         }
-    }
-    return rc;
-}
-
-/*
- * fullpacket()""",
-                 "timed decrypt wrapper")
+        if(crypto_rc) {
+            LIBSSH2_FREE(session, p->payload);
+            return LIBSSH2_ERROR_DECRYPT;
+        }""",
+                 "time exact cipher callback")
     replace_once(transport,
 """int _libssh2_transport_read(LIBSSH2_SESSION * session)
 {""",
