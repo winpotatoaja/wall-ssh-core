@@ -401,7 +401,7 @@ jobs:
             /libssh2_packet_queue_peak_bytes=[1-9][0-9]*/ { found=1 }
             END { exit !found }
           ' "$CORE_LOG"
-          echo "PASS: r46 decrypt, transport and packet-queue timings from matched libssh2 1.11.1 were recorded."
+          echo "PASS: r46 transport-read and packet-queue timings were recorded; ChaCha uses full-packet crypto outside the legacy decrypt wrapper."
 
       - name: Publish benchmark results in Actions UI
         if: always()
