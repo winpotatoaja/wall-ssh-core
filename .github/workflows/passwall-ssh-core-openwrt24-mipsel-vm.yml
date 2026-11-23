@@ -132,7 +132,7 @@ jobs:
           LIBSSH2_CONFIG_HEADER="$(find build_dir -name libssh2_config.h -print -quit)"
           test -n "$LIBSSH2_CONFIG_HEADER"
           LIBSSH2_CONFIG_DIR="$(dirname "$LIBSSH2_CONFIG_HEADER")"
-          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -pthread -DHAVE_CONFIG_H -DLIBSSH2_OPENSSL -DLIBSSH2_HAVE_ZLIB -I"$LIBSSH2_CONFIG_DIR" -I"$LIBSSH2_SRC/src" -I"$LIBSSH2_SRC/include" "$GITHUB_WORKSPACE/tests/chachapoly_parallel_test.c" "$LIBSSH2_SRC/src/cipher-chachapoly.c" "$LIBSSH2_SRC/src/chacha.c" "$LIBSSH2_SRC/src/poly1305.c" -o /tmp/chachapoly-parallel-test
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -pthread -ffunction-sections -fdata-sections -DHAVE_CONFIG_H -DLIBSSH2_OPENSSL -DLIBSSH2_HAVE_ZLIB -I"$LIBSSH2_CONFIG_DIR" -I"$LIBSSH2_SRC/src" -I"$LIBSSH2_SRC/include" "$GITHUB_WORKSPACE/tests/chachapoly_parallel_test.c" "$LIBSSH2_SRC/src/cipher-chachapoly.c" "$LIBSSH2_SRC/src/chacha.c" "$LIBSSH2_SRC/src/poly1305.c" "$LIBSSH2_SRC/src/misc.c" -Wl,--gc-sections -o /tmp/chachapoly-parallel-test
           /tmp/chachapoly-parallel-test | tee "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
           test -s "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
           grep -Fq 'PASS: ChaCha20-Poly1305 serial/parallel equivalence, tails and tag rejection' "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
