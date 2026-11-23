@@ -29,6 +29,8 @@
 #include <strings.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/uio.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
@@ -164,6 +166,24 @@ static __thread const char *g_kbd_password = "";
 static int eip93_ctr_cryptoapi_probe(void) {
     struct sockaddr_alg sa;
     unsigned char probe_key[16] = {0};
+    unsigned char iv[16] = {0};
+    unsigned char input[1024] = {0};
+    unsigned char output[1024];
+    union {
+        struct cmsghdr align;
+        unsigned char bytes[
+            CMSG_SPACE(sizeof(uint32_t)) +
+            CMSG_SPACE(sizeof(struct af_alg_iv) + sizeof(iv))
+        ];
+    } control;
+    struct iovec iov;
+    struct msghdr msg;
+    struct cmsghdr *cmsg;
+    struct af_alg_iv *alg_iv;
+    struct timeval timeout = { 2, 0 };
+    uint32_t operation = ALG_OP_ENCRYPT;
+    ssize_t sent;
+    size_t received = 0;
     int tfm_fd = -1;
     int op_fd = -1;
     int available = 0;
@@ -184,6 +204,54 @@ static int eip93_ctr_cryptoapi_probe(void) {
     op_fd = accept(tfm_fd, NULL, 0);
     if (op_fd < 0)
         goto done;
+    if (setsockopt(op_fd, SOL_SOCKET, SO_RCVTIMEO,
+                   &timeout, sizeof(timeout)) < 0 ||
+        setsockopt(op_fd, SOL_SOCKET, SO_SNDTIMEO,
+                   &timeout, sizeof(timeout)) < 0)
+        goto done;
+
+    memset(&control, 0, sizeof(control));
+    memset(&msg, 0, sizeof(msg));
+    iov.iov_base = input;
+    iov.iov_len = sizeof(input);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.bytes;
+    msg.msg_controllen = sizeof(control.bytes);
+
+    cmsg = CMSG_FIRSTHDR(&msg);
+    if (!cmsg)
+        goto done;
+    cmsg->cmsg_level = SOL_ALG;
+    cmsg->cmsg_type = ALG_SET_OP;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(operation));
+    memcpy(CMSG_DATA(cmsg), &operation, sizeof(operation));
+
+    cmsg = CMSG_NXTHDR(&msg, cmsg);
+    if (!cmsg)
+        goto done;
+    cmsg->cmsg_level = SOL_ALG;
+    cmsg->cmsg_type = ALG_SET_IV;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(struct af_alg_iv) + sizeof(iv));
+    alg_iv = (struct af_alg_iv *)CMSG_DATA(cmsg);
+    alg_iv->ivlen = sizeof(iv);
+    memcpy(alg_iv->iv, iv, sizeof(iv));
+
+    do {
+        sent = sendmsg(op_fd, &msg, 0);
+    } while (sent < 0 && errno == EINTR);
+    if (sent != (ssize_t)sizeof(input))
+        goto done;
+
+    while (received < sizeof(output)) {
+        ssize_t n = recv(op_fd, output + received,
+                         sizeof(output) - received, 0);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            goto done;
+        received += (size_t)n;
+    }
     available = 1;
 
 done:
@@ -192,6 +260,7 @@ done:
     if (tfm_fd >= 0)
         close(tfm_fd);
     OPENSSL_cleanse(probe_key, sizeof(probe_key));
+    OPENSSL_cleanse(output, sizeof(output));
     return available;
 }
 #endif
