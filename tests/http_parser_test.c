@@ -1879,7 +1879,7 @@ static int run_perf_metrics_regression(void) {
     g_perf_stats.socks_tx_bytes = 4096;
     g_perf_stats.pending_blocks = 2;
 
-    perf_log_interval(1999);
+    perf_log_interval(1999, NULL);
     FILE *f = fopen(path, "r");
     long early_size = -1;
     if (f) {
@@ -1888,7 +1888,7 @@ static int run_perf_metrics_regression(void) {
         fclose(f);
     }
 
-    perf_log_interval(2000);
+    perf_log_interval(2000, NULL);
     char line[2048] = {0};
     f = fopen(path, "r");
     if (f) {
