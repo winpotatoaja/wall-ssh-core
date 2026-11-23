@@ -340,6 +340,18 @@ _libssh2_cipher_crypt(_libssh2_cipher_ctx *ctx,
         return _libssh2_eip93_ctr_software(ctx, block, blocksize);
     }
 
+    /*
+     * AES-128-CTR packet batching remains safe when EIP93 is absent or its
+     * per-session bind fails. Keep the large-fragment software fallback
+     * in-place so it does not overflow the small EVP temporary buffer.
+     */
+    if(algo == EVP_aes_128_ctr && blocksize > sizeof(buf)) {
+        if(!ctx->evp || blocksize > (size_t)INT_MAX)
+            return -1;
+        ret = EVP_Cipher(ctx->evp, block, block, (unsigned int)blocksize);
+        return ret == 1 ? 0 : -1;
+    }
+
 #if LIBSSH2_AES_GCM
     const int is_aesgcm = (algo == EVP_aes_128_gcm) ||
                           (algo == EVP_aes_256_gcm);
