@@ -8,6 +8,27 @@ dibuktikan oleh hasil pengujian yang tercatat.
 Terakhir diperbarui: 2026-11-23  
 Branch pengerjaan: `phase3/io-worker-pool-foundation`
 
+## r46 — gunakan ChaCha20-Poly1305 dari libssh2 upstream
+
+**Status: perubahan disiapkan; validasi SDK dan QEMU belum dijalankan.**
+
+SDK r45 #547 berhasil membangun paket, tetapi benchmark QEMU #66 / 45173949790
+gagal sebelum listener SOCKS5 siap. Log core hanya mencapai `Starting Key Exchange`;
+belum ada sesi SSH terautentikasi, cipher yang dinegosiasikan, atau hasil transfer.
+Karena itu r45 tidak menghasilkan angka bandwidth.
+
+Akar kerumitan r45 adalah OpenWrt 24.10.7 masih mematok libssh2 1.11.0, sedangkan
+versi tersebut belum mengimplementasikan `chacha20-poly1305@openssh.com`.
+Upstream menambahkan implementasi protokol OpenSSH itu pada libssh2 1.11.1.
+r46 menaikkan paket ke 1.11.1, mempertahankan diagnostik r43 saja, dan
+memprioritaskan ChaCha20-Poly1305 dengan AES-GCM/AES-CTR sebagai fallback.
+Percobaan EIP93/AF_ALG dan dependensi modul kernel terkait tidak lagi dipakai.
+
+Sebelum transfer dimulai, skrip QEMU wajib memastikan log menunjukkan cipher
+`chacha20-poly1305@openssh.com`. Jika negosiasi atau handshake gagal, dua
+download 100 MB tidak akan dijalankan. Desain satu SSH session dan batas
+50 detik per download tetap dipertahankan.
+
 ## Ringkasan status
 
 | Tahap | Fokus | Status |
