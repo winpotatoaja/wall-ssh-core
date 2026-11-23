@@ -5359,7 +5359,7 @@ static int core_worker_run(int argc, char **argv) {
     struct epoll_event events[MAX_EVENTS];
     if (g_log_perf) {
         libssh2_session_diag_timing_enable(session, 1);
-        log_blue("[LIBSSH2-DIAG] r48 timing instrumentation enabled (libssh2 1.11.1; ChaCha20-Poly1305 worker-only S2C payload)");
+        log_blue("[LIBSSH2-DIAG] r49 timing instrumentation enabled (libssh2 1.11.1; worker-only ChaCha20 plus overlapped Poly1305 S2C)");
         perf_begin(now_ms());
     }
     int force_next_tick = 0;
