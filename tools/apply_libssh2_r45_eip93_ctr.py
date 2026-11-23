@@ -443,13 +443,17 @@ _libssh2_cipher_crypt(_libssh2_cipher_ctx *ctx,
     }
 
     while(len > 0) {""",
-        """    /*
+        """        memcpy(dest, source, (size_t)len);
+        return LIBSSH2_ERROR_NONE;
+    }
+
+    /*
      * CTR has no per-block framing requirement after the SSH packet's first
      * length block. Batch large aligned fragments so the EIP93 driver's
      * AES-128 software-fallback threshold is exceeded.
      */
     if(len >= 1024 && !IS_FIRST(firstlast) &&
-       !CRYPT_FLAG_R(session, PKTLEN_AAD) &&
+       !CRYPT_FLAG_L(session, PKTLEN_AAD) &&
        session->remote.crypt->name &&
        !strcmp(session->remote.crypt->name, "aes128-ctr") &&
        (len % blocksize) == 0) {
