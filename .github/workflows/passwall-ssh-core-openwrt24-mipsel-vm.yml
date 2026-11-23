@@ -289,7 +289,7 @@ jobs:
                 source_sha: context.sha
               }
             });
-            core.info("Queued Datapacket-only r46 benchmark using SDK run " + context.runId + " and source " + context.sha);
+            core.info("Queued Datapacket-only r47 benchmark using SDK run " + context.runId + " and source " + context.sha);
   vm:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
     runs-on: ubuntu-26.04
@@ -338,9 +338,9 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tests/chachapoly_parallel_test.c tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
             echo "SDK artifact was built from different package or test sources."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tests/chachapoly_parallel_test.c spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c
             false
           fi
           (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256)
