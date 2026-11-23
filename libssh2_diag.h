@@ -7,12 +7,6 @@ typedef struct {
     unsigned long long decrypt_path_ns;
     unsigned long long decrypt_path_calls;
     unsigned long long decrypt_path_bytes;
-    unsigned long long decrypt_cipher_calls;
-    unsigned long long decrypt_cipher_bytes;
-    unsigned long long eip93_ctr_hw_calls;
-    unsigned long long eip93_ctr_hw_bytes;
-    unsigned long long eip93_ctr_sw_calls;
-    unsigned long long eip93_ctr_sw_bytes;
     unsigned long long transport_read_ns;
     unsigned long long transport_read_calls;
     unsigned long long packet_drain_ns;
