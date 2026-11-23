@@ -84,6 +84,7 @@ void _libssh2_cipher_ctx_dtor(_libssh2_cipher_ctx *ctx);""",
         "#include <assert.h>\n",
         "#include <assert.h>\n"
         "#include <errno.h>\n"
+        "#include <limits.h>\n"
         "#include <stdint.h>\n"
         "#include <string.h>\n"
         "#include <sys/socket.h>\n"
@@ -162,10 +163,13 @@ static int
 _libssh2_eip93_ctr_afalg(_libssh2_cipher_ctx *ctx,
                          unsigned char *block, size_t length)
 {
-    unsigned char control[
-        CMSG_SPACE(sizeof(uint32_t)) +
-        CMSG_SPACE(sizeof(struct af_alg_iv) + 16)
-    ];
+    union {
+        struct cmsghdr align;
+        unsigned char bytes[
+            CMSG_SPACE(sizeof(uint32_t)) +
+            CMSG_SPACE(sizeof(struct af_alg_iv) + 16)
+        ];
+    } control;
     struct iovec iov;
     struct msghdr msg;
     struct cmsghdr *cmsg;
@@ -179,13 +183,13 @@ _libssh2_eip93_ctr_afalg(_libssh2_cipher_ctx *ctx,
         return -1;
 
     memset(&msg, 0, sizeof(msg));
-    memset(control, 0, sizeof(control));
+    memset(&control, 0, sizeof(control));
     iov.iov_base = block;
     iov.iov_len = length;
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
-    msg.msg_control = control;
-    msg.msg_controllen = sizeof(control);
+    msg.msg_control = control.bytes;
+    msg.msg_controllen = sizeof(control.bytes);
 
     cmsg = CMSG_FIRSTHDR(&msg);
     if(!cmsg)
@@ -410,7 +414,10 @@ _libssh2_cipher_crypt(_libssh2_cipher_ctx *ctx,
     transport = root / "src/transport.c"
     replace_once(
         transport,
-        """    while(len > 0) {""",
+        """    if(!CRYPT_FLAG_L(session, PKTLEN_AAD))
+        assert((len % blocksize) == 0);
+
+    while(len > 0) {""",
         """    /*
      * CTR has no per-block framing requirement after the SSH packet's first
      * length block. Batch large aligned fragments so the EIP93 driver's
