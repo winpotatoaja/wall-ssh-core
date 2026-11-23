@@ -515,8 +515,8 @@ int chacha_decrypt_poly_parallel(struct chacha_parallel_pool *pool,
                                  const struct chacha_ctx *base_state,
                                  const u_char *source, u_char *destination,
                                  u_int bytes, u_int aadlen, size_t poly_len,
-                                 const u_char poly_key[POLY1305_KEYLEN],
-                                 const u_char wire_tag[POLY1305_TAGLEN],
+                                 const u_char poly_key[32],
+                                 const u_char wire_tag[16],
                                  unsigned long long *poly_ns_out, int measure);
 
 #endif""", "expose overlapped Poly1305/ChaCha operation")
