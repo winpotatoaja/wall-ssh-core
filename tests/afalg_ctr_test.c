@@ -10,6 +10,8 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+#define PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY 0x00001000U
+
 #define TEST_BYTES 65536U
 #define SPLIT_BYTES 1024U
 
@@ -28,6 +30,10 @@ static int open_alg(const char *name, const unsigned char key[16]) {
 
     memset(&sa, 0, sizeof(sa));
     sa.salg_family = AF_ALG;
+    if (strcmp(name, "ctr(aes)") != 0) {
+        sa.salg_feat = PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY;
+        sa.salg_mask = PASSWALL_CRYPTO_ALG_KERN_DRIVER_ONLY;
+    }
     memcpy(sa.salg_type, "skcipher", sizeof("skcipher"));
     if (strlen(name) >= sizeof(sa.salg_name))
         return -1;
