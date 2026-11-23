@@ -84,6 +84,7 @@ jobs:
             socat mtd-utils gdisk wget ca-certificates binutils file
 
       - name: Download the source-matched r49 MIPS package
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
         uses: actions/download-artifact@v4
         with:
           name: passwall-ssh-core-openwrt-24.10.7-mipsel-ipk
