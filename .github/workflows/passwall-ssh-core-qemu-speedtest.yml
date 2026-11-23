@@ -87,7 +87,7 @@ jobs:
           IPK="$(find package -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
           test -n "$IPK"
           CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
-          printf '%s\n' "$CONTROL" | grep -Fq 'Version: 1.0.0-r46'
+          printf '%s\n' "$CONTROL" | grep -Fq 'Version: 1.0.0-r47'
           printf '%s\n' "$CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
           LIBSSH2_IPK="$(find package -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
           test -n "$LIBSSH2_IPK"
@@ -390,7 +390,7 @@ jobs:
             /perf_socks_tx_us=[1-9][0-9]*/ { found=1 }
             END { exit !found }
           ' "$CORE_LOG"
-          grep -Fq '[LIBSSH2-DIAG] r46 timing instrumentation enabled (libssh2 1.11.1; ChaCha20-Poly1305 preferred)' "$CORE_LOG"
+          grep -Fq '[LIBSSH2-DIAG] r47 timing instrumentation enabled (libssh2 1.11.1; ChaCha20-Poly1305 parallel S2C)' "$CORE_LOG"
           awk '
             /^\[PERF\]/ &&
             /libssh2_decrypt_path_calls=[0-9]+/ &&
@@ -398,10 +398,15 @@ jobs:
             /libssh2_transport_read_us=[1-9][0-9]*/ &&
             /libssh2_transport_other_us=[0-9]+/ &&
             /libssh2_packet_drain_us=[0-9]+/ &&
-            /libssh2_packet_queue_peak_bytes=[1-9][0-9]*/ { found=1 }
+            /libssh2_packet_queue_peak_bytes=[1-9][0-9]*/ &&
+            /libssh2_chacha_workers_active=[1-9][0-9]*/ &&
+            /libssh2_chacha_poly1305_us=[1-9][0-9]*/ &&
+            /libssh2_chacha20_parallel_us=[1-9][0-9]*/ &&
+            /libssh2_chacha20_parallel_bytes=[1-9][0-9]*/ &&
+            /libssh2_chacha20_parallel_packets=[1-9][0-9]*/ { found=1 }
             END { exit !found }
           ' "$CORE_LOG"
-          echo "PASS: r46 transport-read and packet-queue timings were recorded; ChaCha uses full-packet crypto outside the legacy decrypt wrapper."
+          echo "PASS: r47 ChaCha phase timings and parallel payload counters were recorded."
 
       - name: Publish benchmark results in Actions UI
         if: always()

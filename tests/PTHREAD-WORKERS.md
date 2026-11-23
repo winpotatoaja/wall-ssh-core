@@ -22,6 +22,15 @@ The required ownership model is:
 CPU detection controls the number of auxiliary I/O workers, capped at four.
 It must never change the number of SSH sessions or TLS Engines.
 
+The r47 ChaCha path adds a separate, bounded packet-local crypto pool owned by
+the inbound libssh2 ChaCha context. The SSH Owner remains the only caller of
+libssh2; it authenticates a complete packet first, then splits only the
+independent ChaCha20 payload blocks across at most three background lanes while
+processing one lane itself. Poly1305 verification, SSH packet sequencing,
+channel state and all libssh2 calls remain on the Owner. Small packets and
+pool-creation failures use the original serial ChaCha implementation. The
+crypto pool is destroyed with the ChaCha cipher context, including on rekey.
+
 ## Implemented foundation
 
 The current branch contains:

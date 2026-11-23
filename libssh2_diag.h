@@ -19,7 +19,23 @@ typedef struct {
     unsigned long long packet_queue_bytes_peak;
     unsigned long long packet_queue_enqueued_packets;
     unsigned long long packet_queue_enqueued_bytes;
+    unsigned int chacha_workers_requested;
+    unsigned int chacha_workers_active;
+    unsigned long long chacha_poly1305_ns;
+    unsigned long long chacha20_key_ns;
+    unsigned long long chacha20_header_ns;
+    unsigned long long chacha20_payload_ns;
+    unsigned long long chacha20_serial_ns;
+    unsigned long long chacha20_serial_bytes;
+    unsigned long long chacha20_serial_packets;
+    unsigned long long chacha20_parallel_ns;
+    unsigned long long chacha20_parallel_bytes;
+    unsigned long long chacha20_parallel_packets;
 } LIBSSH2_DIAG_TIMING;
+
+LIBSSH2_API void
+libssh2_session_set_chacha_workers(LIBSSH2_SESSION *session,
+                                   unsigned int workers);
 
 LIBSSH2_API void
 libssh2_session_diag_timing_enable(LIBSSH2_SESSION *session, int enabled);

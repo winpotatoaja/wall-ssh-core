@@ -118,6 +118,12 @@ static uint32_t io_worker_count_for_cpu_count(long cpu_count) {
     return (uint32_t)cpu_count;
 }
 
+static unsigned int chacha_worker_count_for_cpu_count(long cpu_count) {
+    if (cpu_count <= 1L) return 0U;
+    if (cpu_count - 1L > 3L) return 3U;
+    return (unsigned int)(cpu_count - 1L);
+}
+
 static long g_detected_cpu_count = 1;
 static uint32_t g_io_worker_count = 1U;
 static int g_worker_count_auto = 1;
@@ -1508,7 +1514,13 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             "libssh2_packet_queue_peak_packets=%llu "
             "libssh2_packet_queue_peak_bytes=%llu "
             "libssh2_packet_queue_enqueued_packets=%llu "
-            "libssh2_packet_queue_enqueued_bytes=%llu",
+            "libssh2_packet_queue_enqueued_bytes=%llu "
+            "libssh2_chacha_workers_requested=%u libssh2_chacha_workers_active=%u "
+            "libssh2_chacha_poly1305_us=%llu libssh2_chacha20_key_us=%llu "
+            "libssh2_chacha20_header_us=%llu libssh2_chacha20_payload_us=%llu "
+            "libssh2_chacha20_serial_us=%llu libssh2_chacha20_serial_bytes=%llu "
+            "libssh2_chacha20_serial_packets=%llu libssh2_chacha20_parallel_us=%llu "
+            "libssh2_chacha20_parallel_bytes=%llu libssh2_chacha20_parallel_packets=%llu",
             span_ms, g_client_count, relay_clients,
             (unsigned long long)g_perf_stats.epoll_calls,
             (unsigned long long)g_perf_stats.epoll_wait_ms,
@@ -1570,7 +1582,19 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             (unsigned long long)libssh2_diag.packet_queue_packets_peak,
             (unsigned long long)libssh2_diag.packet_queue_bytes_peak,
             (unsigned long long)libssh2_diag.packet_queue_enqueued_packets,
-            (unsigned long long)libssh2_diag.packet_queue_enqueued_bytes);
+            (unsigned long long)libssh2_diag.packet_queue_enqueued_bytes,
+            libssh2_diag.chacha_workers_requested,
+            libssh2_diag.chacha_workers_active,
+            (unsigned long long)(libssh2_diag.chacha_poly1305_ns / 1000U),
+            (unsigned long long)(libssh2_diag.chacha20_key_ns / 1000U),
+            (unsigned long long)(libssh2_diag.chacha20_header_ns / 1000U),
+            (unsigned long long)(libssh2_diag.chacha20_payload_ns / 1000U),
+            (unsigned long long)(libssh2_diag.chacha20_serial_ns / 1000U),
+            (unsigned long long)libssh2_diag.chacha20_serial_bytes,
+            (unsigned long long)libssh2_diag.chacha20_serial_packets,
+            (unsigned long long)(libssh2_diag.chacha20_parallel_ns / 1000U),
+            (unsigned long long)libssh2_diag.chacha20_parallel_bytes,
+            (unsigned long long)libssh2_diag.chacha20_parallel_packets);
 
     memset(&g_perf_stats, 0, sizeof(g_perf_stats));
     g_perf_window_start_ms = now;
@@ -5071,6 +5095,11 @@ static int core_worker_run(int argc, char **argv) {
         log_red("libssh2_session_init gagal");
         goto fail_cleanup;
     }
+    unsigned int chacha_workers =
+        chacha_worker_count_for_cpu_count(g_detected_cpu_count);
+    libssh2_session_set_chacha_workers(session, chacha_workers);
+    log_blue("[ChaCha] packet-local S2C parallelism: detected_cpus=%ld owner_lanes=1 background_workers=%u total_lanes=%u threshold=4096 bytes",
+             g_detected_cpu_count, chacha_workers, chacha_workers + 1U);
 #if LIBSSH2_VERSION_NUM >= 0x010b01
     /* libssh2 1.11.1+ has the typed callback API. */
     libssh2_session_callback_set2(session, LIBSSH2_CALLBACK_RECV, (libssh2_cb_generic *)ssh_recv_cb);
@@ -5324,7 +5353,7 @@ static int core_worker_run(int argc, char **argv) {
     struct epoll_event events[MAX_EVENTS];
     if (g_log_perf) {
         libssh2_session_diag_timing_enable(session, 1);
-        log_blue("[LIBSSH2-DIAG] r46 timing instrumentation enabled (libssh2 1.11.1; ChaCha20-Poly1305 preferred)");
+        log_blue("[LIBSSH2-DIAG] r47 timing instrumentation enabled (libssh2 1.11.1; ChaCha20-Poly1305 parallel S2C)");
         perf_begin(now_ms());
     }
     int force_next_tick = 0;
