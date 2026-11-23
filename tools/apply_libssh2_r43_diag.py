@@ -103,18 +103,26 @@ _libssh2_diag_packet_enqueued(LIBSSH2_SESSION *session, size_t data_len)
 }
 
 static inline void
-_libssh2_diag_packet_dequeued(LIBSSH2_SESSION *session, size_t data_len)
+_libssh2_diag_packet_bytes_consumed(LIBSSH2_SESSION *session, size_t bytes)
+{
+    if(!session->passwall_diag.enabled)
+        return;
+    if(session->passwall_diag.packet_queue_bytes_current >=
+       (unsigned long long)bytes)
+        session->passwall_diag.packet_queue_bytes_current -=
+            (unsigned long long)bytes;
+    else
+        session->passwall_diag.packet_queue_bytes_current = 0;
+}
+
+static inline void
+_libssh2_diag_packet_dequeued(LIBSSH2_SESSION *session, size_t remaining_bytes)
 {
     if(!session->passwall_diag.enabled)
         return;
     if(session->passwall_diag.packet_queue_packets_current)
         session->passwall_diag.packet_queue_packets_current--;
-    if(session->passwall_diag.packet_queue_bytes_current >=
-       (unsigned long long)data_len)
-        session->passwall_diag.packet_queue_bytes_current -=
-            (unsigned long long)data_len;
-    else
-        session->passwall_diag.packet_queue_bytes_current = 0;
+    _libssh2_diag_packet_bytes_consumed(session, remaining_bytes);
 }
 
 /* session.state bits */""", "diagnostic timing and packet queue helpers")
@@ -134,7 +142,8 @@ _libssh2_diag_packet_dequeued(LIBSSH2_SESSION *session, size_t data_len)
 
             LIBSSH2_FREE(session, packet);""",
 """            /* unlink struct from session->packets */
-            _libssh2_diag_packet_dequeued(session, packet->data_len);
+            _libssh2_diag_packet_dequeued(
+                session, packet->data_len - packet->data_head);
             _libssh2_list_remove(&packet->node);
 
             LIBSSH2_FREE(session, packet);""", "packet ask dequeue accounting")
@@ -149,7 +158,7 @@ _libssh2_diag_packet_dequeued(LIBSSH2_SESSION *session, size_t data_len)
 
                     /* remove this packet from the parent's list */
                     _libssh2_diag_packet_dequeued(channel->session,
-                                                  packet->data_len);
+                                                  packet->data_len - packet->data_head);
                     _libssh2_list_remove(&packet->node);""",
                  "channel flush dequeue accounting")
     replace_once(channel,
@@ -173,6 +182,13 @@ _libssh2_diag_packet_dequeued(LIBSSH2_SESSION *session, size_t data_len)
     while(read_packet && (bytes_read < buflen)) {""",
                  "channel queue drain timer start")
     replace_once(channel,
+"""            readpkt->data_head += bytes_want;
+            bytes_read += bytes_want;""",
+"""            readpkt->data_head += bytes_want;
+            bytes_read += bytes_want;
+            _libssh2_diag_packet_bytes_consumed(session, bytes_want);""",
+                 "account partially consumed packet bytes")
+    replace_once(channel,
 """            if(unlink_packet) {
                 /* detach readpkt from session->packets list */
                 _libssh2_list_remove(&readpkt->node);
@@ -180,7 +196,7 @@ _libssh2_diag_packet_dequeued(LIBSSH2_SESSION *session, size_t data_len)
                 LIBSSH2_FREE(session, readpkt->data);""",
 """            if(unlink_packet) {
                 /* detach readpkt from session->packets list */
-                _libssh2_diag_packet_dequeued(session, readpkt->data_len);
+                _libssh2_diag_packet_dequeued(session, 0);
                 diag_packet_drain_removed++;
                 _libssh2_list_remove(&readpkt->node);
 
