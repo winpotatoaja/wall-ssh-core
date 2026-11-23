@@ -282,3 +282,10 @@ Perubahan yang disiapkan:
 **Batas validasi:** QEMU MT7621 hanya memvalidasi fallback atau jalur yang benar-benar disediakan emulator. Keberhasilan SDK dan QEMU tidak membuktikan EIP93 bekerja di router fisik. Kriteria bukti hardware adalah helper MIPS berhasil dengan AFALG_CTR_DRIVER=ctr(aes-eip93), log core menunjukkan AES-128-CTR, dan interval PERF mencatat libssh2_eip93_ctr_hw_bytes non-zero. Jika driver spesifik gagal di-bind atau dijalankan, core harus tetap menggunakan AES-GCM fallback.
 
 Pengujian benchmark tetap dibatasi ke satu endpoint Datapacket, masing-masing satu download direct dan satu SOCKS5 berukuran 100 MB, timeout 50 detik per transfer, tanpa retry, satu autentikasi dan satu SSH session. Hasil kecepatan dan kelulusan build belum tersedia pada tahap pencatatan ini.
+
+
+### r45 SDK attempt #543 — failure diagnosis and patcher correction
+
+SDK run #543 (45170164738) passed native regressions and downloaded the OpenWrt 24.10.7 SDK, but failed while compiling patched libssh2 1.11.0. The r45 transport patcher had replaced the closing tail of the r44 AES-GCM fast path when inserting the CTR branch. This left decrypt() structurally unclosed; GCC then reported invalid storage class for following file-scope functions and an end-of-input error. This was a patcher-generated C syntax defect, not an EIP93 driver or MIPS toolchain failure.
+
+The patcher now preserves the full r44 AES-GCM fast path verbatim, then inserts the r45 AES-CTR batch branch after its closing brace and before the legacy block loop. The transmit-side CTR replacement remains scoped to the original encryption loop. The corrected patcher has not yet been rebuilt; SDK validation is pending. No r45 IPK or QEMU benchmark was produced by run #543.
