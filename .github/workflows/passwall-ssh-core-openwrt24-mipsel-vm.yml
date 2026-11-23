@@ -359,6 +359,14 @@ jobs:
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           grep -q 'Version: 1.0.0-r49' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          LIBSSH2_IPK="$(find test-results -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
+          test -n "$LIBSSH2_IPK"
+          LIBSSH2_CONTROL="$(tar -xOzf "$LIBSSH2_IPK" ./control.tar.gz | tar -xzO ./control)"
+          printf '%s\n' "$LIBSSH2_CONTROL" | grep -Fq 'Package: libssh2-1'
+          printf '%s\n' "$LIBSSH2_CONTROL" | grep -Fq 'Version: 1.11.1-r1'
+          printf '%s\n' "$LIBSSH2_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
+          file "$LIBSSH2_IPK"
+          echo "Verified matching SDK-built patched libssh2-1 IPK."
           readelf -h test-results/socks-halfclose | grep -q 'MIPS'
           readelf -h test-results/socks-mt-download | grep -q 'MIPS'
           readelf -h test-results/tls-engine-test | grep -q 'MIPS'
@@ -833,8 +841,11 @@ jobs:
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 'mkdir -p /tmp/mips-test'
 
           IPK="$(find "$GITHUB_WORKSPACE/test-results" -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
+          LIBSSH2_IPK="$(find "$GITHUB_WORKSPACE/test-results" -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
+          test -n "$IPK"
+          test -n "$LIBSSH2_IPK"
           scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            "$IPK" "$GITHUB_WORKSPACE/test-results/spsc-rb-test" \
+            "$IPK" "$LIBSSH2_IPK" "$GITHUB_WORKSPACE/test-results/spsc-rb-test" \
             "$GITHUB_WORKSPACE/test-results/socks-halfclose" \
             "$GITHUB_WORKSPACE/test-results/socks-mt-download" \
             "$GITHUB_WORKSPACE/test-results/tls-engine-test" \
@@ -883,7 +894,31 @@ jobs:
             fail "ImageBuilder firmware is missing libopenssl3 or libssh2-1"
           fi
 
-          echo "========== INSTALL R37 MIPS IPK (OFFLINE) =========="
+          echo "========== INSTALL SDK-BUILT PATCHED LIBSSH2 1.11.1 =========="
+          LIBSSH2_LOCAL="$LOG/libssh2-1_1.11.1-r1_mipsel_24kc.ipk"
+          if [ "$STATUS" -eq 0 ] && [ -s "$LIBSSH2_LOCAL" ]; then
+            opkg --force-reinstall install "$LIBSSH2_LOCAL"
+            LIBSSH2_RC=$?
+          else
+            LIBSSH2_RC=1
+          fi
+          LIBSSH2_SO=/usr/lib/libssh2.so.1
+          if [ "$LIBSSH2_RC" -eq 0 ] &&
+             [ -r "$LIBSSH2_SO" ] &&
+             opkg status libssh2-1 | grep -q 'Version: 1.11.1-r1' &&
+             grep -aFq 'libssh2_session_diag_timing_snapshot' "$LIBSSH2_SO" &&
+             grep -aFq 'libssh2_session_diag_timing_enable' "$LIBSSH2_SO" &&
+             grep -aFq 'libssh2_session_callback_set2' "$LIBSSH2_SO" &&
+             grep -aFq 'libssh2_session_set_chacha_workers' "$LIBSSH2_SO"; then
+            pass "SDK-built patched libssh2 1.11.1 installed; all r49 runtime APIs are present"
+          else
+            echo "Patched libssh2 install/runtime-symbol verification failed (opkg_rc=$LIBSSH2_RC)."
+            opkg status libssh2-1 2>&1 || true
+            ls -l "$LIBSSH2_SO" 2>&1 || true
+            fail "SDK-built patched libssh2 1.11.1 was not installed or is missing an r49 runtime API"
+          fi
+
+          echo "========== INSTALL R49 MIPS IPK (OFFLINE) =========="
           if [ "$STATUS" -eq 0 ]; then
             opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
@@ -893,7 +928,7 @@ jobs:
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
           elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r49'; then
-            pass "opkg installed passwall-ssh-core r46 on mipsel_24kc"
+            pass "opkg installed passwall-ssh-core r49 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
