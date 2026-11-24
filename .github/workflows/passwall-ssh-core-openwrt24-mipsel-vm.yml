@@ -181,6 +181,7 @@ jobs:
             echo "WARNING: MIPS nm executable not found in SDK staging_dir" > "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips-symbols.txt"
           fi
           test -s "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm"
+          python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" --verify-disasm "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm" | tee -a "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log"
       # Core IPK release r51 is independent of the retained libssh2 patch-series r49 marker.
       - name: Build r51 single-session MIPS IPK, ChaCha/Poly1305 workers and I/O worker pool helper
         shell: bash
