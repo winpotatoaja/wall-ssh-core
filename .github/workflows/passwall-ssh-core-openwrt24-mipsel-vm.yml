@@ -8,7 +8,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: openwrt24-mipsel-r51-${{ github.ref }}
+  group: openwrt24-mipsel-r52-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   sdk:
@@ -135,7 +135,8 @@ jobs:
           python3 "$GITHUB_WORKSPACE/tests/chachapoly_auth_order_test.py" "$LIBSSH2_SRC/src/chacha.c" | tee "$GITHUB_WORKSPACE/test-results/chachapoly-auth-order.log"
           python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r51_mips32_hotpath.py" "$LIBSSH2_SRC"
           test -s "$LIBSSH2_SRC/.passwall-r51-mips32-hotpath-patched"
-          python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log"
+          python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log
+            test-results/r52-hardening.log"
           python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r52_worker_lifecycle.py" "$LIBSSH2_SRC"
           test -s "$LIBSSH2_SRC/.passwall-r52-worker-lifecycle-patched"
           python3 "$GITHUB_WORKSPACE/tests/r52_hardening_test.py" "$GITHUB_WORKSPACE/ssh-core.c" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/r52-hardening.log"
@@ -185,8 +186,8 @@ jobs:
           fi
           test -s "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm"
           python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" --verify-disasm "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm" | tee -a "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log"
-      # Core IPK release r51 is independent of the retained libssh2 patch-series r49 marker.
-      - name: Build r51 single-session MIPS IPK, ChaCha/Poly1305 workers and I/O worker pool helper
+      # Core IPK release r52 is independent of the retained libssh2 patch-series r49 marker.
+      - name: Build r52 single-session MIPS IPK, ChaCha/Poly1305 workers and I/O worker pool helper
         shell: bash
         run: |
           set -euo pipefail
@@ -206,14 +207,14 @@ jobs:
             false
           fi
           echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
-          IPK="$(find bin/packages -type f -name 'passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk' | head -n 1)"
+          IPK="$(find bin/packages -type f -name 'passwall-ssh-core_1.0.0-r52_mipsel_24kc.ipk' | head -n 1)"
           LIBSSH2_IPK="$(find bin/packages -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' | head -n 1)"
           test -n "$IPK"
           IPK_CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
           printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Package: passwall-ssh-core'
-          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Version: 1.0.0-r51'
+          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Version: 1.0.0-r52'
           printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
-          echo "PASS: core IPK filename and embedded control metadata both identify 1.0.0-r51."
+          echo "PASS: core IPK filename and embedded control metadata both identify 1.0.0-r52."
           test -n "$LIBSSH2_IPK"
           mkdir -p "$GITHUB_WORKSPACE/test-results"
           cp "$IPK" "$LIBSSH2_IPK" "$GITHUB_WORKSPACE/test-results/"
@@ -287,7 +288,7 @@ jobs:
       - name: Upload MIPS IPK and helper
         uses: actions/upload-artifact@v4
         with:
-          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r51-ipk
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r52-ipk
           path: |
             test-results/passwall-ssh-core*.ipk
             test-results/libssh2-1_1.11.1-r1_mipsel_24kc.ipk
@@ -421,7 +422,7 @@ jobs:
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           test -s test-results/passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk
-          grep -Fq 'Version: 1.0.0-r51' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
+          grep -Fq 'Version: 1.0.0-r52' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
           LIBSSH2_IPK="$(find test-results -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
           test -n "$LIBSSH2_IPK"
           LIBSSH2_CONTROL="$(tar -xOzf "$LIBSSH2_IPK" ./control.tar.gz | tar -xzO ./control)"
@@ -992,7 +993,7 @@ jobs:
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
           elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r51'; then
-            pass "opkg installed passwall-ssh-core r51 on mipsel_24kc"
+            pass "opkg installed passwall-ssh-core r52 on mipsel_24kc on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
