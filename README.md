@@ -12,7 +12,7 @@ Eksperimen codegen MIPS32r2 berikutnya:
 - `chacha_encrypt_bytes` dan `poly1305_auth` diberi atribut GCC `nomips16` pada target MIPS saja. Fungsi lain tetap menggunakan konfigurasi SDK.
 - Algoritma C, konstanta ChaCha20, pengolahan tail, state/counter, dan implementasi Poly1305 tidak diubah. Ini murni eksperimen pemilihan ISA/codegen.
 - SDK mengarsipkan disassembly MIPS dari dua hot path untuk memverifikasi apakah fungsi benar-benar keluar dari MIPS16, melihat penggunaan instruksi MIPS32r2 seperti `rotr`, serta membandingkan frame stack/instruksi sebelum mengklaim manfaat.
-- Eksperimen ini masih menunggu SDK/QEMU. Belum ada klaim peningkatan performa dan belum ada assembly kernel yang dimasukkan.
+- Eksperimen ini sedang menjalani validasi SDK MIPS; hasil QEMU guest dan perbandingan performa belum tersedia. Belum ada klaim peningkatan performa dan belum ada assembly kernel yang dimasukkan.
 
 Perubahan pertama r51:
 - Memisahkan ChaCha20-Poly1305 menjadi dua fase. Fase pertama menghitung dan membandingkan tag Poly1305. Fase kedua baru mengirim tugas dekripsi ChaCha20 setelah tag cocok.
