@@ -4,7 +4,7 @@ Terakhir diperbarui: 2026-11-24
 
 ## r51 — eksperimen autentikasi-dulu, dekripsi-kemudian
 
-<badge color="warning">EKSPERIMEN — SDK MIPS MENUNGGU VALIDASI</badge>
+**Status: EKSPERIMEN — validasi SDK MIPS masih menunggu.**
 
 Branch eksperimen: `experiment/r51-mips32-crypto`. Baseline tetap r50 pada branch produksi/benchmark sebelumnya. Paket core r51 memakai `PKG_VERSION:=1.0.0`, `PKG_RELEASE:=51`, sehingga nama IPK yang diwajibkan adalah `passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk` dengan metadata `Version: 1.0.0-r51`.
 
