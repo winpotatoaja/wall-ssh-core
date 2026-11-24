@@ -111,8 +111,9 @@ thread_cpu_line() {
         {
             delta = ($2 + 0) - (old_ticks[$1] + 0)
             if (delta < 0) delta = 0
+            total_delta += delta
             pct = ref_ticks > 0 ? 100 * delta / ref_ticks : 0
-            printf "tid=%s/%s:%.1f%%,", $1, $3, pct
+            thread_line = thread_line sprintf("tid=%s/%s:%.1f%%,", $1, $3, pct)
             if (pct > max_pct) {
                 max_pct = pct
                 max_tid = $1
@@ -121,8 +122,10 @@ thread_cpu_line() {
             count++
         }
         END {
-            if (count == 0) printf "no_threads"
-            else printf "max_tid=%s/%s:%.1f%%", max_tid, max_name, max_pct
+            process_pct = ref_ticks > 0 ? 100 * total_delta / ref_ticks : 0
+            if (count == 0)
+                thread_line = "no_threads"
+            printf "%.1f|%s|max_tid=%s/%s:%.1f%%", process_pct, thread_line, max_tid, max_name, max_pct
         }
     ' "$PREV_FILE" "$NOW_FILE"
 }
@@ -171,6 +174,16 @@ net_snapshot() {
         case "$NET_TX" in ''|*[!0-9]*) NET_TX=0;; esac
         printf '%s %s %s\n' "$NET_NAME" "$NET_RX" "$NET_TX"
     done
+}
+
+copy_snapshot_file() {
+    SOURCE="$1"
+    DEST="$2"
+    {
+        while IFS= read -r SNAPSHOT_LINE; do
+            printf '%s\n' "$SNAPSHOT_LINE"
+        done < "$SOURCE"
+    } > "$DEST"
 }
 
 net_rate_line() {
@@ -413,7 +426,6 @@ main() {
     fi
     echo "PASS: MT7621A topology detected as 2 physical cores / 4 Linux CPUs; r50 activated 2 ChaCha workers + 1 Poly1305 worker."
 
-    PREV_TICKS=$(proc_ticks "$CORE_PID")
     thread_snapshot "$CORE_PID" "" > "$RESULT/threads.prev"
     PREV_SAMPLE_MS=$(monotonic_milliseconds)
     DEFAULT_IFACE=$(default_route_iface /proc/net/route)
@@ -424,20 +436,23 @@ main() {
         cpu_snapshot > "$RESULT/cpu.now"
         net_snapshot "" > "$RESULT/net.now"
         CUR_SAMPLE_MS=$(monotonic_milliseconds)
-        SAMPLE_ELAPSED=$(elapsed_seconds "$PREV_SAMPLE_MS" "$CUR_SAMPLE_MS")
-        CUR_TICKS=$(proc_ticks "$CORE_PID")
+        SAMPLE_DELTA_MS=$((CUR_SAMPLE_MS - PREV_SAMPLE_MS))
+        [ "$SAMPLE_DELTA_MS" -gt 0 ] || SAMPLE_DELTA_MS=1
+        SAMPLE_ELAPSED=$(printf '%d.%03d' "$((SAMPLE_DELTA_MS / 1000))" "$((SAMPLE_DELTA_MS % 1000))")
         thread_snapshot "$CORE_PID" "" > "$RESULT/threads.now"
         CPU_REFERENCE=$(cpu_reference_ticks "$RESULT/cpu.prev" "$RESULT/cpu.now")
-        PROC_CPU=$(awk -v a="$PREV_TICKS" -v b="$CUR_TICKS" -v ref="$CPU_REFERENCE" 'BEGIN{d=b-a;if(d<0)d=0;printf "%.1f",(ref>0?100*d/ref:0)}')
-        THREAD_LINE=$(thread_cpu_line "$RESULT/threads.prev" "$RESULT/threads.now" "$CPU_REFERENCE")
+        THREAD_METRICS=$(thread_cpu_line "$RESULT/threads.prev" "$RESULT/threads.now" "$CPU_REFERENCE")
+        PROC_CPU=${THREAD_METRICS%%|*}
+        THREAD_LINE=${THREAD_METRICS#*|}
+        THREAD_LINE=${THREAD_LINE%%|*}
+        THREAD_MAX=${THREAD_METRICS##*|}
         CPU_LINE=$(awk 'FNR==NR{busy[$1]=$2;total[$1]=$3;next}{dt=$3-total[$1];db=$2-busy[$1];if(dt>0){p=100*db/dt;if($1=="cpu")all=p;else cores=cores sprintf("%s=%.0f%%,",$1,p)}}END{if(all=="")all=0;printf "sys=%.0f%% cores=[%s]",all,cores}' "$RESULT/cpu.prev" "$RESULT/cpu.now")
         NET_LINE=$(net_rate_line "$RESULT/net.prev" "$RESULT/net.now" "$DEFAULT_IFACE" "$SAMPLE_ELAPSED")
         SAMPLE=$((SAMPLE+1))
-        printf 'sample=%d elapsed=%ss proc_cpu=%s%% threads=[%s] %s net_default=%s %s\n' "$SAMPLE" "$SAMPLE_ELAPSED" "$PROC_CPU" "$THREAD_LINE" "$CPU_LINE" "$DEFAULT_IFACE" "$NET_LINE" >> "$RESULT/samples.log"
-        cp "$RESULT/cpu.now" "$RESULT/cpu.prev"
-        cp "$RESULT/net.now" "$RESULT/net.prev"
-        cp "$RESULT/threads.now" "$RESULT/threads.prev"
-        PREV_TICKS=$CUR_TICKS
+        printf 'sample=%d elapsed=%ss proc_cpu=%s%% threads=[%s%s] %s net_default=%s %s\n' "$SAMPLE" "$SAMPLE_ELAPSED" "$PROC_CPU" "$THREAD_LINE" "$THREAD_MAX" "$CPU_LINE" "$DEFAULT_IFACE" "$NET_LINE" >> "$RESULT/samples.log"
+        copy_snapshot_file "$RESULT/cpu.now" "$RESULT/cpu.prev"
+        copy_snapshot_file "$RESULT/net.now" "$RESULT/net.prev"
+        copy_snapshot_file "$RESULT/threads.now" "$RESULT/threads.prev"
         PREV_SAMPLE_MS=$CUR_SAMPLE_MS
     }
 
