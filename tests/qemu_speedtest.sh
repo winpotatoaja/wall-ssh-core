@@ -429,7 +429,11 @@ main() {
         fi
         CURL_PID=$!
         while kill -0 "$CURL_PID" 2>/dev/null; do
-            sleep_microseconds 250000
+            if ! sleep_microseconds 250000; then
+                echo "ERROR: nanosleep helper failed during 250 ms sampling"
+                kill -TERM "$CORE_PID" 2>/dev/null || :
+                return 2
+            fi
             if [ "$MODE" = "socks5" ] && kill -0 "$CURL_PID" 2>/dev/null; then
                 sample_metrics
             fi
