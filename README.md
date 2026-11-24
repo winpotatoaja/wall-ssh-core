@@ -4,19 +4,26 @@ Terakhir diperbarui: 2026-11-24
 
 ## r50 — mempertahankan dua jalur dekripsi ChaCha20 pada MT7621 dual-core
 
-**Status: patch alokasi worker diterapkan; validasi SDK dan VM sedang dimulai. Belum ada klaim peningkatan throughput sebelum pengujian terukur.**
+**Status: SDK MIPS #634 lulus; benchmark bandwidth QEMU #72 lulus pada source r50. SOCKS5 mencapai 14,41 MiB/s. Namun QEMU memakai 4 vCPU, sehingga perubahan alokasi khusus dual-core r50 belum teruji. Validasi 2-vCPU dan router MT7621 fisik masih terbuka.**
 
-Audit hasil r49 menemukan ketidakcocokan konfigurasi untuk target MT7621 dua-core. Fungsi alokasi sebelumnya menetapkan jumlah worker sama dengan jumlah CPU. Karena r49 mencadangkan worker terakhir untuk Poly1305, perangkat dua-core hanya mendapat satu worker dekripsi ChaCha20. Seluruh payload satu paket SSH kemudian didekripsi oleh satu worker, sementara worker lain hanya mengerjakan MAC dan dapat selesai lebih cepat. Pengujian r49 #70 memakai QEMU empat-vCPU, sehingga belum menguji susunan worker dua-core yang dipakai target MT7621.
+Audit hasil r49 menemukan ketidakcocokan konfigurasi untuk target MT7621 dua-core. Fungsi alokasi sebelumnya menetapkan jumlah worker sama dengan jumlah CPU. Karena r49 mencadangkan worker terakhir untuk Poly1305, perangkat dua-core hanya mendapat satu worker dekripsi ChaCha20. Perubahan r50 menetapkan tiga worker pada dua CPU: dua worker dekripsi ChaCha20 dan satu worker Poly1305. Satu CPU tetap serial; tiga CPU atau lebih memakai hingga empat worker (tiga ChaCha20 dan satu Poly1305). SSH Owner tetap satu-satunya pemilik LIBSSH2_SESSION dan satu upstream SSH session tetap dipertahankan.
 
-Perubahan r50:
-- 1 CPU: tetap memakai jalur serial Owner.
-- 2 CPU: 3 worker tetap, terdiri dari 2 worker dekripsi ChaCha20 dan 1 worker Poly1305.
-- 3 CPU atau lebih: maksimum 4 worker, terdiri dari 3 worker dekripsi ChaCha20 dan 1 worker Poly1305.
-- SSH Owner tetap satu-satunya pemilik LIBSSH2_SESSION; jumlah autentikasi dan sesi SSH upstream tidak berubah.
-- Verifier benchmark diperbarui untuk memeriksa format log alokasi worker r50.
+### Hasil bandwidth r50 — QEMU #72
 
-**Catatan diagnosis:** pada artifact r49, jalur SOCKS5 berhasil mengirim semua byte yang dibaca dari SSH; socks_tx_eagain=0 dan socks_tx_partial=0 pada interval steady-state. Waktu terbesar tercatat di dalam pemrosesan libssh2_channel_read()/crypto. Data satu-detik itu belum cukup untuk menjelaskan jeda sesaat yang terlihat di IDM. Alokasi dua-core r50 ditujukan untuk menghilangkan kekurangan jalur dekripsi pada target, tetapi stabilitas dan peningkatan kecepatan masih harus dibuktikan pada MT7621.
+SDK run #634 (45382100045) lulus. Benchmark #72 (45383249234, artifact 14915176986) menggunakan paket dengan source SHA yang diverifikasi sama dengan commit r50 a60d2fe287591c6c9483dd3b6837729df96bc0a9.
 
+- Direct: 100.000.000 byte, 4,034 s, **23,64 MiB/s**, HTTP 200, remote 79.127.235.8.
+- SOCKS5: 100.000.000 byte, 6,621 s, **14,41 MiB/s**, HTTP 200. Timeout 50 detik tidak terlampaui; pasangan byte cocok.
+- Dibanding r49 #70 (8,93 MiB/s), hasil SOCKS5 naik 61,4%; direct berubah dari 24,93 menjadi 23,64 MiB/s (-5,2%). Perbandingan antar-run ini bukan A/B terkontrol; IP Datapacket berbeda (.8 dibanding .9).
+- Tepat satu autentikasi host, satu autentikasi core/key establishment, dan satu SSH session terverifikasi. Cipher aktual chacha20-poly1305@openssh.com.
+- QEMU mendeteksi **4 vCPU** dan memilih crypto_workers=4, poly1305_workers=1, chacha_payload_workers=3. Susunan ini sama dengan r49 pada 4 vCPU; benchmark ini belum menguji alokasi baru r50 untuk 2 vCPU.
+- Sampel steady-state menunjukkan ssh_owner sekitar 52,6–55,7% satu vCPU; chacha-dec0/1/2 sekitar 11,7–14,8%; chacha-poly sekitar 19,0–19,4%. Keempat worker crypto aktif; empat worker I/O tambahan tidak menunjukkan CPU terukur pada single-client transfer.
+- socks_tx_eagain=0 dan socks_tx_partial=0; pada interval steady-state, byte yang dibaca dari SSH sama dengan byte yang dikirim ke SOCKS. Ini tidak menunjukkan local socket backpressure. Waktu perf_s2c_read_us sekitar 905–919 ms per interval satu detik, sedangkan perf_socks_tx_us sekitar 83–87 ms; hot path masih dominan di receive/decrypt/processing libssh2.
+- Sampel interface WAN per jendela 1–2 detik bervariasi sekitar 9,89; 14,29; 28,93; dan 15,86 MiB/s. Karena sampling kasar dan hanya empat jendela aktif, angka rata-rata lebih baik belum membuktikan jeda IDM telah hilang.
+
+**Kesimpulan:** throughput SOCKS5 pada run ini membaik secara terukur, tetapi hasil tersebut belum membuktikan perbaikan alokasi dual-core r50 karena QEMU berjalan dengan 4 vCPU dan tetap memakai susunan worker r49. Langkah validasi yang tepat adalah menyesuaikan benchmark/verifier agar dapat menjalankan QEMU 2-vCPU dan memeriksa tiga worker (dua ChaCha20 + satu Poly1305), lalu menguji pada MT7621 fisik. Workflow, artifact, dan versi IPK masih memakai label r49 walaupun pemeriksaan source SHA dan log runtime menunjukkan source r50; label CI tersebut perlu dirapikan.
+
+**Catatan diagnosis sebelumnya:** artifact r49 juga tidak menunjukkan local SOCKS socket backpressure pada interval steady-state. Data per detik belum cukup untuk menjelaskan jeda sesaat yang terlihat di IDM; retest dengan jendela sampling lebih pendek tetap diperlukan.
 
 Dokumen ini adalah **catatan progres utama proyek**. Semua pekerjaan, hasil validasi,
 keputusan, dan pekerjaan tersisa dicatat berdasarkan lima tahap di bawah. Status
