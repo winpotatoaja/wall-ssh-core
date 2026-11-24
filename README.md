@@ -4,7 +4,7 @@ Terakhir diperbarui: 2026-11-24
 
 ## r51 — eksperimen autentikasi-dulu, dekripsi-kemudian
 
-**Status: SDK MIPS #693 lulus; QEMU guest functional test dijalankan dari artifact SDK #693.**
+**Status: SDK MIPS #693 dan QEMU MT7621 #696 lulus; validasi performa fisik masih menunggu.**
 
 Branch eksperimen: `experiment/r51-mips32-crypto`. Baseline tetap r50 pada branch produksi/benchmark sebelumnya. Paket core r51 memakai `PKG_VERSION:=1.0.0`, `PKG_RELEASE:=51`, sehingga nama IPK yang diwajibkan adalah `passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk` dengan metadata `Version: 1.0.0-r51`.
 
@@ -14,6 +14,8 @@ Perubahan pertama r51:
 - Jika autentikasi gagal, tujuan dekripsi tidak disentuh dan tidak ada plaintext yang dihasilkan worker.
 - Tiga worker pada MT7621A dipakai bergantian: satu tugas Poly1305 pada fase autentikasi, kemudian ketiganya menjadi worker ChaCha20 pada fase dekripsi. Jumlah core fisik dan satu SSH Owner tetap sama.
 - SDK menguji regresi ChaCha20-Poly1305 1–4 worker dan menjalankan pemeriksaan urutan source. Artifact SDK juga menyimpan disassembly MIPS dari libssh2 untuk audit instruksi aktual.
+
+QEMU MT7621 run #696 (`45425452549`, artifact `14934369697`) berhasil dengan `MIPS TEST STATUS: 0`. Guest memasang tepat `passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk`; runtime melaporkan 4 logical CPU / 2 physical core, tiga crypto worker, dan negosiasi SSH `chacha20-poly1305@openssh.com`. Uji SOCKS empat client dalam satu SSH session menyelesaikan 4 × 32 MiB dengan SHA-256 cocok: TCP 134,217,728 byte dalam 13.268 s (9.647 MiB/s), TLS/SNI 134,217,728 byte dalam 15.791 s (8.106 MiB/s). Uji juga mencakup half-close, full-duplex 8 MiB upload + 32 MiB response, ring saturation/drain, keepalive, reset/reconnect, TLS close_notify, dan graceful shutdown. Angka ini merupakan fixture lokal pada QEMU, bukan hasil benchmark internet atau router fisik; jangan dibandingkan langsung dengan r50 #77.
 
 SDK #693 (`45424098207`) pada source `fb6af8a66915917f523d8f28cc6abd96190e3130` lulus. Artifact `14935244123` memuat IPK core r51 (47.315 byte, SHA-256 `fbd2b4a51435301e4ea1498d66a68325ae259895ce9c1224c6eaf7a2a6a7b8a8`) dan dependensi `libssh2-1_1.11.1-r1` (101.161 byte, SHA-256 `fc3a89e86946494e339937c1c7ddee75a9ce518a1ef58ab1c98c92d60414a7fd`). Metadata core diverifikasi sebagai `1.0.0-r51` / `mipsel_24kc`; kedua checksum cocok. Native regressions, pemeriksaan source-order autentikasi, ChaCha20-Poly1305 serial/parallel regression, dan cross-build MIPS lulus. Artifact menyimpan disassembly ELF32 little-endian MIPS32r2 untuk audit hot path. Belum ada klaim peningkatan throughput; assembly MIPS32R2 belum diterapkan. Workflow bandwidth internet 100 MB tetap opt-in dan tidak dijalankan.
 
