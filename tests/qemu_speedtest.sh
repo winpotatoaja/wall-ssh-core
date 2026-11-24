@@ -223,7 +223,7 @@ net_rate_line() {
 }
 
 run_diag_self_test() {
-    TEST_ROOT="/tmp/r50-speedtest-diag-test"
+    TEST_ROOT="/tmp/r51-speedtest-diag-test"
     if [ ! -x "$DIAG_TIMER" ]; then
         echo "DIAG SELF-TEST FAIL: MIPS monotonic timer helper is missing: $DIAG_TIMER"
         return 2
@@ -369,7 +369,7 @@ main() {
     cpu_snapshot() {
         awk '/^cpu[0-9]*[ \t]/ {t=0;for(i=2;i<=NF;i++)t+=$i;idle=$5+$6;print $1,t-idle,t}' /proc/stat
     }
-    echo "r50_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "r51_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     SOCKS_INFO="SOCKS5=$SOCKS"
     GUEST_INFO="GUEST=$(uname -a)"
     VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
@@ -390,7 +390,7 @@ main() {
     case "$CPU_TOPOLOGY_PHYSICAL_CORES" in ''|*[!0-9]*) CPU_TOPOLOGY_PHYSICAL_CORES=0;; esac
     SAMPLE_INTERVAL_MS=250
     {
-        echo "r50_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+        echo "r51_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
         echo "$SOCKS_INFO"
         echo "$GUEST_INFO"
         echo "VCPU_COUNT=$VCPU_COUNT"
@@ -435,7 +435,7 @@ main() {
     CRYPTO_WORKERS_READY=0
     N=0
     while [ "$N" -lt 10 ]; do
-        if grep -Eq '\[ChaCha\] r50 S2C payload: detected_cpus=4 detected_cores=2 owner_payload_lanes=0 crypto_workers=3 poly1305_workers=1 chacha_payload_workers=2 active_worker_lanes=3 threshold=4096 bytes' "$RESULT/core.log"; then
+        if grep -Eq '\[ChaCha\] r51 S2C payload: detected_cpus=4 detected_cores=2 owner_payload_lanes=0 crypto_workers=3 poly1305_workers=1 chacha_payload_workers=3 active_worker_lanes=3 threshold=4096 bytes' "$RESULT/core.log"; then
             CRYPTO_WORKERS_READY=1
             break
         fi
@@ -444,12 +444,12 @@ main() {
         sleep 1
     done
     if [ "$CRYPTO_WORKERS_READY" -ne 1 ]; then
-        echo "ERROR: expected r50 two-core plan (2 ChaCha + 1 Poly1305) was not active; skipping both 100 MB downloads"
+        echo "ERROR: expected r51 authenticated 3-worker ChaCha plan was not active; skipping both 100 MB downloads"
         grep -E '\[PERF\]|ChaCha|SSH Cipher' "$RESULT/core.log" 2>/dev/null || :
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
     fi
-    echo "PASS: MT7621A topology detected as 2 physical cores / 4 Linux CPUs; r50 activated 2 ChaCha workers + 1 Poly1305 worker."
+    echo "PASS: MT7621A topology detected as 2 physical cores / 4 Linux CPUs; r51 authenticated with Poly1305 first, then used all 3 workers for ChaCha20."
 
     thread_snapshot "$CORE_PID" "" > "$RESULT/threads.prev"
     PREV_SAMPLE_MS=$(monotonic_milliseconds)
@@ -591,7 +591,7 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "r50 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
+      echo "r51 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
       cat "$RESULT/environment.log"
       cat "$RESULT/download-results.log"
       echo "--- PAIRS ---"
@@ -605,7 +605,7 @@ main() {
     } | tee "$RESULT/summary.txt"
 
     echo "RESULT_DIR=$RESULT"
-    echo "r50_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "r51_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     [ ! -s "$RESULT/errors.log" ] || return 2
     [ "$PAIR_COUNT" -ge 1 ] || {
         echo "ERROR: no endpoint completed a full direct+SOCKS5 100 MB pair" | tee -a "$RESULT/errors.log"
