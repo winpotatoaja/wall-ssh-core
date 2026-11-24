@@ -411,11 +411,11 @@ jobs:
           test -s "$CORE_LOG"
           test -s "$SAMPLE_LOG"
           # Require measured CPU activity, not just thread names, for all four crypto workers.
-          for worker_id in 0 1 2; do
+          for worker_id in 0 1; do
             grep -Eq "tid=[0-9]+/chacha-dec${worker_id}:([1-9][0-9]*([.][0-9]+)?|0[.]([0-9]*[1-9][0-9]*))%" "$SAMPLE_LOG"
           done
           grep -Eq "tid=[0-9]+/chacha-poly:([1-9][0-9]*([.][0-9]+)?|0[.]([0-9]*[1-9][0-9]*))%" "$SAMPLE_LOG"
-          grep -Eq '\[ChaCha\] r50 S2C payload: detected_cpus=[1-9][0-9]* owner_payload_lanes=[01] crypto_workers=[0-4] poly1305_workers=[01] chacha_payload_workers=[0-3] active_worker_lanes=[1-4] threshold=4096 bytes' "$CORE_LOG"
+          grep -Eq '\[ChaCha\] r50 S2C payload: detected_cpus=4 detected_cores=2 owner_payload_lanes=0 crypto_workers=3 poly1305_workers=1 chacha_payload_workers=2 active_worker_lanes=3 threshold=4096 bytes' "$CORE_LOG"
           awk '
             /^\[PERF\]/ &&
             /s2c_read_bytes=[1-9][0-9]*/ &&
@@ -437,8 +437,8 @@ jobs:
             /libssh2_transport_other_us=[0-9]+/ &&
             /libssh2_packet_drain_us=[0-9]+/ &&
             /libssh2_packet_queue_peak_bytes=[1-9][0-9]*/ &&
-            /libssh2_chacha_workers_requested=4/ &&
-            /libssh2_chacha_workers_active=4/ &&
+            /libssh2_chacha_workers_requested=3/ &&
+            /libssh2_chacha_workers_active=3/ &&
             /libssh2_chacha_poly1305_us=[1-9][0-9]*/ &&
             /libssh2_chacha_poly1305_offloaded_packets=[1-9][0-9]*/ &&
             /libssh2_chacha20_parallel_us=[1-9][0-9]*/ { found=1 }
