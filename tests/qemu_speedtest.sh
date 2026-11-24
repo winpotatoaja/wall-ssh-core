@@ -429,7 +429,7 @@ main() {
         fi
         CURL_PID=$!
         while kill -0 "$CURL_PID" 2>/dev/null; do
-            sleep 0.25
+            sleep_microseconds 250000
             if [ "$MODE" = "socks5" ] && kill -0 "$CURL_PID" 2>/dev/null; then
                 sample_metrics
             fi
