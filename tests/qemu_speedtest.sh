@@ -312,7 +312,8 @@ main() {
         echo "VCPU_COUNT=$VCPU_COUNT"
         echo "CPU_TOPOLOGY=$CPU_TOPOLOGY"
         echo "CPU_TOPOLOGY_PHYSICAL_CORES=$CPU_TOPOLOGY_PHYSICAL_CORES"
-        echo "SAMPLE_INTERVAL_MS=$SAMPLE_INTERVAL_MS"\n        echo "SAMPLE_CLOCK=clock_gettime(CLOCK_MONOTONIC)"
+        echo "SAMPLE_INTERVAL_MS=$SAMPLE_INTERVAL_MS"
+        echo "SAMPLE_CLOCK=clock_gettime(CLOCK_MONOTONIC)"
     } | tee "$RESULT/environment.log"
 
     if [ "$VCPU_COUNT" -ne 4 ] || [ "$CPU_TOPOLOGY_PHYSICAL_CORES" -ne 2 ]; then
