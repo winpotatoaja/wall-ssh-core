@@ -54,19 +54,30 @@ thread_snapshot() {
     PID="$1"
     TASK_ROOT="$2"
     [ -n "$TASK_ROOT" ] || TASK_ROOT="/proc/$PID/task"
-    for STAT_FILE in "$TASK_ROOT"/*/stat; do
-        [ -r "$STAT_FILE" ] || continue
-        TASK_DIR=$(dirname "$STAT_FILE")
-        TID=$(basename "$TASK_DIR")
-        TICKS=$(proc_stat_ticks "$STAT_FILE")
-        if [ "$TID" = "$PID" ]; then
-            COMM=ssh_owner
-        else
-            COMM=$(cat "$TASK_DIR/comm" 2>/dev/null | tr ' ' '_')
-            [ -n "$COMM" ] || COMM=unknown
-        fi
-        printf '%s %s %s\n' "$TID" "$TICKS" "$COMM"
-    done
+    # One awk process reads all per-thread stat files. Avoid spawning dirname,
+    # basename, cat, tr and one awk per TID on the slow MIPS guest.
+    awk -v owner="$PID" '
+        {
+            path = FILENAME
+            path_count = split(path, path_part, "/")
+            tid = path_part[path_count - 1]
+
+            comm = $0
+            sub(/^.*\\(/, "", comm)
+            sub(/\\).*/, "", comm)
+            gsub(/[[:space:]]+/, "_", comm)
+            if (tid == owner)
+                comm = "ssh_owner"
+            if (comm == "")
+                comm = "unknown"
+
+            stat = $0
+            sub(/^.*\\) /, "", stat)
+            count = split(stat, field, " ")
+            ticks = count >= 13 ? field[12] + field[13] : 0
+            printf "%s %.0f %s\\n", tid, ticks, comm
+        }
+    ' "$TASK_ROOT"/*/stat 2>/dev/null
 }
 
 cpu_reference_ticks() {
@@ -125,15 +136,40 @@ default_route_iface() {
 net_snapshot() {
     NET_ROOT="$1"
     [ -n "$NET_ROOT" ] || NET_ROOT=/sys/class/net
+    if [ "$NET_ROOT" = /sys/class/net ]; then
+        # /proc/net/dev exposes every interface's RX/TX byte counters in one read.
+        awk '
+            NR > 2 {
+                line = $0
+                sub(/^[ \\t]+/, "", line)
+                count = split(line, part, ":")
+                if (count < 2)
+                    next
+                name = part[1]
+                if (name == "lo")
+                    next
+                data = part[2]
+                sub(/^[ \\t]+/, "", data)
+                fields = split(data, value, /[ \\t]+/)
+                if (fields >= 9)
+                    printf "%s %.0f %.0f\\n", name, value[1], value[9]
+            }
+        ' /proc/net/dev 2>/dev/null
+        return
+    fi
+
+    # Small filesystem-backed path retained for the isolated diagnostic self-test.
     for NET_PATH in "$NET_ROOT"/*; do
         [ -d "$NET_PATH/statistics" ] || continue
-        NET_NAME=$(basename "$NET_PATH")
+        NET_NAME=${NET_PATH##*/}
         [ "$NET_NAME" = lo ] && continue
-        NET_RX=$(cat "$NET_PATH/statistics/rx_bytes" 2>/dev/null)
-        NET_TX=$(cat "$NET_PATH/statistics/tx_bytes" 2>/dev/null)
+        NET_RX=0
+        NET_TX=0
+        IFS= read -r NET_RX < "$NET_PATH/statistics/rx_bytes" || NET_RX=0
+        IFS= read -r NET_TX < "$NET_PATH/statistics/tx_bytes" || NET_TX=0
         case "$NET_RX" in ''|*[!0-9]*) NET_RX=0;; esac
         case "$NET_TX" in ''|*[!0-9]*) NET_TX=0;; esac
-        printf '%s %s %s\n' "$NET_NAME" "$NET_RX" "$NET_TX"
+        printf '%s %s %s\\n' "$NET_NAME" "$NET_RX" "$NET_TX"
     done
 }
 
