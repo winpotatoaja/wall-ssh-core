@@ -41,7 +41,10 @@ elapsed_seconds() {
 }
 
 wait_until_next_sample() {
-    TARGET_SAMPLE_MS=$((PREV_SAMPLE_MS + 250))
+    # CPU and WAN baselines are sampled before the per-sample timestamp.
+    # On the MIPS guest that pre-snapshot costs about 50 ms. Schedule at 200 ms
+    # so the timestamp-to-timestamp cadence (including that work) is ~250 ms.
+    TARGET_SAMPLE_MS=$((PREV_SAMPLE_MS + 200))
     NOW_SAMPLE_MS=$(monotonic_milliseconds) || return 2
     REMAINING_SAMPLE_MS=$((TARGET_SAMPLE_MS - NOW_SAMPLE_MS))
     if [ "$REMAINING_SAMPLE_MS" -gt 0 ]; then
