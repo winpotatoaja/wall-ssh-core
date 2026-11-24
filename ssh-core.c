@@ -166,7 +166,7 @@ static long detect_available_physical_core_count(long logical_cpu_count) {
         if (online_count > 0) expected_cpus = online_count;
     }
     if (expected_cpus < 1L || expected_cpus > (long)CPU_SETSIZE)
-        return logical_cpu_count > 0 ? logical_cpu_count : 1L;
+        return 0L;
 
     for (cpu_id = 0U;
          cpu_id < (unsigned int)CPU_SETSIZE && inspected_cpus < expected_cpus;
@@ -181,10 +181,10 @@ static long detect_available_physical_core_count(long logical_cpu_count) {
         if (!have_affinity && (long)cpu_id >= expected_cpus)
             break;
 
-        if (!read_cpu_topology_value(cpu_id, "core_id", &core_id))
-            return logical_cpu_count > 0 ? logical_cpu_count : 1L;
-        (void)read_cpu_topology_value(cpu_id, "physical_package_id",
-                                      &package_id);
+        if (!read_cpu_topology_value(cpu_id, "core_id", &core_id) ||
+            !read_cpu_topology_value(cpu_id, "physical_package_id",
+                                     &package_id))
+            return 0L;
         inspected_cpus++;
 
         for (index = 0; index < unique_cores; index++) {
@@ -199,7 +199,7 @@ static long detect_available_physical_core_count(long logical_cpu_count) {
     }
 
     if (inspected_cpus != expected_cpus || unique_cores < 1L)
-        return logical_cpu_count > 0 ? logical_cpu_count : 1L;
+        return 0L;
     return unique_cores;
 }
 
@@ -232,7 +232,7 @@ static unsigned int chacha_worker_count_for_physical_core_count(long core_count)
 }
 
 static long g_detected_cpu_count = 1;
-static long g_detected_physical_core_count = 1;
+static long g_detected_physical_core_count = 0;
 static uint32_t g_io_worker_count = 1U;
 static int g_worker_count_auto = 1;
 static __thread int g_worker_id = 0;
