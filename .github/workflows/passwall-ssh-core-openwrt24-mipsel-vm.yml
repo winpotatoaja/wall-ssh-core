@@ -77,6 +77,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/test-results"
           cd sdk
           STAGING="$(find staging_dir -maxdepth 1 -type d -name 'target-*' | head -n 1)"
           test -n "$STAGING"
@@ -135,8 +136,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/tests/chachapoly_auth_order_test.py" "$LIBSSH2_SRC/src/chacha.c" | tee "$GITHUB_WORKSPACE/test-results/chachapoly-auth-order.log"
           python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r51_mips32_hotpath.py" "$LIBSSH2_SRC"
           test -s "$LIBSSH2_SRC/.passwall-r51-mips32-hotpath-patched"
-          python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log
-            test-results/r52-hardening.log"
+          python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log"
           python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r52_worker_lifecycle.py" "$LIBSSH2_SRC"
           test -s "$LIBSSH2_SRC/.passwall-r52-worker-lifecycle-patched"
           python3 "$GITHUB_WORKSPACE/tests/r52_hardening_test.py" "$GITHUB_WORKSPACE/ssh-core.c" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/r52-hardening.log"
