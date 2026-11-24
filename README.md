@@ -6,6 +6,10 @@ Terakhir diperbarui: 2026-11-24
 
 **Status: SDK MIPS #661 dan QEMU bandwidth #76/#77 lulus. MT7621A terdeteksi sebagai 4 VPE / 2 physical core; runtime mengaktifkan 2 worker ChaCha20 + 1 Poly1305. Sampler fixed-deadline mencapai median 254 ms (47 sampel; rentang 242–301 ms) terhadap target 250 ms. Validasi router MT7621 fisik dan pengujian langsung pola stall IDM tetap terbuka.**
 
+### Identitas paket OpenWrt r50
+
+Recipe paket menetapkan `PKG_VERSION:=1.0.0` dan `PKG_RELEASE:=50`. Hasil SDK yang benar harus bernama `passwall-ssh-core_1.0.0-r50_mipsel_24kc.ipk` **dan** memiliki `Version: 1.0.0-r50` di control metadata. Artifact SDK #661 sebelumnya dibuat dari source r50, tetapi masih memakai nama dan metadata paket r49; jangan menganggap artifact lama itu sebagai IPK r50. Paket `libssh2-1_1.11.1-r1_mipsel_24kc.ipk` adalah dependensi terpisah dan versinya tidak ikut berubah.
+
 ### Koreksi penting topology MT7621A
 
 MT7621A bukan dua logical CPU. SoC memiliki dua physical core, masing-masing dengan dua VPE, sehingga OpenWrt normalnya melihat empat Linux CPUs (`VPE topology {2,2} total 4`). Karena itu, saran sebelumnya untuk menurunkan QEMU ke `-smp 2` tidak tepat untuk meniru MT7621A: konfigurasi itu menjadi satu physical core / dua VPE (kelas MT7621S). QEMU untuk MT7621A harus tetap memakai empat Linux CPUs.
