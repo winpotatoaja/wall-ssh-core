@@ -63,8 +63,8 @@ thread_snapshot() {
             tid = path_part[path_count - 1]
 
             comm = $0
-            sub(/^.*\\(/, "", comm)
-            sub(/\\).*/, "", comm)
+            sub(/^.*\(/, "", comm)
+            sub(/\).*/, "", comm)
             gsub(/[[:space:]]+/, "_", comm)
             if (tid == owner)
                 comm = "ssh_owner"
@@ -72,10 +72,10 @@ thread_snapshot() {
                 comm = "unknown"
 
             stat = $0
-            sub(/^.*\\) /, "", stat)
+            sub(/^\.*\) /, "", stat)
             count = split(stat, field, " ")
             ticks = count >= 13 ? field[12] + field[13] : 0
-            printf "%s %.0f %s\\n", tid, ticks, comm
+            printf "%s %.0f %s\n", tid, ticks, comm
         }
     ' "$TASK_ROOT"/*/stat 2>/dev/null
 }
@@ -141,7 +141,7 @@ net_snapshot() {
         awk '
             NR > 2 {
                 line = $0
-                sub(/^[ \\t]+/, "", line)
+                sub(/^[[:space:]]+/, "", line)
                 count = split(line, part, ":")
                 if (count < 2)
                     next
@@ -149,10 +149,10 @@ net_snapshot() {
                 if (name == "lo")
                     next
                 data = part[2]
-                sub(/^[ \\t]+/, "", data)
-                fields = split(data, value, /[ \\t]+/)
+                sub(/^[[:space:]]+/, "", data)
+                fields = split(data, value, /[[:space:]]+/)
                 if (fields >= 9)
-                    printf "%s %.0f %.0f\\n", name, value[1], value[9]
+                    printf "%s %.0f %.0f\n", name, value[1], value[9]
             }
         ' /proc/net/dev 2>/dev/null
         return
@@ -169,7 +169,7 @@ net_snapshot() {
         IFS= read -r NET_TX < "$NET_PATH/statistics/tx_bytes" || NET_TX=0
         case "$NET_RX" in ''|*[!0-9]*) NET_RX=0;; esac
         case "$NET_TX" in ''|*[!0-9]*) NET_TX=0;; esac
-        printf '%s %s %s\\n' "$NET_NAME" "$NET_RX" "$NET_TX"
+        printf '%s %s %s\n' "$NET_NAME" "$NET_RX" "$NET_TX"
     done
 }
 
