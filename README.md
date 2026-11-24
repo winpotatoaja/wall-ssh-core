@@ -10,6 +10,8 @@ Terakhir diperbarui: 2026-11-24
 
 Recipe paket menetapkan `PKG_VERSION:=1.0.0` dan `PKG_RELEASE:=50`. Hasil SDK yang benar harus bernama `passwall-ssh-core_1.0.0-r50_mipsel_24kc.ipk` **dan** memiliki `Version: 1.0.0-r50` di control metadata. Artifact SDK #661 sebelumnya dibuat dari source r50, tetapi masih memakai nama dan metadata paket r49; jangan menganggap artifact lama itu sebagai IPK r50. Paket `libssh2-1_1.11.1-r1_mipsel_24kc.ipk` adalah dependensi terpisah dan versinya tidak ikut berubah.
 
+Build ulang SDK #680 (`45404160735`) lulus dan menghasilkan artifact `14925525391` dari source SHA `29978e702565f88bd912500505d76a721aec1d0d`. IPK core r50 berukuran 47.316 byte dengan SHA-256 `bf41683302f3ec4a0e73bf023a71b3c51f8adf609b92d9cdcfdf416fb63c2076`; IPK dependensi libssh2 tetap `1.11.1-r1`. Workflow memverifikasi kedua checksum dan metadata IPK. Benchmark internet tidak dijalankan.
+
 ### Koreksi penting topology MT7621A
 
 MT7621A bukan dua logical CPU. SoC memiliki dua physical core, masing-masing dengan dua VPE, sehingga OpenWrt normalnya melihat empat Linux CPUs (`VPE topology {2,2} total 4`). Karena itu, saran sebelumnya untuk menurunkan QEMU ke `-smp 2` tidak tepat untuk meniru MT7621A: konfigurasi itu menjadi satu physical core / dua VPE (kelas MT7621S). QEMU untuk MT7621A harus tetap memakai empat Linux CPUs.
