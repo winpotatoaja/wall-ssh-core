@@ -1,20 +1,7 @@
 #!/usr/bin/env python3
-"""Keep the two libssh2 crypto hot paths in native MIPS32 mode on MIPS builds."""
+"""Select native MIPS32 code generation for libssh2's two crypto hotpath TUs."""
 from pathlib import Path
 import sys
-
-
-HEADER = r'''#ifndef LIBSSH2_MIPS32_HOT_H
-#define LIBSSH2_MIPS32_HOT_H
-
-#if defined(__mips__) && defined(__GNUC__)
-# define LIBSSH2_MIPS32_HOT __attribute__((nomips16))
-#else
-# define LIBSSH2_MIPS32_HOT
-#endif
-
-#endif /* LIBSSH2_MIPS32_HOT_H */
-'''
 
 
 def replace_once(path: Path, old: str, new: str, label: str) -> None:
@@ -37,46 +24,29 @@ def patch(root: Path) -> None:
     if '#define LIBSSH2_VERSION "1.11.1"' not in version:
         raise RuntimeError("r51 MIPS32 hotpath patch is pinned to libssh2 1.11.1")
 
-    src = root / "src"
-    hot_header = src / "libssh2_mips32_hot.h"
-    if hot_header.exists():
-        raise RuntimeError("refusing to overwrite existing libssh2_mips32_hot.h")
-    hot_header.write_text(HEADER)
-
-    chacha_h = src / "chacha.h"
-    poly_h = src / "poly1305.h"
-
+    src_cmake = root / "src/CMakeLists.txt"
     replace_once(
-        chacha_h,
-        "#define CHACHA_H\n",
-        "#define CHACHA_H\n\n#include \"libssh2_mips32_hot.h\"\n",
-        "include MIPS32 hotpath attribute header in chacha.h",
-    )
-    replace_once(
-        poly_h,
-        "#define POLY1305_H\n",
-        "#define POLY1305_H\n\n#include \"libssh2_mips32_hot.h\"\n",
-        "include MIPS32 hotpath attribute header in poly1305.h",
-    )
-    replace_once(
-        chacha_h,
-        "void chacha_encrypt_bytes(",
-        "void LIBSSH2_MIPS32_HOT chacha_encrypt_bytes(",
-        "mark chacha_encrypt_bytes as native MIPS32",
-    )
-    replace_once(
-        poly_h,
-        "void poly1305_auth(",
-        "void LIBSSH2_MIPS32_HOT poly1305_auth(",
-        "mark poly1305_auth as native MIPS32",
+        src_cmake,
+        'include("${CMAKE_CURRENT_BINARY_DIR}/Makefile.inc.cmake")\n'
+        'set(_sources ${CSOURCES} ${HHEADERS})',
+        'include("${CMAKE_CURRENT_BINARY_DIR}/Makefile.inc.cmake")\n'
+        'set(_sources ${CSOURCES} ${HHEADERS})\n\n'
+        '# Keep only the crypto hotpath translation units in native MIPS32 mode.\n'
+        'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips")\n'
+        '  set_source_files_properties(\n'
+        '    chacha.c\n'
+        '    poly1305.c\n'
+        '    PROPERTIES COMPILE_OPTIONS "-mno-mips16")\n'
+        'endif()',
+        "apply MIPS32-only compiler option to ChaCha and Poly1305 source files",
     )
 
     marker.write_text(
-        "libssh2 1.11.1 Passwall r51 native-MIPS32 hotpath code generation\n"
+        "libssh2 1.11.1 Passwall r51 native-MIPS32 source-specific compiler options\n"
     )
     print(
-        "PASS: chacha_encrypt_bytes and poly1305_auth declarations use "
-        "nomips16 on MIPS; non-MIPS builds retain normal compiler defaults"
+        "PASS: only chacha.c and poly1305.c receive -mno-mips16 on MIPS targets; "
+        "all other libssh2 translation units retain SDK defaults"
     )
 
 
