@@ -341,7 +341,7 @@ jobs:
             root@127.0.0.1:/tmp/mips-test/
           ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-            "opkg --force-reinstall install /tmp/mips-test/libssh2-1_1.11.1-r1_mipsel_24kc.ipk && grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 && opkg install /tmp/mips-test/passwall-ssh-core*.ipk && chmod 0700 /tmp/mips-test/qemu_speedtest.sh && /tmp/mips-test/qemu_speedtest.sh"
+            "opkg --force-reinstall install /tmp/mips-test/libssh2-1_1.11.1-r1_mipsel_24kc.ipk && grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 && opkg install /tmp/mips-test/passwall-ssh-core*.ipk && chmod 0700 /tmp/mips-test/qemu_speedtest.sh && /tmp/mips-test/qemu_speedtest.sh --self-test && /tmp/mips-test/qemu_speedtest.sh"
 
       - name: Collect benchmark results
         if: ${{ always() && steps.sdkmeta.outputs.verify_only_run_id == '' }}
