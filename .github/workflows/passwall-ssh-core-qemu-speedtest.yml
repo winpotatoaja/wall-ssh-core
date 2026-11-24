@@ -127,6 +127,11 @@ jobs:
           printf '%s' "$EXPECTED_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           test "$ACTUAL_SOURCE_SHA" = "$EXPECTED_SOURCE_SHA"
           echo "Verified r49 core+patched libssh2 IPK checksums and source SHA: $ACTUAL_SOURCE_SHA"
+          test -s package/diag-timer
+          (cd package && sha256sum -c diag-timer.sha256)
+          readelf -h package/diag-timer | grep -q 'MIPS'
+          chmod 0755 package/diag-timer
+          echo "Verified static MIPS monotonic/nanosleep helper."
           mkdir -p emulator
           curl -fL --retry 3 --connect-timeout 20 \
             https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-linux-x86_64.tar.gz \
@@ -337,7 +342,7 @@ jobs:
           LOG_BACKPRESSURE=1
           TCP_ENV
           scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            "$IPK" "$LIBSSH2_IPK" "$GITHUB_WORKSPACE/tests/qemu_speedtest.sh" "$RUNNER_TEMP/tcp.env" \
+            "$IPK" "$LIBSSH2_IPK" "$GITHUB_WORKSPACE/package/diag-timer" "$GITHUB_WORKSPACE/tests/qemu_speedtest.sh" "$RUNNER_TEMP/tcp.env" \
             root@127.0.0.1:/tmp/mips-test/
           ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
@@ -415,6 +420,7 @@ jobs:
           grep -Fq 'VCPU_COUNT=4' "$ENV_LOG"
           grep -Fq 'CPU_TOPOLOGY_PHYSICAL_CORES=2' "$ENV_LOG"
           grep -Fq 'SAMPLE_INTERVAL_MS=250' "$ENV_LOG"
+          grep -Fq 'SAMPLE_CLOCK=clock_gettime(CLOCK_MONOTONIC)' "$ENV_LOG"
           # Require measured CPU activity, not just thread names, for all four crypto workers.
           for worker_id in 0 1; do
             grep -Eq "tid=[0-9]+/chacha-dec${worker_id}:([1-9][0-9]*([.][0-9]+)?|0[.]([0-9]*[1-9][0-9]*))%" "$SAMPLE_LOG"
