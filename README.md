@@ -4,7 +4,7 @@ Terakhir diperbarui: 2026-11-24
 
 ## r50 — dual-core crypto scheduling berbasis physical-core topology
 
-**Status: SDK physical-core correction #638 lulus. QEMU #73 dan #74 berhenti sebelum transfer karena BusyBox OpenWrt tidak mendukung fractional sleep. Perbaikan final memakai helper MIPS statis `clock_gettime(CLOCK_MONOTONIC)` + `nanosleep`; SDK dan QEMU untuk helper ini sedang disiapkan. Validasi router MT7621 fisik tetap terbuka.**
+**Status: SDK MIPS #661 dan QEMU bandwidth #76/#77 lulus. MT7621A terdeteksi sebagai 4 VPE / 2 physical core; runtime mengaktifkan 2 worker ChaCha20 + 1 Poly1305. Sampler fixed-deadline mencapai median 254 ms (47 sampel; rentang 242–301 ms) terhadap target 250 ms. Validasi router MT7621 fisik dan pengujian langsung pola stall IDM tetap terbuka.**
 
 ### Koreksi penting topology MT7621A
 
@@ -18,15 +18,28 @@ Kesalahan r50 sebelumnya adalah memakai jumlah logical CPUs untuk menentukan jum
 - Tiga atau lebih physical cores: maksimum 4 worker (3 ChaCha20 decrypt + 1 Poly1305).
 - Jika kernel tidak menyediakan topology sysfs lengkap, detektor jatuh kembali ke jumlah logical CPUs; benchmark QEMU berhenti sebelum transfer bila tidak mendapatkan topology MT7621A yang diharapkan (4 Linux CPUs / 2 physical cores).
 
-**Sampling benchmark diperpendek menjadi 250 ms.** Waktu interval memakai `/proc/uptime` berpresisi centisecond. Self-test di guest memverifikasi fractional sleep dan penghitung waktu sebelum menjalankan download. Verifier memerlukan kedua `chacha-dec0/1` serta `chacha-poly` aktif, 3 crypto workers, dan minimal 10 sampel dengan median interval di bawah 400 ms.
+**Sampling benchmark memakai fixed deadline sekitar 250 ms.** OpenWrt 24.10 BusyBox mengabaikan fractional `sleep`, sehingga helper MIPS statis `diag-timer` menyediakan `clock_gettime(CLOCK_MONOTONIC)` dan `nanosleep()`. Snapshot awal CPU/WAN pada MIPS memakan sekitar 50 ms, sehingga deadline internal disetel 200 ms agar interval timestamp hasil ukur mendekati 250 ms. QEMU #77 mengukur rata-rata 257 ms, median 254 ms, minimum 242 ms, maksimum 301 ms dari 47 sampel. Verifier mensyaratkan minimal 20 sampel, median ≤300 ms, dan maksimum ≤350 ms; kedua worker ChaCha dan worker Poly1305 wajib mencatat CPU nonzero.
 
 ### Diagnosis timer guest QEMU #73 dan #74
 
 - QEMU #73 (`45387141473`) berhasil boot, memasang patched `libssh2` dan core r50, tetapi self-test berhenti sebelum benchmark karena satu `sleep 0.05` hanya maju sekitar 0,02 s pada `/proc/uptime`.
 - QEMU #74 (`45387898626`) mengulangi preflight setelah mengganti tes menjadi tiga `sleep 0.25`; hasilnya tetap hanya 0,02 s. Ini membuktikan BusyBox OpenWrt guest tidak menjalankan fractional sleep. Kedua run **tidak melakukan download 100 MB**; kegagalan auth/cipher/timing di langkah berikutnya hanya konsekuensi core/benchmark belum dijalankan.
 - OpenWrt 24.10 BusyBox config default juga menonaktifkan `USLEEP`, `FEATURE_SH_READ_FRAC`, dan `FLOAT_DURATION`. Maka jangan mengandalkan `sleep 0.25`, `usleep`, atau `read -t` untuk interval sub-detik.
-- Helper `tests/diag_timer.c` sekarang menyediakan `now-ms` melalui `clock_gettime(CLOCK_MONOTONIC)` dan `sleep-us` melalui `nanosleep()`. SDK workflow membangun helper native untuk self-test, lalu static MIPS untuk artifact dengan SHA-256 dan pemeriksaan ELF. Benchmark mengirim helper ke guest, memakai helper itu pada preflight dan setiap interval 250 ms, serta berhenti eksplisit bila `nanosleep` gagal. Validasi SDK artifact baru dan QEMU bandwidth belum selesai.
+- Helper `tests/diag_timer.c` menyediakan `now-ms` melalui `clock_gettime(CLOCK_MONOTONIC)` dan `sleep-us` melalui `nanosleep()`. SDK #661 membangun helper native untuk self-test dan static MIPS untuk artifact; tiga jeda 250 ms terukur 755 ms di runner, dan ELF/sha diverifikasi. QEMU mengirim helper ke guest dan memakai helper itu pada preflight serta loop sampling. QEMU #76 awalnya mencapai median 306 ms setelah collector proses eksternal diringkas; #77 mengompensasikan biaya snapshot awal dan mencapai median 254 ms dengan maksimum 301 ms.
 
+### Validasi worker dual-core dan sampling — QEMU #75–#77
+
+SDK #661 (`45390163716`) sukses dan membangun core r50 serta helper timer MIPS dari source SHA `b67ddaab17c51523524c0884feda4545c1badff9`. QEMU memakai empat Linux CPU/VPE tetapi sysfs topology menunjukkan dua physical core, dan runtime log membuktikan `crypto_workers=3`, `chacha_payload_workers=2`, `poly1305_workers=1`.
+
+- QEMU #75 (`45390937381`) membuktikan topology/worker plan dan menyelesaikan dua transfer 100 MB, tetapi verifier gagal cadence: 17 sampel median 756 ms. Audit menunjukkan terlalu banyak proses shell/AWK per sampel.
+- Collector #76 (`45392730263`) diringkas menjadi satu AWK untuk seluruh thread, satu AWK untuk `/proc/net/dev`, CPU process dihitung dari delta gabungan thread, dan salinan snapshot memakai shell builtins. Semua gerbang lulus; 34 sampel memiliki mean/median sekitar 306 ms (rentang 287–350 ms). Kecepatan direct 23,06 MiB/s dan SOCKS5 9,00 MiB/s, HTTP 200, Datapacket `79.127.235.51`.
+- QEMU #77 (`45394102605`, artifact `14920257243`) mengompensasikan sekitar 50 ms biaya snapshot CPU/WAN pada deadline internal. **47 sampel** mengukur mean 257 ms, median **254 ms**, min 242 ms, max 301 ms; verifier yang lebih ketat lulus (minimal 20 sampel, median ≤300 ms, max ≤350 ms).
+- Pada #77, transfer direct 100.000.000 byte selesai dalam 3,881 s (**24,58 MiB/s**); SOCKS5 100.000.000 byte selesai dalam 12,182 s (**7,83 MiB/s**), HTTP 200, remote direct `79.127.213.228`. Satu host authentication, satu core authentication/key establishment, satu SSH session, dan cipher `chacha20-poly1305@openssh.com` terverifikasi.
+- Sampel #77 memperlihatkan `ssh_owner` rata-rata 54,0% satu VPE; dua worker ChaCha aktif rata-rata 17,5% dan 17,8%; Poly1305 aktif 20,4%. Empat auxiliary I/O workers tidak menunjukkan CPU terukur pada transfer single-client. Counter `socks_tx_eagain=0` dan `socks_tx_partial=0` pada seluruh PERF intervals: tidak terlihat local SOCKS socket backpressure pada tes ini.
+- Timing PERF sepuluh interval steady-state terakhir menunjukkan `perf_s2c_read_us` rata-rata sekitar 903 ms per detik, berbanding `perf_socks_tx_us` sekitar 90 ms. Jalur read/processing libssh2 masih dominan; pengiriman socket client bukan bottleneck yang tampak pada pengukuran ini.
+- Angka SOCKS5 #77 (7,83 MiB/s) tidak dibandingkan sebagai A/B dengan #76 (9,00 MiB/s), #75 (sekitar 7,42 MiB/s), atau #72 (14,41 MiB/s): setiap run memakai IP Datapacket/variasi jaringan berbeda. Yang telah dibuktikan #77 adalah alokasi physical-core, aktivitas worker, sampling sekitar 250 ms, transfer penuh, dan integritas satu session—not peningkatan throughput.
+
+**Kesimpulan status:** perbaikan deteksi physical-core, worker plan dual-core, timer monotonic, dan sampler 250 ms telah lulus QEMU. Belum ada bukti bahwa jeda download IDM pada router fisik telah hilang. Validasi akhir tetap memerlukan instalasi pada MT7621 fisik serta pengamatan transfer IDM/client selama beberapa menit.
 ### Hasil bandwidth r50 awal — QEMU #72 (sebelum koreksi topology fisik)
 
 SDK run #634 (45382100045) lulus. Benchmark #72 (45383249234, artifact 14915176986) memakai source SHA `a60d2fe287591c6c9483dd3b6837729df96bc0a9`.
@@ -39,7 +52,7 @@ SDK run #634 (45382100045) lulus. Benchmark #72 (45383249234, artifact 149151769
 - Pada interval steady-state, `socks_tx_eagain=0` dan `socks_tx_partial=0`; byte SSH yang dibaca sama dengan byte yang dikirim ke SOCKS. Jalur receive/decrypt libssh2 masih mendominasi waktu.
 - Sampel WAN sebelumnya hanya 1–2 detik dan bervariasi 9,89–28,93 MiB/s; belum cukup untuk memastikan jeda IDM hilang.
 
-**Langkah berikutnya:** build ulang SDK untuk deteksi physical-core ini, kemudian jalankan benchmark dengan model MT7621A default (4 logical CPUs / 2 physical cores). Transfer hanya boleh dimulai setelah runtime log membuktikan `detected_cpus=4 detected_cores=2 crypto_workers=3 chacha_payload_workers=2 poly1305_workers=1`. Setelah QEMU lolos, lanjutkan validasi pada router MT7621 fisik.
+**Langkah berikutnya:** pasang paket r50 yang sudah dibangun dari source SHA `b67ddaab...` pada router MT7621 fisik, lalu uji download IDM selama beberapa menit sambil merekam throughput/CPU. QEMU sudah membuktikan worker plan dua-core dan sampling; hasil itu belum menggantikan validasi fisik.
 Dokumen ini adalah **catatan progres utama proyek**. Semua pekerjaan, hasil validasi,
 keputusan, dan pekerjaan tersisa dicatat berdasarkan lima tahap di bawah. Status
 hanya boleh dinaikkan menjadi **LULUS** setelah seluruh kriteria tahap tersebut
