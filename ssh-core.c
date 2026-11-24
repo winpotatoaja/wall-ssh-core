@@ -218,12 +218,12 @@ static uint32_t io_worker_count_for_cpu_count(long cpu_count) {
 
 static unsigned int chacha_worker_count_for_physical_core_count(long core_count) {
     /*
-     * r50 keeps two ChaCha payload lanes available on a dual-core MT7621.
+     * r51 authenticates with Poly1305 first, then reuses all pool workers for ChaCha20 decryption.
      * MT7621A has two physical cores but four Linux CPUs (two VPEs per core),
      * so this decision must use the sysfs physical-core topology rather than
      * the number of schedulable VPEs.
      *
-     * The pool is capped at four workers: three ChaCha lanes plus one MAC lane.
+     * The pool is capped at four persistent workers; r51 runs Poly1305 first and then all workers decrypt.
      * A single-core device retains the serial Owner path.
      */
     if (core_count <= 1L) return 0U;
@@ -5208,11 +5208,11 @@ static int core_worker_run(int argc, char **argv) {
         chacha_worker_count_for_physical_core_count(
             g_detected_physical_core_count);
     libssh2_session_set_chacha_workers(session, chacha_workers);
-    log_blue("[ChaCha] r50 S2C payload: detected_cpus=%ld detected_cores=%ld owner_payload_lanes=%u crypto_workers=%u poly1305_workers=%u chacha_payload_workers=%u active_worker_lanes=%u threshold=4096 bytes",
+    log_blue("[ChaCha] r51 S2C payload: detected_cpus=%ld detected_cores=%ld owner_payload_lanes=%u crypto_workers=%u poly1305_workers=%u chacha_payload_workers=%u active_worker_lanes=%u threshold=4096 bytes",
              g_detected_cpu_count, g_detected_physical_core_count,
              chacha_workers ? 0U : 1U, chacha_workers,
              chacha_workers >= 2U ? 1U : 0U,
-             chacha_workers >= 2U ? chacha_workers - 1U : 0U,
+             chacha_workers >= 2U ? chacha_workers : 0U,
              chacha_workers ? chacha_workers : 1U);
 #if LIBSSH2_VERSION_NUM >= 0x010b01
     /* libssh2 1.11.1+ has the typed callback API. */
