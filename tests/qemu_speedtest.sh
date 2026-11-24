@@ -223,7 +223,7 @@ net_rate_line() {
 }
 
 run_diag_self_test() {
-    TEST_ROOT="/tmp/r51-speedtest-diag-test"
+    TEST_ROOT="/tmp/r52-speedtest-diag-test"
     if [ ! -x "$DIAG_TIMER" ]; then
         echo "DIAG SELF-TEST FAIL: MIPS monotonic timer helper is missing: $DIAG_TIMER"
         return 2
@@ -369,7 +369,7 @@ main() {
     cpu_snapshot() {
         awk '/^cpu[0-9]*[ \t]/ {t=0;for(i=2;i<=NF;i++)t+=$i;idle=$5+$6;print $1,t-idle,t}' /proc/stat
     }
-    echo "r51_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "r52_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     SOCKS_INFO="SOCKS5=$SOCKS"
     GUEST_INFO="GUEST=$(uname -a)"
     VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
@@ -390,7 +390,7 @@ main() {
     case "$CPU_TOPOLOGY_PHYSICAL_CORES" in ''|*[!0-9]*) CPU_TOPOLOGY_PHYSICAL_CORES=0;; esac
     SAMPLE_INTERVAL_MS=250
     {
-        echo "r51_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+        echo "r52_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
         echo "$SOCKS_INFO"
         echo "$GUEST_INFO"
         echo "VCPU_COUNT=$VCPU_COUNT"
@@ -591,7 +591,7 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "r51 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
+      echo "r52 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
       cat "$RESULT/environment.log"
       cat "$RESULT/download-results.log"
       echo "--- PAIRS ---"
@@ -605,7 +605,7 @@ main() {
     } | tee "$RESULT/summary.txt"
 
     echo "RESULT_DIR=$RESULT"
-    echo "r51_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "r52_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     [ ! -s "$RESULT/errors.log" ] || return 2
     [ "$PAIR_COUNT" -ge 1 ] || {
         echo "ERROR: no endpoint completed a full direct+SOCKS5 100 MB pair" | tee -a "$RESULT/errors.log"
