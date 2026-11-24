@@ -1,20 +1,21 @@
-name: r51 Datapacket Internet Bandwidth Benchmark (QEMU)
+name: r52 Datapacket Internet Bandwidth Benchmark (QEMU)
 
 on:
   push:
     branches:
       - benchmark/r39-internet-speedtest
       - experiment/r51-mips32-crypto
+      - experiment/r52-safe-topology-lifecycle
     paths:
       - ".github/speedtest.trigger"
   workflow_dispatch:
     inputs:
       sdk_run_id:
-        description: "Successful r51 MIPS SDK workflow run ID"
+        description: "Successful r52 MIPS SDK workflow run ID"
         required: true
         type: string
       source_sha:
-        description: "Exact source commit used by the r51 SDK build"
+        description: "Exact source commit used by the r52 SDK build"
         required: true
         type: string
       verify_only_run_id:
@@ -28,12 +29,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: r51-datapacket-bandwidth-qemu
+  group: r52-datapacket-bandwidth-qemu
   cancel-in-progress: true
 
 jobs:
   internet-bandwidth:
-    name: Download Datapacket direct vs r51 SOCKS5
+    name: Download Datapacket direct vs r52 SOCKS5
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
@@ -87,11 +88,11 @@ jobs:
             curl unzip zstd python3 openssh-client openssh-server \
             socat mtd-utils gdisk wget ca-certificates binutils file
 
-      - name: Download the source-matched r51 MIPS package
+      - name: Download the source-matched r52 MIPS package
         if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
         uses: actions/download-artifact@v4
         with:
-          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r51-ipk
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r52-ipk
           run-id: ${{ steps.sdkmeta.outputs.sdk_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -101,7 +102,7 @@ jobs:
         if: ${{ steps.sdkmeta.outputs.verify_only_run_id != '' }}
         uses: actions/download-artifact@v4
         with:
-          name: r51-qemu-internet-bandwidth
+          name: r52-qemu-internet-bandwidth
           run-id: ${{ steps.sdkmeta.outputs.verify_only_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -114,11 +115,11 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ steps.sdkmeta.outputs.source_sha }}
         run: |
           set -euo pipefail
-          IPK="$(find package -maxdepth 1 -type f -name 'passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk' -print -quit)"
+          IPK="$(find package -maxdepth 1 -type f -name 'passwall-ssh-core_1.0.0-r52_mipsel_24kc.ipk' -print -quit)"
           test -n "$IPK"
           CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
           printf '%s\n' "$CONTROL" | grep -Fq 'Package: passwall-ssh-core'
-          printf '%s\n' "$CONTROL" | grep -Fq 'Version: 1.0.0-r51'
+          printf '%s\n' "$CONTROL" | grep -Fq 'Version: 1.0.0-r52'
           printf '%s\n' "$CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
           LIBSSH2_IPK="$(find package -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
           test -n "$LIBSSH2_IPK"
@@ -131,7 +132,7 @@ jobs:
           ACTUAL_SOURCE_SHA="$(tr -d '\r\n' < package/build-source.sha)"
           printf '%s' "$EXPECTED_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           test "$ACTUAL_SOURCE_SHA" = "$EXPECTED_SOURCE_SHA"
-          echo "Verified r51 core+patched libssh2 IPK checksums and source SHA: $ACTUAL_SOURCE_SHA"
+          echo "Verified r52 core+patched libssh2 IPK checksums and source SHA: $ACTUAL_SOURCE_SHA"
           test -s package/diag-timer
           (cd package && sha256sum -c diag-timer.sha256)
           readelf -h package/diag-timer | grep -q 'MIPS'
@@ -258,7 +259,7 @@ jobs:
             --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
           test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
           test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-          echo "r51 package and MT7621A QEMU firmware are ready."
+          echo "r52 package and MT7621A QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
         if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
@@ -363,12 +364,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r51-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r52-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r51-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r51-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r51-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r52-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r52-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r52-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -481,7 +482,7 @@ jobs:
             /libssh2_chacha20_parallel_us=[1-9][0-9]*/ { found=1 }
             END { exit !found }
           ' "$CORE_LOG"
-          echo "PASS: r51 two-core crypto worker plan, 250 ms sampling and S2C counters were recorded."
+          echo "PASS: r52 two-core crypto worker plan, 250 ms sampling and S2C counters were recorded."
 
       - name: Publish benchmark results in Actions UI
         if: always()
@@ -489,7 +490,7 @@ jobs:
         run: |
           SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
           if [ -s "$SUMMARY" ]; then
-            echo "## r51 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "## r52 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -500,7 +501,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r51-qemu-internet-bandwidth
+          name: r52-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14
