@@ -2,6 +2,10 @@
 
 Terakhir diperbarui: 2026-11-24
 
+## r52 — hardening worker lifecycle dan topology fallback (eksperimen terpisah)
+
+Status: patch baru diterapkan; validasi SDK/QEMU pending. Jika sysfs topology tidak lengkap, physical core akan dianggap unknown dan ChaCha kembali ke serial Owner path. Pada kegagalan worker/condition wait, pool dihentikan serta worker di-join sebelum fungsi dekripsi mengembalikan kontrol kepada caller. Worker pool tidak boleh dibebaskan apabila join gagal.
+
 ## r51 — eksperimen autentikasi-dulu, dekripsi-kemudian
 
 Validasi codegen SDK #705 gagal sebelum menghasilkan IPK karena deklarasi beratribut GCC `nomips16` bertabrakan dengan mode default `-mips16`. Perbaikannya menghapus atribut deklarasi tersebut dan menerapkan `-mno-mips16` hanya pada dua translation unit crypto. SDK berikutnya juga wajib memeriksa encoding instruksi aktual kedua simbol hasil `objdump`; belum ada klaim bahwa hotpath native-MIPS32 sudah berhasil dibangun sampai gate itu lulus.
