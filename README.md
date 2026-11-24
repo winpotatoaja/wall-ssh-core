@@ -4,7 +4,7 @@ Terakhir diperbarui: 2026-11-24
 
 ## r50 — dual-core crypto scheduling berbasis physical-core topology
 
-**Status: hasil throughput r50 awal #72 tercatat; koreksi deteksi topology fisik dan benchmark 250 ms sudah diterapkan. SDK build dan QEMU benchmark lanjutan untuk koreksi ini masih menunggu. Validasi router MT7621 fisik tetap terbuka.**
+**Status: SDK physical-core correction #638 lulus. QEMU #73 dan #74 berhenti sebelum transfer karena BusyBox OpenWrt tidak mendukung fractional sleep. Perbaikan final memakai helper MIPS statis `clock_gettime(CLOCK_MONOTONIC)` + `nanosleep`; SDK dan QEMU untuk helper ini sedang disiapkan. Validasi router MT7621 fisik tetap terbuka.**
 
 ### Koreksi penting topology MT7621A
 
@@ -19,6 +19,13 @@ Kesalahan r50 sebelumnya adalah memakai jumlah logical CPUs untuk menentukan jum
 - Jika kernel tidak menyediakan topology sysfs lengkap, detektor jatuh kembali ke jumlah logical CPUs; benchmark QEMU berhenti sebelum transfer bila tidak mendapatkan topology MT7621A yang diharapkan (4 Linux CPUs / 2 physical cores).
 
 **Sampling benchmark diperpendek menjadi 250 ms.** Waktu interval memakai `/proc/uptime` berpresisi centisecond. Self-test di guest memverifikasi fractional sleep dan penghitung waktu sebelum menjalankan download. Verifier memerlukan kedua `chacha-dec0/1` serta `chacha-poly` aktif, 3 crypto workers, dan minimal 10 sampel dengan median interval di bawah 400 ms.
+
+### Diagnosis timer guest QEMU #73 dan #74
+
+- QEMU #73 (`45387141473`) berhasil boot, memasang patched `libssh2` dan core r50, tetapi self-test berhenti sebelum benchmark karena satu `sleep 0.05` hanya maju sekitar 0,02 s pada `/proc/uptime`.
+- QEMU #74 (`45387898626`) mengulangi preflight setelah mengganti tes menjadi tiga `sleep 0.25`; hasilnya tetap hanya 0,02 s. Ini membuktikan BusyBox OpenWrt guest tidak menjalankan fractional sleep. Kedua run **tidak melakukan download 100 MB**; kegagalan auth/cipher/timing di langkah berikutnya hanya konsekuensi core/benchmark belum dijalankan.
+- OpenWrt 24.10 BusyBox config default juga menonaktifkan `USLEEP`, `FEATURE_SH_READ_FRAC`, dan `FLOAT_DURATION`. Maka jangan mengandalkan `sleep 0.25`, `usleep`, atau `read -t` untuk interval sub-detik.
+- Helper `tests/diag_timer.c` sekarang menyediakan `now-ms` melalui `clock_gettime(CLOCK_MONOTONIC)` dan `sleep-us` melalui `nanosleep()`. SDK workflow membangun helper native untuk self-test, lalu static MIPS untuk artifact dengan SHA-256 dan pemeriksaan ELF. Benchmark mengirim helper ke guest, memakai helper itu pada preflight dan setiap interval 250 ms, serta berhenti eksplisit bila `nanosleep` gagal. Validasi SDK artifact baru dan QEMU bandwidth belum selesai.
 
 ### Hasil bandwidth r50 awal — QEMU #72 (sebelum koreksi topology fisik)
 
