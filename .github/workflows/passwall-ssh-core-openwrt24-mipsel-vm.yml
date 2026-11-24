@@ -8,7 +8,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: openwrt24-mipsel-r49-${{ github.ref }}
+  group: openwrt24-mipsel-r50-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   sdk:
@@ -153,7 +153,7 @@ jobs:
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_set_chacha_workers'
           grep -aFq 'chacha20-poly1305@openssh.com' "$STAGING/usr/lib/libssh2.so"
           echo "PASS: libssh2 1.11.1 diagnostics and packet-local parallel ChaCha20 are present."
-      - name: Build r49 single-session MIPS IPK, ChaCha/Poly1305 workers and I/O worker pool helper
+      - name: Build r50 single-session MIPS IPK, ChaCha/Poly1305 workers and I/O worker pool helper
         shell: bash
         run: |
           set -euo pipefail
@@ -173,9 +173,14 @@ jobs:
             false
           fi
           echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
-          IPK="$(find bin/packages -type f -name 'passwall-ssh-core*.ipk' | head -n 1)"
+          IPK="$(find bin/packages -type f -name 'passwall-ssh-core_1.0.0-r50_mipsel_24kc.ipk' | head -n 1)"
           LIBSSH2_IPK="$(find bin/packages -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' | head -n 1)"
           test -n "$IPK"
+          IPK_CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
+          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Package: passwall-ssh-core'
+          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Version: 1.0.0-r50'
+          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
+          echo "PASS: core IPK filename and embedded control metadata both identify 1.0.0-r50."
           test -n "$LIBSSH2_IPK"
           mkdir -p "$GITHUB_WORKSPACE/test-results"
           cp "$IPK" "$LIBSSH2_IPK" "$GITHUB_WORKSPACE/test-results/"
@@ -305,7 +310,7 @@ jobs:
                 : "OpenWrt 24.10.7 mipsel_24kc SDK build failed.",
               target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
-      - name: Dispatch r49 Datapacket bandwidth test only when explicitly requested
+      - name: Dispatch r50 Datapacket bandwidth test only when explicitly requested
         if: ${{ success() && contains(github.event.head_commit.message, '[mips-benchmark=internet]') }}
         uses: actions/github-script@v7
         with:
@@ -320,7 +325,7 @@ jobs:
                 source_sha: context.sha
               }
             });
-            core.info("Queued Datapacket-only r49 benchmark using SDK run " + context.runId + " and source " + context.sha);
+            core.info("Queued Datapacket-only r50 benchmark using SDK run " + context.runId + " and source " + context.sha);
   vm:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
     runs-on: ubuntu-26.04
@@ -378,7 +383,8 @@ jobs:
           file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          grep -q 'Version: 1.0.0-r49' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
+          test -s test-results/passwall-ssh-core_1.0.0-r50_mipsel_24kc.ipk
+          grep -Fq 'Version: 1.0.0-r50' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r50_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
           LIBSSH2_IPK="$(find test-results -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
           test -n "$LIBSSH2_IPK"
           LIBSSH2_CONTROL="$(tar -xOzf "$LIBSSH2_IPK" ./control.tar.gz | tar -xzO ./control)"
@@ -939,7 +945,7 @@ jobs:
             fail "SDK-built patched libssh2 1.11.1 was not installed or is missing an r49 runtime API"
           fi
 
-          echo "========== INSTALL R49 MIPS IPK (OFFLINE) =========="
+          echo "========== INSTALL R50 MIPS IPK (OFFLINE) =========="
           if [ "$STATUS" -eq 0 ]; then
             opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
@@ -948,8 +954,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r49'; then
-            pass "opkg installed passwall-ssh-core r49 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r50'; then
+            pass "opkg installed passwall-ssh-core r50 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
