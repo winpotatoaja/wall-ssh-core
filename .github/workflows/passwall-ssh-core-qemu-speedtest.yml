@@ -113,10 +113,11 @@ jobs:
           EXPECTED_SOURCE_SHA: ${{ steps.sdkmeta.outputs.source_sha }}
         run: |
           set -euo pipefail
-          IPK="$(find package -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
+          IPK="$(find package -maxdepth 1 -type f -name 'passwall-ssh-core_1.0.0-r50_mipsel_24kc.ipk' -print -quit)"
           test -n "$IPK"
           CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
-          printf '%s\n' "$CONTROL" | grep -Fq 'Version: 1.0.0-r49'
+          printf '%s\n' "$CONTROL" | grep -Fq 'Package: passwall-ssh-core'
+          printf '%s\n' "$CONTROL" | grep -Fq 'Version: 1.0.0-r50'
           printf '%s\n' "$CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
           LIBSSH2_IPK="$(find package -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
           test -n "$LIBSSH2_IPK"
