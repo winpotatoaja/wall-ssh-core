@@ -1,4 +1,4 @@
-name: r49 Datapacket Internet Bandwidth Benchmark (QEMU)
+name: r50 Datapacket Internet Bandwidth Benchmark (QEMU)
 
 on:
   push:
