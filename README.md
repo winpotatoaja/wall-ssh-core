@@ -2,9 +2,9 @@
 
 Terakhir diperbarui: 2026-11-24
 
-## r52 — hardening worker lifecycle dan topology fallback (eksperimen terpisah)
+## r52 — hardening worker lifecycle dan topology fallback
 
-Status: patch baru diterapkan; validasi SDK/QEMU pending. Jika sysfs topology tidak lengkap, physical core akan dianggap unknown dan ChaCha kembali ke serial Owner path. Pada kegagalan worker/condition wait, pool dihentikan serta worker di-join sebelum fungsi dekripsi mengembalikan kontrol kepada caller. Worker pool tidak boleh dibebaskan apabila join gagal.
+Branch terpisah dari r51; core IPK dinaikkan ke release `1.0.0-r52` agar tidak tertukar dengan artefak r51. Perubahan SDK/QEMU masih pending. Jika sysfs topology tidak lengkap, physical core akan dianggap unknown dan ChaCha kembali ke serial Owner path. Pada kegagalan worker/condition wait, pool dihentikan serta worker di-join sebelum fungsi dekripsi mengembalikan kontrol kepada caller. Worker pool tidak boleh dibebaskan apabila join gagal.
 
 ## r51 — eksperimen autentikasi-dulu, dekripsi-kemudian
 
