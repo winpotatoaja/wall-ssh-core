@@ -156,6 +156,28 @@ jobs:
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_set_chacha_workers'
           grep -aFq 'chacha20-poly1305@openssh.com' "$STAGING/usr/lib/libssh2.so"
           echo "PASS: libssh2 1.11.1 diagnostics and packet-local parallel ChaCha20 are present."
+          # Capture the actual MIPS shared-object instructions for r51 analysis.
+          MIPS_OBJDUMP="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -type f -name '*-openwrt-linux-musl-objdump' -print -quit)"
+          MIPS_NM="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -type f -name '*-openwrt-linux-musl-nm' -print -quit)"
+          {
+            echo "Target: OpenWrt 24.10.7 mipsel_24kc"
+            echo "Library: $STAGING/usr/lib/libssh2.so"
+            if [ -n "$MIPS_OBJDUMP" ] && [ -x "$MIPS_OBJDUMP" ]; then
+              "$MIPS_OBJDUMP" -f "$STAGING/usr/lib/libssh2.so" 2>&1 || true
+              for symbol in chacha_encrypt_bytes poly1305_auth chacha_decrypt_poly_worker_only chacha_parallel_worker_main; do
+                echo "===== DISASSEMBLE $symbol ====="
+                "$MIPS_OBJDUMP" -d --disassemble="$symbol" "$STAGING/usr/lib/libssh2.so" 2>&1 || true
+              done
+            else
+              echo "WARNING: MIPS objdump executable not found in SDK staging_dir"
+            fi
+          } > "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm"
+          if [ -n "$MIPS_NM" ] && [ -x "$MIPS_NM" ]; then
+            "$MIPS_NM" -a "$STAGING/usr/lib/libssh2.so" 2>/dev/null | grep -Ei 'chacha|poly1305' > "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips-symbols.txt" || true
+          else
+            echo "WARNING: MIPS nm executable not found in SDK staging_dir" > "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips-symbols.txt"
+          fi
+          test -s "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm"
       # Core IPK release r51 is independent of the retained libssh2 patch-series r49 marker.
       - name: Build r51 single-session MIPS IPK, ChaCha/Poly1305 workers and I/O worker pool helper
         shell: bash
@@ -292,6 +314,9 @@ jobs:
             test-results/diag-timer
             test-results/diag-timer.sha256
             test-results/diag-timer-file.txt
+            test-results/chachapoly-auth-order.log
+            test-results/libssh2-chacha-mips.disasm
+            test-results/libssh2-chacha-mips-symbols.txt
           if-no-files-found: error
           retention-days: 14
       - name: SDK summary
@@ -378,9 +403,9 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tests/chachapoly_parallel_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c; then
             echo "SDK artifact was built from different package or test sources."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tests/chachapoly_parallel_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c
             false
           fi
           (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256)
