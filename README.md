@@ -2,6 +2,21 @@
 
 Terakhir diperbarui: 2026-11-24
 
+## r51 — eksperimen autentikasi-dulu, dekripsi-kemudian
+
+<badge color="warning">EKSPERIMEN — SDK MIPS MENUNGGU VALIDASI</badge>
+
+Branch eksperimen: `experiment/r51-mips32-crypto`. Baseline tetap r50 pada branch produksi/benchmark sebelumnya. Paket core r51 memakai `PKG_VERSION:=1.0.0`, `PKG_RELEASE:=51`, sehingga nama IPK yang diwajibkan adalah `passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk` dengan metadata `Version: 1.0.0-r51`.
+
+Perubahan pertama r51:
+- Memisahkan ChaCha20-Poly1305 menjadi dua fase. Fase pertama menghitung dan membandingkan tag Poly1305. Fase kedua baru mengirim tugas dekripsi ChaCha20 setelah tag cocok.
+- Poly1305 membaca AAD+ciphertext langsung dari paket asal; snapshot ciphertext 35 KB per pool dihapus.
+- Jika autentikasi gagal, tujuan dekripsi tidak disentuh dan tidak ada plaintext yang dihasilkan worker.
+- Tiga worker pada MT7621A dipakai bergantian: satu tugas Poly1305 pada fase autentikasi, kemudian ketiganya menjadi worker ChaCha20 pada fase dekripsi. Jumlah core fisik dan satu SSH Owner tetap sama.
+- SDK menguji regresi ChaCha20-Poly1305 1–4 worker dan menjalankan pemeriksaan urutan source. Artifact SDK juga menyimpan disassembly MIPS dari libssh2 untuk audit instruksi aktual.
+
+Belum ada klaim peningkatan throughput. Assembly MIPS32R2 belum diterapkan; keputusan implementasinya menunggu hasil disassembly dan validasi SDK. Workflow bandwidth 100 MB tetap opt-in dan tidak dipanggil oleh build SDK biasa.
+
 ## r50 — dual-core crypto scheduling berbasis physical-core topology
 
 **Status: SDK MIPS #661 dan QEMU bandwidth #76/#77 lulus. MT7621A terdeteksi sebagai 4 VPE / 2 physical core; runtime mengaktifkan 2 worker ChaCha20 + 1 Poly1305. Sampler fixed-deadline mencapai median 254 ms (47 sampel; rentang 242–301 ms) terhadap target 250 ms. Validasi router MT7621 fisik dan pengujian langsung pola stall IDM tetap terbuka.**
