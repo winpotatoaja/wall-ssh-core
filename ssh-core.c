@@ -105,6 +105,104 @@ static long detect_available_cpu_count(void) {
     return online_count > 0 ? online_count : 1;
 }
 
+/*
+ * MT7621A exposes four Linux CPUs because each of its two physical cores has
+ * two VPEs. Crypto worker sizing must therefore use physical core topology,
+ * not CPU_COUNT(), otherwise a dual-core MT7621 is mistaken for a four-core
+ * device. Respect the process affinity mask, and fall back to logical CPUs
+ * when the kernel does not export complete sysfs topology information.
+ */
+static int read_cpu_topology_value(unsigned int cpu_id, const char *field,
+                                   long *value) {
+    char path[160];
+    char buffer[64];
+    char *end = NULL;
+    FILE *file;
+    long parsed;
+
+    if (!field || !value) return 0;
+    if (snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%u/topology/%s",
+                 cpu_id, field) >= (int)sizeof(path))
+        return 0;
+
+    file = fopen(path, "r");
+    if (!file) return 0;
+    if (!fgets(buffer, sizeof(buffer), file)) {
+        fclose(file);
+        return 0;
+    }
+    fclose(file);
+
+    errno = 0;
+    parsed = strtol(buffer, &end, 10);
+    if (errno != 0 || end == buffer) return 0;
+    *value = parsed;
+    return 1;
+}
+
+static long detect_available_physical_core_count(long logical_cpu_count) {
+    long expected_cpus = logical_cpu_count > 0 ? logical_cpu_count : 1L;
+    long packages[CPU_SETSIZE];
+    long cores[CPU_SETSIZE];
+    long unique_cores = 0;
+    long inspected_cpus = 0;
+    unsigned int cpu_id;
+    int have_affinity = 0;
+#if defined(__linux__) && defined(CPU_COUNT) && defined(CPU_ISSET)
+    cpu_set_t allowed_cpus;
+    CPU_ZERO(&allowed_cpus);
+    if (sched_getaffinity(0, sizeof(allowed_cpus), &allowed_cpus) == 0) {
+        int allowed_count = CPU_COUNT(&allowed_cpus);
+        if (allowed_count > 0) {
+            expected_cpus = (long)allowed_count;
+            have_affinity = 1;
+        }
+    }
+#endif
+
+    if (!have_affinity) {
+        long online_count = sysconf(_SC_NPROCESSORS_ONLN);
+        if (online_count > 0) expected_cpus = online_count;
+    }
+    if (expected_cpus < 1L || expected_cpus > (long)CPU_SETSIZE)
+        return logical_cpu_count > 0 ? logical_cpu_count : 1L;
+
+    for (cpu_id = 0U;
+         cpu_id < (unsigned int)CPU_SETSIZE && inspected_cpus < expected_cpus;
+         cpu_id++) {
+        long package_id = 0;
+        long core_id = -1;
+        long index;
+#if defined(__linux__) && defined(CPU_COUNT) && defined(CPU_ISSET)
+        if (have_affinity && !CPU_ISSET(cpu_id, &allowed_cpus))
+            continue;
+#endif
+        if (!have_affinity && (long)cpu_id >= expected_cpus)
+            break;
+
+        if (!read_cpu_topology_value(cpu_id, "core_id", &core_id))
+            return logical_cpu_count > 0 ? logical_cpu_count : 1L;
+        (void)read_cpu_topology_value(cpu_id, "physical_package_id",
+                                      &package_id);
+        inspected_cpus++;
+
+        for (index = 0; index < unique_cores; index++) {
+            if (packages[index] == package_id && cores[index] == core_id)
+                break;
+        }
+        if (index == unique_cores) {
+            packages[unique_cores] = package_id;
+            cores[unique_cores] = core_id;
+            unique_cores++;
+        }
+    }
+
+    if (inspected_cpus != expected_cpus || unique_cores < 1L)
+        return logical_cpu_count > 0 ? logical_cpu_count : 1L;
+    return unique_cores;
+}
+
 /* CPU count selects auxiliary socket-I/O threads only. */
 static int ssh_session_count_for_cpu_count(long cpu_count) {
     (void)cpu_count;
@@ -118,23 +216,23 @@ static uint32_t io_worker_count_for_cpu_count(long cpu_count) {
     return (uint32_t)cpu_count;
 }
 
-static unsigned int chacha_worker_count_for_cpu_count(long cpu_count) {
+static unsigned int chacha_worker_count_for_physical_core_count(long core_count) {
     /*
      * r50 keeps two ChaCha payload lanes available on a dual-core MT7621.
-     * r49 used one worker for Poly1305 out of a two-worker pool, leaving only
-     * one ChaCha worker to decrypt the entire SSH packet. The Owner waits for
-     * the packet tasks, so a third persistent worker is useful for the short
-     * Poly1305 job while both data workers remain active.
+     * MT7621A has two physical cores but four Linux CPUs (two VPEs per core),
+     * so this decision must use the sysfs physical-core topology rather than
+     * the number of schedulable VPEs.
      *
      * The pool is capped at four workers: three ChaCha lanes plus one MAC lane.
      * A single-core device retains the serial Owner path.
      */
-    if (cpu_count <= 1L) return 0U;
-    if (cpu_count == 2L) return 3U;
+    if (core_count <= 1L) return 0U;
+    if (core_count == 2L) return 3U;
     return 4U;
 }
 
 static long g_detected_cpu_count = 1;
+static long g_detected_physical_core_count = 1;
 static uint32_t g_io_worker_count = 1U;
 static int g_worker_count_auto = 1;
 static __thread int g_worker_id = 0;
@@ -5107,11 +5205,13 @@ static int core_worker_run(int argc, char **argv) {
         goto fail_cleanup;
     }
     unsigned int chacha_workers =
-        chacha_worker_count_for_cpu_count(g_detected_cpu_count);
+        chacha_worker_count_for_physical_core_count(
+            g_detected_physical_core_count);
     libssh2_session_set_chacha_workers(session, chacha_workers);
-    log_blue("[ChaCha] r50 S2C payload: detected_cpus=%ld owner_payload_lanes=%u crypto_workers=%u poly1305_workers=%u chacha_payload_workers=%u active_worker_lanes=%u threshold=4096 bytes",
-             g_detected_cpu_count, chacha_workers ? 0U : 1U,
-             chacha_workers, chacha_workers >= 2U ? 1U : 0U,
+    log_blue("[ChaCha] r50 S2C payload: detected_cpus=%ld detected_cores=%ld owner_payload_lanes=%u crypto_workers=%u poly1305_workers=%u chacha_payload_workers=%u active_worker_lanes=%u threshold=4096 bytes",
+             g_detected_cpu_count, g_detected_physical_core_count,
+             chacha_workers ? 0U : 1U, chacha_workers,
+             chacha_workers >= 2U ? 1U : 0U,
              chacha_workers >= 2U ? chacha_workers - 1U : 0U,
              chacha_workers ? chacha_workers : 1U);
 #if LIBSSH2_VERSION_NUM >= 0x010b01
@@ -5879,6 +5979,8 @@ static int resolve_worker_count(int argc, char **argv, int *out_count) {
     if (!out_count) return -1;
 
     g_detected_cpu_count = detect_available_cpu_count();
+    g_detected_physical_core_count =
+        detect_available_physical_core_count(g_detected_cpu_count);
     int requested_workers = 1;
     int manual_workers = 0;
     const char *env_file = NULL;
