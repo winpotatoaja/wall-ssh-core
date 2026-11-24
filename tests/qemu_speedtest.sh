@@ -14,6 +14,18 @@ proc_ticks() {
     proc_stat_ticks "/proc/$1/stat"
 }
 
+uptime_seconds() {
+    awk 'NR == 1 { print $1; exit }' /proc/uptime
+}
+
+elapsed_seconds() {
+    awk -v before="$1" -v after="$2" 'BEGIN {
+        elapsed = after - before
+        if (elapsed < 0.01) elapsed = 0.01
+        printf "%.2f", elapsed
+    }'
+}
+
 thread_snapshot() {
     PID="$1"
     TASK_ROOT="$2"
@@ -135,7 +147,7 @@ net_rate_line() {
 }
 
 run_diag_self_test() {
-    TEST_ROOT="/tmp/r49-speedtest-diag-test"
+    TEST_ROOT="/tmp/r50-speedtest-diag-test"
     rm -rf "$TEST_ROOT"
     mkdir -p "$TEST_ROOT/tasks/4242" "$TEST_ROOT/net/testnet/statistics" "$TEST_ROOT/net/lo/statistics" || return 2
 
@@ -172,6 +184,21 @@ run_diag_self_test() {
     PROC_TEST=$(awk -v a=68 -v b=168 -v ref="$CPU_REFERENCE" 'BEGIN{d=b-a;if(d<0)d=0;printf "%.1f",(ref>0?100*d/ref:0)}')
     if [ "$PROC_TEST" != "100.0" ]; then
         echo "DIAG SELF-TEST FAIL: process CPU normalization is incorrect: $PROC_TEST"
+        rm -rf "$TEST_ROOT"
+        return 1
+    fi
+    ELAPSED_TEST=$(elapsed_seconds "12.34" "12.59")
+    if [ "$ELAPSED_TEST" != "0.25" ]; then
+        echo "DIAG SELF-TEST FAIL: sub-second elapsed calculation expected 0.25, got $ELAPSED_TEST"
+        rm -rf "$TEST_ROOT"
+        return 1
+    fi
+    SLEEP_START=$(uptime_seconds)
+    sleep 0.05
+    SLEEP_END=$(uptime_seconds)
+    SLEEP_TEST=$(elapsed_seconds "$SLEEP_START" "$SLEEP_END")
+    if ! awk -v elapsed="$SLEEP_TEST" 'BEGIN { exit !(elapsed >= 0.03 && elapsed <= 0.35) }'; then
+        echo "DIAG SELF-TEST FAIL: fractional sleep/proc uptime timing is not reliable: $SLEEP_TEST"
         rm -rf "$TEST_ROOT"
         return 1
     fi
@@ -226,10 +253,40 @@ main() {
     cpu_snapshot() {
         awk '/^cpu[0-9]*[ \t]/ {t=0;for(i=2;i<=NF;i++)t+=$i;idle=$5+$6;print $1,t-idle,t}' /proc/stat
     }
-    echo "r46_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
-    echo "SOCKS5=$SOCKS"
-    echo "GUEST=$(uname -a)"
-    echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
+    echo "r50_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    SOCKS_INFO="SOCKS5=$SOCKS"
+    GUEST_INFO="GUEST=$(uname -a)"
+    VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
+    case "$VCPU_COUNT" in ''|*[!0-9]*) VCPU_COUNT=0;; esac
+    CPU_TOPOLOGY=""
+    : > "$RESULT/cpu-topology.keys"
+    for CPU_PATH in /sys/devices/system/cpu/cpu[0-9]*; do
+        [ -d "$CPU_PATH/topology" ] || continue
+        CPU_ID=${CPU_PATH##*cpu}
+        CORE_ID=$(cat "$CPU_PATH/topology/core_id" 2>/dev/null)
+        PACKAGE_ID=$(cat "$CPU_PATH/topology/physical_package_id" 2>/dev/null)
+        [ -n "$CORE_ID" ] || continue
+        [ -n "$PACKAGE_ID" ] || PACKAGE_ID=0
+        printf '%s:%s\n' "$PACKAGE_ID" "$CORE_ID" >> "$RESULT/cpu-topology.keys"
+        CPU_TOPOLOGY="${CPU_TOPOLOGY}${CPU_ID}:package${PACKAGE_ID}:core${CORE_ID};"
+    done
+    CPU_TOPOLOGY_PHYSICAL_CORES=$(sort -u "$RESULT/cpu-topology.keys" | wc -l | tr -d ' ')
+    case "$CPU_TOPOLOGY_PHYSICAL_CORES" in ''|*[!0-9]*) CPU_TOPOLOGY_PHYSICAL_CORES=0;; esac
+    SAMPLE_INTERVAL_MS=250
+    {
+        echo "r50_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_START=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+        echo "$SOCKS_INFO"
+        echo "$GUEST_INFO"
+        echo "VCPU_COUNT=$VCPU_COUNT"
+        echo "CPU_TOPOLOGY=$CPU_TOPOLOGY"
+        echo "CPU_TOPOLOGY_PHYSICAL_CORES=$CPU_TOPOLOGY_PHYSICAL_CORES"
+        echo "SAMPLE_INTERVAL_MS=$SAMPLE_INTERVAL_MS"
+    } | tee "$RESULT/environment.log"
+
+    if [ "$VCPU_COUNT" -ne 4 ] || [ "$CPU_TOPOLOGY_PHYSICAL_CORES" -ne 2 ]; then
+        echo "ERROR: expected MT7621A topology of 4 Linux CPUs across 2 physical cores; got vcpus=$VCPU_COUNT physical_cores=$CPU_TOPOLOGY_PHYSICAL_CORES" | tee -a "$RESULT/errors.log"
+        return 2
+    fi
 
     "$BIN" -env "$LOG/tcp.env" -log "$RESULT/core.log" -log-backpressure 1 -log-perf 1 >"$RESULT/core-stdout.log" 2>&1 &
     CORE_PID=$!
@@ -261,7 +318,7 @@ main() {
     CRYPTO_WORKERS_READY=0
     N=0
     while [ "$N" -lt 10 ]; do
-        if grep -Eq 'libssh2_chacha_workers_active=[1-9][0-9]*' "$RESULT/core.log"; then
+        if grep -Eq '\[ChaCha\] r50 S2C payload: detected_cpus=4 detected_cores=2 owner_payload_lanes=0 crypto_workers=3 poly1305_workers=1 chacha_payload_workers=2 active_worker_lanes=3 threshold=4096 bytes' "$RESULT/core.log"; then
             CRYPTO_WORKERS_READY=1
             break
         fi
@@ -270,16 +327,16 @@ main() {
         sleep 1
     done
     if [ "$CRYPTO_WORKERS_READY" -ne 1 ]; then
-        echo "ERROR: ChaCha decrypt worker pool did not become active; skipping both 100 MB downloads"
+        echo "ERROR: expected r50 two-core plan (2 ChaCha + 1 Poly1305) was not active; skipping both 100 MB downloads"
         grep -E '\[PERF\]|ChaCha|SSH Cipher' "$RESULT/core.log" 2>/dev/null || :
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
     fi
-    echo "PASS: inbound ChaCha decrypt workers are active before bandwidth tests begin."
+    echo "PASS: MT7621A topology detected as 2 physical cores / 4 Linux CPUs; r50 activated 2 ChaCha workers + 1 Poly1305 worker."
 
     PREV_TICKS=$(proc_ticks "$CORE_PID")
     thread_snapshot "$CORE_PID" "" > "$RESULT/threads.prev"
-    PREV_SAMPLE_TS=$(date +%s)
+    PREV_SAMPLE_UPTIME=$(uptime_seconds)
     DEFAULT_IFACE=$(default_route_iface /proc/net/route)
     [ -n "$DEFAULT_IFACE" ] || DEFAULT_IFACE=unknown
     echo "DEFAULT_ROUTE_INTERFACE=$DEFAULT_IFACE CPU_REFERENCE=average_per_vCPU_proc_stat_delta"
@@ -287,9 +344,8 @@ main() {
     sample_metrics() {
         cpu_snapshot > "$RESULT/cpu.now"
         net_snapshot "" > "$RESULT/net.now"
-        CUR_SAMPLE_TS=$(date +%s)
-        SAMPLE_ELAPSED=$((CUR_SAMPLE_TS - PREV_SAMPLE_TS))
-        [ "$SAMPLE_ELAPSED" -gt 0 ] || SAMPLE_ELAPSED=1
+        CUR_SAMPLE_UPTIME=$(uptime_seconds)
+        SAMPLE_ELAPSED=$(elapsed_seconds "$PREV_SAMPLE_UPTIME" "$CUR_SAMPLE_UPTIME")
         CUR_TICKS=$(proc_ticks "$CORE_PID")
         thread_snapshot "$CORE_PID" "" > "$RESULT/threads.now"
         CPU_REFERENCE=$(cpu_reference_ticks "$RESULT/cpu.prev" "$RESULT/cpu.now")
@@ -303,7 +359,7 @@ main() {
         cp "$RESULT/net.now" "$RESULT/net.prev"
         cp "$RESULT/threads.now" "$RESULT/threads.prev"
         PREV_TICKS=$CUR_TICKS
-        PREV_SAMPLE_TS=$CUR_SAMPLE_TS
+        PREV_SAMPLE_UPTIME=$CUR_SAMPLE_UPTIME
     }
 
     cpu_snapshot > "$RESULT/cpu.prev"
@@ -326,7 +382,7 @@ main() {
             net_snapshot "" > "$RESULT/net.prev"
             PREV_TICKS=$(proc_ticks "$CORE_PID")
             thread_snapshot "$CORE_PID" "" > "$RESULT/threads.prev"
-            PREV_SAMPLE_TS=$(date +%s)
+            PREV_SAMPLE_UPTIME=$(uptime_seconds)
             curl -4 -sS -fL --connect-timeout 15 --max-time 50 --max-filesize 110000000 --retry 0 \
               --socks5-hostname "$SOCKS" -o /dev/null \
               -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
@@ -340,7 +396,7 @@ main() {
         fi
         CURL_PID=$!
         while kill -0 "$CURL_PID" 2>/dev/null; do
-            sleep 1
+            sleep 0.25
             if [ "$MODE" = "socks5" ] && kill -0 "$CURL_PID" 2>/dev/null; then
                 sample_metrics
             fi
@@ -409,7 +465,8 @@ main() {
     kill -KILL "$CORE_PID" 2>/dev/null || :
 
     {
-      echo "r49 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
+      echo "r50 DATAPACKET 100 MB DIRECT VS SOCKS5 DIAGNOSTIC SUMMARY (50s hard cap per transfer)"
+      cat "$RESULT/environment.log"
       cat "$RESULT/download-results.log"
       echo "--- PAIRS ---"
       cat "$RESULT/pairs.log"
@@ -418,10 +475,11 @@ main() {
       echo "PAIR_COUNT=$PAIR_COUNT"
       echo "SAMPLE_COUNT=$SAMPLE"
       echo "VCPU_COUNT=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)"
+      echo "SAMPLE_INTERVAL_MS=$SAMPLE_INTERVAL_MS"
     } | tee "$RESULT/summary.txt"
 
     echo "RESULT_DIR=$RESULT"
-    echo "r46_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
+    echo "r50_100MB_50SEC_DIRECT_VS_SOCKS5_TEST_END=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)"
     [ ! -s "$RESULT/errors.log" ] || return 2
     [ "$PAIR_COUNT" -ge 1 ] || {
         echo "ERROR: no endpoint completed a full direct+SOCKS5 100 MB pair" | tee -a "$RESULT/errors.log"
