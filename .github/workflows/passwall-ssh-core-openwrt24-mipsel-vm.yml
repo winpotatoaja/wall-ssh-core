@@ -188,6 +188,23 @@ jobs:
           readelf -h "$BIN" | tee "$GITHUB_WORKSPACE/test-results/elf-header.txt"
           CROSS_CC="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -path '*/bin/*-openwrt-linux-musl-gcc' -print | head -n 1)"
           test -n "$CROSS_CC"
+          gcc -std=c11 -Os -Wall -Wextra -Werror "$GITHUB_WORKSPACE/tests/diag_timer.c" -o /tmp/diag-timer-native
+          NATIVE_START="$(/tmp/diag-timer-native now-ms)"
+          /tmp/diag-timer-native sleep-us 250000
+          /tmp/diag-timer-native sleep-us 250000
+          /tmp/diag-timer-native sleep-us 250000
+          NATIVE_END="$(/tmp/diag-timer-native now-ms)"
+          NATIVE_ELAPSED=$((NATIVE_END - NATIVE_START))
+          if [ "$NATIVE_ELAPSED" -lt 600 ] || [ "$NATIVE_ELAPSED" -gt 1500 ]; then
+            echo "Native monotonic/nanosleep regression expected 600-1500ms, got ${NATIVE_ELAPSED}ms"
+            false
+          fi
+          echo "PASS: native CLOCK_MONOTONIC measured three nanosleep(250ms) calls in ${NATIVE_ELAPSED}ms."
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror "$GITHUB_WORKSPACE/tests/diag_timer.c" -o "$GITHUB_WORKSPACE/test-results/diag-timer"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/diag-timer"
+          file "$GITHUB_WORKSPACE/test-results/diag-timer" | tee "$GITHUB_WORKSPACE/test-results/diag-timer-file.txt"
+          readelf -h "$GITHUB_WORKSPACE/test-results/diag-timer" | grep -q 'MIPS'
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum diag-timer > diag-timer.sha256)
           "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -pthread "$GITHUB_WORKSPACE/tests/spsc_rb_test.c" -o "$GITHUB_WORKSPACE/test-results/spsc-rb-test"
           chmod 0755 "$GITHUB_WORKSPACE/test-results/spsc-rb-test"
           file "$GITHUB_WORKSPACE/test-results/spsc-rb-test" | tee "$GITHUB_WORKSPACE/test-results/spsc-rb-test-file.txt"
@@ -263,6 +280,9 @@ jobs:
             test-results/io-worker-completion-tracker-test
             test-results/io-worker-completion-tracker.sha256
             test-results/io-worker-completion-tracker-file.txt
+            test-results/diag-timer
+            test-results/diag-timer.sha256
+            test-results/diag-timer-file.txt
           if-no-files-found: error
           retention-days: 14
       - name: SDK summary
@@ -349,12 +369,12 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tests/chachapoly_parallel_test.c tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tests/chachapoly_parallel_test.c tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c; then
             echo "SDK artifact was built from different package or test sources."
             git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tests/chachapoly_parallel_test.c spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c
             false
           fi
-          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256)
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256)
           file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
@@ -374,6 +394,7 @@ jobs:
           readelf -h test-results/client-lifetime-test | grep -q 'MIPS'
           readelf -h test-results/client-event-token-test | grep -q 'MIPS'
           readelf -h test-results/io-worker-completion-tracker-test | grep -q 'MIPS'
+          readelf -h test-results/diag-timer | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
         shell: bash
