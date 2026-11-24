@@ -1,5 +1,23 @@
 # Passwall SSH Core — Progres Pengerjaan Tahap 1–5
 
+Terakhir diperbarui: 2026-11-24
+
+## r50 — mempertahankan dua jalur dekripsi ChaCha20 pada MT7621 dual-core
+
+**Status: patch alokasi worker diterapkan; validasi SDK dan VM sedang dimulai. Belum ada klaim peningkatan throughput sebelum pengujian terukur.**
+
+Audit hasil r49 menemukan ketidakcocokan konfigurasi untuk target MT7621 dua-core. Fungsi alokasi sebelumnya menetapkan jumlah worker sama dengan jumlah CPU. Karena r49 mencadangkan worker terakhir untuk Poly1305, perangkat dua-core hanya mendapat satu worker dekripsi ChaCha20. Seluruh payload satu paket SSH kemudian didekripsi oleh satu worker, sementara worker lain hanya mengerjakan MAC dan dapat selesai lebih cepat. Pengujian r49 #70 memakai QEMU empat-vCPU, sehingga belum menguji susunan worker dua-core yang dipakai target MT7621.
+
+Perubahan r50:
+- 1 CPU: tetap memakai jalur serial Owner.
+- 2 CPU: 3 worker tetap, terdiri dari 2 worker dekripsi ChaCha20 dan 1 worker Poly1305.
+- 3 CPU atau lebih: maksimum 4 worker, terdiri dari 3 worker dekripsi ChaCha20 dan 1 worker Poly1305.
+- SSH Owner tetap satu-satunya pemilik LIBSSH2_SESSION; jumlah autentikasi dan sesi SSH upstream tidak berubah.
+- Verifier benchmark diperbarui untuk memeriksa format log alokasi worker r50.
+
+**Catatan diagnosis:** pada artifact r49, jalur SOCKS5 berhasil mengirim semua byte yang dibaca dari SSH; socks_tx_eagain=0 dan socks_tx_partial=0 pada interval steady-state. Waktu terbesar tercatat di dalam pemrosesan libssh2_channel_read()/crypto. Data satu-detik itu belum cukup untuk menjelaskan jeda sesaat yang terlihat di IDM. Alokasi dua-core r50 ditujukan untuk menghilangkan kekurangan jalur dekripsi pada target, tetapi stabilitas dan peningkatan kecepatan masih harus dibuktikan pada MT7621.
+
+
 Dokumen ini adalah **catatan progres utama proyek**. Semua pekerjaan, hasil validasi,
 keputusan, dan pekerjaan tersisa dicatat berdasarkan lima tahap di bawah. Status
 hanya boleh dinaikkan menjadi **LULUS** setelah seluruh kriteria tahap tersebut
