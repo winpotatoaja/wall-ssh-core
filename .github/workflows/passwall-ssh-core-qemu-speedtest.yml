@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   internet-bandwidth:
-    name: Download Datapacket direct vs r49 SOCKS5
+    name: Download Datapacket direct vs r50 SOCKS5
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
@@ -86,7 +86,7 @@ jobs:
             curl unzip zstd python3 openssh-client openssh-server \
             socat mtd-utils gdisk wget ca-certificates binutils file
 
-      - name: Download the source-matched r49 MIPS package
+      - name: Download the source-matched r50 MIPS package
         if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
         uses: actions/download-artifact@v4
         with:
@@ -256,7 +256,7 @@ jobs:
             --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
           test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
           test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-          echo "r49 package and MT7621 QEMU firmware are ready."
+          echo "r50 package and MT7621A QEMU firmware are ready."
 
       - name: Start SSH endpoint for real internet forwarding
         if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
@@ -349,7 +349,7 @@ jobs:
             root@127.0.0.1:/tmp/mips-test/
           ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-            "opkg --force-reinstall install /tmp/mips-test/libssh2-1_1.11.1-r1_mipsel_24kc.ipk && grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 && opkg install /tmp/mips-test/passwall-ssh-core*.ipk && chmod 0700 /tmp/mips-test/qemu_speedtest.sh && /tmp/mips-test/qemu_speedtest.sh --self-test && /tmp/mips-test/qemu_speedtest.sh"
+            "opkg --force-reinstall install /tmp/mips-test/libssh2-1_1.11.1-r1_mipsel_24kc.ipk && grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 && opkg install /tmp/mips-test/passwall-ssh-core*.ipk && chmod 0700 /tmp/mips-test/diag-timer /tmp/mips-test/qemu_speedtest.sh && /tmp/mips-test/qemu_speedtest.sh --self-test && /tmp/mips-test/qemu_speedtest.sh"
 
       - name: Collect benchmark results
         if: ${{ always() && steps.sdkmeta.outputs.verify_only_run_id == '' }}
