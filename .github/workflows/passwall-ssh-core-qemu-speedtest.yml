@@ -429,7 +429,7 @@ jobs:
                     for worker_id in 0 1 2; do
             grep -Eq "tid=[0-9]+/chacha-dec${worker_id}:([1-9][0-9]*([.][0-9]+)?|0[.]([0-9]*[1-9][0-9]*))%" "$SAMPLE_LOG"
           done
-          # Require measured CPU activity for both ChaCha workers and the Poly1305 worker.
+          # Require measured CPU activity for all three reused ChaCha workers after the Poly1305-first phase.
           grep -Eq '\[ChaCha\] r51 S2C payload: detected_cpus=4 detected_cores=2 owner_payload_lanes=0 crypto_workers=3 poly1305_workers=1 chacha_payload_workers=3 active_worker_lanes=3 threshold=4096 bytes' "$CORE_LOG"
           SAMPLE_COUNT=$(grep -c '^sample=' "$SAMPLE_LOG")
           test "$SAMPLE_COUNT" -ge 10
