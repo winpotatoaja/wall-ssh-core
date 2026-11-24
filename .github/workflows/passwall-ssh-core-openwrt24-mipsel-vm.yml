@@ -153,6 +153,7 @@ jobs:
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_set_chacha_workers'
           grep -aFq 'chacha20-poly1305@openssh.com' "$STAGING/usr/lib/libssh2.so"
           echo "PASS: libssh2 1.11.1 diagnostics and packet-local parallel ChaCha20 are present."
+      # Core IPK release r50 is independent of the retained libssh2 patch-series r49 marker.
       - name: Build r50 single-session MIPS IPK, ChaCha/Poly1305 workers and I/O worker pool helper
         shell: bash
         run: |
