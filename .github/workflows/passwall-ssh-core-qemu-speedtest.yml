@@ -410,12 +410,38 @@ jobs:
           SAMPLE_LOG=bandwidth-results/qemu-speedtest/samples.log
           test -s "$CORE_LOG"
           test -s "$SAMPLE_LOG"
+          ENV_LOG=bandwidth-results/qemu-speedtest/environment.log
+          test -s "$ENV_LOG"
+          grep -Fq 'VCPU_COUNT=4' "$ENV_LOG"
+          grep -Fq 'CPU_TOPOLOGY_PHYSICAL_CORES=2' "$ENV_LOG"
+          grep -Fq 'SAMPLE_INTERVAL_MS=250' "$ENV_LOG"
           # Require measured CPU activity, not just thread names, for all four crypto workers.
           for worker_id in 0 1; do
             grep -Eq "tid=[0-9]+/chacha-dec${worker_id}:([1-9][0-9]*([.][0-9]+)?|0[.]([0-9]*[1-9][0-9]*))%" "$SAMPLE_LOG"
           done
-          grep -Eq "tid=[0-9]+/chacha-poly:([1-9][0-9]*([.][0-9]+)?|0[.]([0-9]*[1-9][0-9]*))%" "$SAMPLE_LOG"
+          # Require measured CPU activity for both ChaCha workers and the Poly1305 worker.
           grep -Eq '\[ChaCha\] r50 S2C payload: detected_cpus=4 detected_cores=2 owner_payload_lanes=0 crypto_workers=3 poly1305_workers=1 chacha_payload_workers=2 active_worker_lanes=3 threshold=4096 bytes' "$CORE_LOG"
+          SAMPLE_COUNT=$(grep -c '^sample=' "$SAMPLE_LOG")
+          test "$SAMPLE_COUNT" -ge 10
+          awk '
+            /^sample=/ {
+              elapsed=$2
+              sub(/^elapsed=/, "", elapsed)
+              sub(/s$/, "", elapsed)
+              sample[n++] = elapsed + 0
+            }
+            END {
+              if(n < 10) exit 1
+              for(i=0; i<n; i++)
+                for(j=i+1; j<n; j++)
+                  if(sample[j] < sample[i]) {
+                    t=sample[i]; sample[i]=sample[j]; sample[j]=t
+                  }
+              median=sample[int(n/2)]
+              if(median > 0.40) exit 1
+              printf "PASS: %d sub-second samples; median interval %.2f s\\n", n, median
+            }
+          ' "$SAMPLE_LOG"
           awk '
             /^\[PERF\]/ &&
             /s2c_read_bytes=[1-9][0-9]*/ &&
@@ -444,7 +470,7 @@ jobs:
             /libssh2_chacha20_parallel_us=[1-9][0-9]*/ { found=1 }
             END { exit !found }
           ' "$CORE_LOG"
-          echo "PASS: r49 worker-only ChaCha and overlapped Poly1305 counters were recorded."
+          echo "PASS: r50 two-core crypto worker plan, 250 ms sampling and S2C counters were recorded."
 
       - name: Publish benchmark results in Actions UI
         if: always()
