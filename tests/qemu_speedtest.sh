@@ -40,6 +40,16 @@ elapsed_seconds() {
     }'
 }
 
+wait_until_next_sample() {
+    TARGET_SAMPLE_MS=$((PREV_SAMPLE_MS + 250))
+    NOW_SAMPLE_MS=$(monotonic_milliseconds) || return 2
+    REMAINING_SAMPLE_MS=$((TARGET_SAMPLE_MS - NOW_SAMPLE_MS))
+    if [ "$REMAINING_SAMPLE_MS" -gt 0 ]; then
+        sleep_microseconds "$((REMAINING_SAMPLE_MS * 1000))" || return 2
+    fi
+    return 0
+}
+
 thread_snapshot() {
     PID="$1"
     TASK_ROOT="$2"
@@ -429,13 +439,17 @@ main() {
         fi
         CURL_PID=$!
         while kill -0 "$CURL_PID" 2>/dev/null; do
-            if ! sleep_microseconds 250000; then
-                echo "ERROR: nanosleep helper failed during 250 ms sampling"
-                kill -TERM "$CORE_PID" 2>/dev/null || :
-                return 2
-            fi
-            if [ "$MODE" = "socks5" ] && kill -0 "$CURL_PID" 2>/dev/null; then
-                sample_metrics
+            if [ "$MODE" = "socks5" ]; then
+                if ! wait_until_next_sample; then
+                    echo "ERROR: monotonic 250 ms sample scheduler failed"
+                    kill -TERM "$CORE_PID" 2>/dev/null || :
+                    return 2
+                fi
+                if kill -0 "$CURL_PID" 2>/dev/null; then
+                    sample_metrics
+                fi
+            else
+                sleep 1
             fi
         done
         wait "$CURL_PID"
