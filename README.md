@@ -15,7 +15,7 @@ Perubahan pertama r51:
 - Tiga worker pada MT7621A dipakai bergantian: satu tugas Poly1305 pada fase autentikasi, kemudian ketiganya menjadi worker ChaCha20 pada fase dekripsi. Jumlah core fisik dan satu SSH Owner tetap sama.
 - SDK menguji regresi ChaCha20-Poly1305 1–4 worker dan menjalankan pemeriksaan urutan source. Artifact SDK juga menyimpan disassembly MIPS dari libssh2 untuk audit instruksi aktual.
 
-Belum ada klaim peningkatan throughput. Assembly MIPS32R2 belum diterapkan; keputusan implementasinya menunggu hasil disassembly dan validasi SDK. Workflow bandwidth 100 MB tetap opt-in dan tidak dipanggil oleh build SDK biasa.
+Belum ada klaim peningkatan throughput. Assembly MIPS32R2 belum diterapkan; keputusan implementasinya menunggu hasil disassembly dan validasi SDK. Workflow bandwidth 100 MB tetap opt-in dan tidak dipanggil oleh build SDK biasa. SDK validation is triggered separately by commit message `[mips-stage=sdk]`.
 
 ## r50 — dual-core crypto scheduling berbasis physical-core topology
 
