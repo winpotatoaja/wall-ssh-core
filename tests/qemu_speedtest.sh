@@ -14,15 +14,29 @@ proc_ticks() {
     proc_stat_ticks "/proc/$1/stat"
 }
 
-uptime_seconds() {
-    awk 'NR == 1 { print $1; exit }' /proc/uptime
+DIAG_TIMER=${DIAG_TIMER:-/tmp/mips-test/diag-timer}
+
+monotonic_milliseconds() {
+    [ -x "$DIAG_TIMER" ] || {
+        echo "ERROR: monotonic timer helper missing: $DIAG_TIMER"
+        return 2
+    }
+    "$DIAG_TIMER" now-ms
+}
+
+sleep_microseconds() {
+    [ -x "$DIAG_TIMER" ] || {
+        echo "ERROR: nanosleep helper missing: $DIAG_TIMER"
+        return 2
+    }
+    "$DIAG_TIMER" sleep-us "$1"
 }
 
 elapsed_seconds() {
     awk -v before="$1" -v after="$2" 'BEGIN {
-        elapsed = after - before
-        if (elapsed < 0.01) elapsed = 0.01
-        printf "%.2f", elapsed
+        elapsed = (after - before) / 1000
+        if (elapsed < 0.001) elapsed = 0.001
+        printf "%.3f", elapsed
     }'
 }
 
@@ -148,6 +162,10 @@ net_rate_line() {
 
 run_diag_self_test() {
     TEST_ROOT="/tmp/r50-speedtest-diag-test"
+    if [ ! -x "$DIAG_TIMER" ]; then
+        echo "DIAG SELF-TEST FAIL: MIPS monotonic timer helper is missing: $DIAG_TIMER"
+        return 2
+    fi
     rm -rf "$TEST_ROOT"
     mkdir -p "$TEST_ROOT/tasks/4242" "$TEST_ROOT/net/testnet/statistics" "$TEST_ROOT/net/lo/statistics" || return 2
 
@@ -187,23 +205,32 @@ run_diag_self_test() {
         rm -rf "$TEST_ROOT"
         return 1
     fi
-    ELAPSED_TEST=$(elapsed_seconds "12.34" "12.59")
-    if [ "$ELAPSED_TEST" != "0.25" ]; then
-        echo "DIAG SELF-TEST FAIL: sub-second elapsed calculation expected 0.25, got $ELAPSED_TEST"
+    ELAPSED_TEST=$(elapsed_seconds "12340" "12590")
+    if [ "$ELAPSED_TEST" != "0.250" ]; then
+        echo "DIAG SELF-TEST FAIL: monotonic-ms elapsed calculation expected 0.250, got $ELAPSED_TEST"
         rm -rf "$TEST_ROOT"
         return 1
     fi
-    SLEEP_START=$(uptime_seconds)
-    sleep 0.25
-    sleep 0.25
-    sleep 0.25
-    SLEEP_END=$(uptime_seconds)
+    SLEEP_START=$(monotonic_milliseconds)
+    sleep_microseconds 250000 || {
+        echo "DIAG SELF-TEST FAIL: nanosleep helper rejected 250000 microseconds"
+        rm -rf "$TEST_ROOT"
+        return 1
+    }
+    sleep_microseconds 250000 || {
+        echo "DIAG SELF-TEST FAIL: second nanosleep helper call failed"
+        rm -rf "$TEST_ROOT"
+        return 1
+    }
+    sleep_microseconds 250000 || {
+        echo "DIAG SELF-TEST FAIL: third nanosleep helper call failed"
+        rm -rf "$TEST_ROOT"
+        return 1
+    }
+    SLEEP_END=$(monotonic_milliseconds)
     SLEEP_TEST=$(elapsed_seconds "$SLEEP_START" "$SLEEP_END")
-    # /proc/uptime has 10 ms resolution. Measure three quarter-second sleeps
-    # cumulatively so scheduler/tick alignment cannot false-fail one short read.
-    # A whole-second-only sleep implementation takes about 3 seconds and fails.
-    if ! awk -v elapsed="$SLEEP_TEST" 'BEGIN { exit !(elapsed >= 0.55 && elapsed <= 1.25) }'; then
-        echo "DIAG SELF-TEST FAIL: three fractional 250ms sleeps should total 0.55-1.25s, got $SLEEP_TEST"
+    if ! awk -v elapsed="$SLEEP_TEST" 'BEGIN { exit !(elapsed >= 0.60 && elapsed <= 1.50) }'; then
+        echo "DIAG SELF-TEST FAIL: three nanosleep 250ms calls should total 0.60-1.50s, got $SLEEP_TEST"
         rm -rf "$TEST_ROOT"
         return 1
     fi
@@ -285,7 +312,7 @@ main() {
         echo "VCPU_COUNT=$VCPU_COUNT"
         echo "CPU_TOPOLOGY=$CPU_TOPOLOGY"
         echo "CPU_TOPOLOGY_PHYSICAL_CORES=$CPU_TOPOLOGY_PHYSICAL_CORES"
-        echo "SAMPLE_INTERVAL_MS=$SAMPLE_INTERVAL_MS"
+        echo "SAMPLE_INTERVAL_MS=$SAMPLE_INTERVAL_MS"\n        echo "SAMPLE_CLOCK=clock_gettime(CLOCK_MONOTONIC)"
     } | tee "$RESULT/environment.log"
 
     if [ "$VCPU_COUNT" -ne 4 ] || [ "$CPU_TOPOLOGY_PHYSICAL_CORES" -ne 2 ]; then
@@ -341,7 +368,7 @@ main() {
 
     PREV_TICKS=$(proc_ticks "$CORE_PID")
     thread_snapshot "$CORE_PID" "" > "$RESULT/threads.prev"
-    PREV_SAMPLE_UPTIME=$(uptime_seconds)
+    PREV_SAMPLE_MS=$(monotonic_milliseconds)
     DEFAULT_IFACE=$(default_route_iface /proc/net/route)
     [ -n "$DEFAULT_IFACE" ] || DEFAULT_IFACE=unknown
     echo "DEFAULT_ROUTE_INTERFACE=$DEFAULT_IFACE CPU_REFERENCE=average_per_vCPU_proc_stat_delta"
@@ -349,8 +376,8 @@ main() {
     sample_metrics() {
         cpu_snapshot > "$RESULT/cpu.now"
         net_snapshot "" > "$RESULT/net.now"
-        CUR_SAMPLE_UPTIME=$(uptime_seconds)
-        SAMPLE_ELAPSED=$(elapsed_seconds "$PREV_SAMPLE_UPTIME" "$CUR_SAMPLE_UPTIME")
+        CUR_SAMPLE_MS=$(monotonic_milliseconds)
+        SAMPLE_ELAPSED=$(elapsed_seconds "$PREV_SAMPLE_MS" "$CUR_SAMPLE_MS")
         CUR_TICKS=$(proc_ticks "$CORE_PID")
         thread_snapshot "$CORE_PID" "" > "$RESULT/threads.now"
         CPU_REFERENCE=$(cpu_reference_ticks "$RESULT/cpu.prev" "$RESULT/cpu.now")
@@ -364,7 +391,7 @@ main() {
         cp "$RESULT/net.now" "$RESULT/net.prev"
         cp "$RESULT/threads.now" "$RESULT/threads.prev"
         PREV_TICKS=$CUR_TICKS
-        PREV_SAMPLE_UPTIME=$CUR_SAMPLE_UPTIME
+        PREV_SAMPLE_MS=$CUR_SAMPLE_MS
     }
 
     cpu_snapshot > "$RESULT/cpu.prev"
@@ -387,7 +414,7 @@ main() {
             net_snapshot "" > "$RESULT/net.prev"
             PREV_TICKS=$(proc_ticks "$CORE_PID")
             thread_snapshot "$CORE_PID" "" > "$RESULT/threads.prev"
-            PREV_SAMPLE_UPTIME=$(uptime_seconds)
+            PREV_SAMPLE_MS=$(monotonic_milliseconds)
             curl -4 -sS -fL --connect-timeout 15 --max-time 50 --max-filesize 110000000 --retry 0 \
               --socks5-hostname "$SOCKS" -o /dev/null \
               -w '%{size_download} %{time_total} %{speed_download} %{http_code} %{remote_ip} %{content_type}\n' \
