@@ -24,16 +24,23 @@ def main() -> int:
     }
 
     s = chacha.find("static int\nchacha_parallel_pool_stop(")
-    e = chacha.find("\nvoid\nchacha_parallel_pool_destroy(", s)
+    e = chacha.find("\nstatic int\nchacha_parallel_pool_finalize(", s)
     stop = chacha[s:e] if s >= 0 and e > s else ""
+    f = chacha.find("static int\nchacha_parallel_pool_finalize(")
+    e = chacha.find("\nstruct chacha_parallel_pool *\nchacha_parallel_pool_create(", f)
+    finalize = chacha[f:e] if f >= 0 and e > f else ""
     checks["pool joins before clearing packet pointers"] = bool(stop) and stop.find("pthread_join") < stop.find("pool->source = NULL") and stop.find("if(first_error != 0)") < stop.find("pool->source = NULL")
+    checks["stop keeps sync objects alive after packet-path failure"] = "pthread_cond_destroy" not in stop and "pthread_mutex_destroy" not in stop
+    checks["finalize destroys sync only after stop succeeds"] = bool(finalize) and finalize.find("chacha_parallel_pool_stop(pool)") < finalize.find("pthread_cond_destroy") < finalize.find("pthread_mutex_destroy")
     checks["join failure preserves started flag"] = "if(rc == 0)\n                pool->workers[i].started = 0;" in stop and "first_error = rc;" in stop
-    checks["pool destroy will not free after stop failure"] = "if(chacha_parallel_pool_stop(pool) != 0)\n        return;" in chacha
-
-    f = chacha.find("int\nchacha_decrypt_poly_worker_only(")
-    e = chacha.find("\n}\n", f)
-    body = chacha[f:e] if f >= 0 and e > f else ""
-    checks["both error phases stop/join before returning"] = body.count("chacha_parallel_pool_stop(pool)") == 2 and "while(pool->active_workers > 0U)" not in body
+    checks["destroy refuses to free after finalize failure"] = "if(chacha_parallel_pool_finalize(pool) != 0)\n        return;" in chacha
+    checks["both error phases stop/join before returning"] = (
+        chacha.count("(void)chacha_parallel_pool_stop(pool);\n        return -1;") == 2
+        and "while(pool->active_workers > 0U)" not in chacha
+    )
+    checks["partial creation does not free until finalize succeeds"] = (
+        "if(chacha_parallel_pool_finalize(pool) == 0)\n        free(pool);" in chacha
+    )
 
     failed = []
     for name, ok in checks.items():
