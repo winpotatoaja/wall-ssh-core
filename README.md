@@ -4,12 +4,14 @@ Terakhir diperbarui: 2026-11-24
 
 ## r51 — eksperimen autentikasi-dulu, dekripsi-kemudian
 
+Validasi codegen SDK #705 gagal sebelum menghasilkan IPK karena deklarasi beratribut GCC `nomips16` bertabrakan dengan mode default `-mips16`. Perbaikannya menghapus atribut deklarasi tersebut dan menerapkan `-mno-mips16` hanya pada dua translation unit crypto. SDK berikutnya juga wajib memeriksa encoding instruksi aktual kedua simbol hasil `objdump`; belum ada klaim bahwa hotpath native-MIPS32 sudah berhasil dibangun sampai gate itu lulus.
+
 **Status: SDK MIPS #693 dan QEMU MT7621 #696 lulus; validasi performa fisik masih menunggu.**
 
 Branch eksperimen: `experiment/r51-mips32-crypto`. Baseline tetap r50 pada branch produksi/benchmark sebelumnya. Paket core r51 memakai `PKG_VERSION:=1.0.0`, `PKG_RELEASE:=51`, sehingga nama IPK yang diwajibkan adalah `passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk` dengan metadata `Version: 1.0.0-r51`.
 
 Eksperimen codegen MIPS32r2 berikutnya:
-- `chacha_encrypt_bytes` dan `poly1305_auth` diberi atribut GCC `nomips16` pada target MIPS saja. Fungsi lain tetap menggunakan konfigurasi SDK.
+- Translation unit `chacha.c` dan `poly1305.c` saja diberi opsi CMake `-mno-mips16` pada target MIPS; fungsi/unit lain tetap memakai konfigurasi SDK.
 - Algoritma C, konstanta ChaCha20, pengolahan tail, state/counter, dan implementasi Poly1305 tidak diubah. Ini murni eksperimen pemilihan ISA/codegen.
 - SDK mengarsipkan disassembly MIPS dari dua hot path untuk memverifikasi apakah fungsi benar-benar keluar dari MIPS16, melihat penggunaan instruksi MIPS32r2 seperti `rotr`, serta membandingkan frame stack/instruksi sebelum mengklaim manfaat.
 - Eksperimen ini sedang menjalani validasi SDK MIPS; hasil QEMU guest dan perbandingan performa belum tersedia. Belum ada klaim peningkatan performa dan belum ada assembly kernel yang dimasukkan.
