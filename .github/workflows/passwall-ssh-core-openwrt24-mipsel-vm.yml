@@ -974,7 +974,7 @@ jobs:
             fail "SDK-built patched libssh2 1.11.1 was not installed or is missing a required libssh2 runtime API"
           fi
 
-          echo "========== INSTALL R50 MIPS IPK (OFFLINE) =========="
+          echo "========== INSTALL R51 MIPS IPK (OFFLINE) =========="
           if [ "$STATUS" -eq 0 ]; then
             opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
