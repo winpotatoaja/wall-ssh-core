@@ -1,14 +1,14 @@
 name: Passwall SSH core - OpenWrt 24.10.7 mipsel_24kc
 on:
   push:
-    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration, phase2/tls-engine-integration-rxfix, phase3/io-worker-pool-foundation, benchmark/r39-internet-speedtest]
+    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration, phase2/tls-engine-integration-rxfix, phase3/io-worker-pool-foundation, benchmark/r39-internet-speedtest, experiment/r51-mips32-crypto]
 permissions:
   contents: read
   actions: write
   statuses: write
 
 concurrency:
-  group: openwrt24-mipsel-r50-${{ github.ref }}
+  group: openwrt24-mipsel-r51-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   sdk:
@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py
+          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tests/chachapoly_auth_order_test.py
           mkdir -p test-results
           gcc -std=gnu11 -O1 -g -Wall -Wextra -pthread \
             -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable \
@@ -130,6 +130,9 @@ jobs:
           test -s "$LIBSSH2_SRC/.passwall-r48-worker-only-chacha-patched"
           python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r49_worker_poly1305.py" "$LIBSSH2_SRC"
           test -s "$LIBSSH2_SRC/.passwall-r49-poly1305-worker-overlap-patched"
+          python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r51_auth_then_decrypt.py" "$LIBSSH2_SRC"
+          test -s "$LIBSSH2_SRC/.passwall-r51-auth-before-decrypt-patched"
+          python3 "$GITHUB_WORKSPACE/tests/chachapoly_auth_order_test.py" "$LIBSSH2_SRC/src/chacha.c" | tee "$GITHUB_WORKSPACE/test-results/chachapoly-auth-order.log"
           # Configure first so the host-side crypto regression uses the exact
           # generated libssh2 feature header, while the patched source still exists.
           make package/feeds/packages/libssh2/configure V=s
@@ -153,8 +156,8 @@ jobs:
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_set_chacha_workers'
           grep -aFq 'chacha20-poly1305@openssh.com' "$STAGING/usr/lib/libssh2.so"
           echo "PASS: libssh2 1.11.1 diagnostics and packet-local parallel ChaCha20 are present."
-      # Core IPK release r50 is independent of the retained libssh2 patch-series r49 marker.
-      - name: Build r50 single-session MIPS IPK, ChaCha/Poly1305 workers and I/O worker pool helper
+      # Core IPK release r51 is independent of the retained libssh2 patch-series r49 marker.
+      - name: Build r51 single-session MIPS IPK, ChaCha/Poly1305 workers and I/O worker pool helper
         shell: bash
         run: |
           set -euo pipefail
@@ -174,14 +177,14 @@ jobs:
             false
           fi
           echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
-          IPK="$(find bin/packages -type f -name 'passwall-ssh-core_1.0.0-r50_mipsel_24kc.ipk' | head -n 1)"
+          IPK="$(find bin/packages -type f -name 'passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk' | head -n 1)"
           LIBSSH2_IPK="$(find bin/packages -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' | head -n 1)"
           test -n "$IPK"
           IPK_CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
           printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Package: passwall-ssh-core'
-          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Version: 1.0.0-r50'
+          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Version: 1.0.0-r51'
           printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
-          echo "PASS: core IPK filename and embedded control metadata both identify 1.0.0-r50."
+          echo "PASS: core IPK filename and embedded control metadata both identify 1.0.0-r51."
           test -n "$LIBSSH2_IPK"
           mkdir -p "$GITHUB_WORKSPACE/test-results"
           cp "$IPK" "$LIBSSH2_IPK" "$GITHUB_WORKSPACE/test-results/"
@@ -255,7 +258,7 @@ jobs:
       - name: Upload MIPS IPK and helper
         uses: actions/upload-artifact@v4
         with:
-          name: passwall-ssh-core-openwrt-24.10.7-mipsel-ipk
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r51-ipk
           path: |
             test-results/passwall-ssh-core*.ipk
             test-results/libssh2-1_1.11.1-r1_mipsel_24kc.ipk
@@ -311,7 +314,7 @@ jobs:
                 : "OpenWrt 24.10.7 mipsel_24kc SDK build failed.",
               target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
-      - name: Dispatch r50 Datapacket bandwidth test only when explicitly requested
+      - name: Dispatch r51 Datapacket bandwidth test only when explicitly requested
         if: ${{ success() && contains(github.event.head_commit.message, '[mips-benchmark=internet]') }}
         uses: actions/github-script@v7
         with:
@@ -320,13 +323,13 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: "passwall-ssh-core-qemu-speedtest.yml",
-              ref: "benchmark/r39-internet-speedtest",
+              ref: "experiment/r51-mips32-crypto",
               inputs: {
                 sdk_run_id: String(context.runId),
                 source_sha: context.sha
               }
             });
-            core.info("Queued Datapacket-only r50 benchmark using SDK run " + context.runId + " and source " + context.sha);
+            core.info("Queued Datapacket-only r51 benchmark using SDK run " + context.runId + " and source " + context.sha);
   vm:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
     runs-on: ubuntu-26.04
@@ -362,7 +365,7 @@ jobs:
       - name: Download the MIPS IPK and test helper
         uses: actions/download-artifact@v4
         with:
-          name: passwall-ssh-core-openwrt-24.10.7-mipsel-ipk
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r51-ipk
           run-id: ${{ env.SDK_RUN_ID }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -375,17 +378,17 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tests/chachapoly_parallel_test.c tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tests/chachapoly_parallel_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c; then
             echo "SDK artifact was built from different package or test sources."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tests/chachapoly_parallel_test.c spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tests/chachapoly_parallel_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c
             false
           fi
           (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256)
           file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          test -s test-results/passwall-ssh-core_1.0.0-r50_mipsel_24kc.ipk
-          grep -Fq 'Version: 1.0.0-r50' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r50_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
+          test -s test-results/passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk
+          grep -Fq 'Version: 1.0.0-r51' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r51_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
           LIBSSH2_IPK="$(find test-results -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
           test -n "$LIBSSH2_IPK"
           LIBSSH2_CONTROL="$(tar -xOzf "$LIBSSH2_IPK" ./control.tar.gz | tar -xzO ./control)"
@@ -938,12 +941,12 @@ jobs:
              grep -aFq 'libssh2_session_diag_timing_enable' "$LIBSSH2_SO" &&
              grep -aFq 'libssh2_session_callback_set2' "$LIBSSH2_SO" &&
              grep -aFq 'libssh2_session_set_chacha_workers' "$LIBSSH2_SO"; then
-            pass "SDK-built patched libssh2 1.11.1 installed; all r49 runtime APIs are present"
+            pass "SDK-built patched libssh2 1.11.1 installed; r49 base APIs plus r51 authentication ordering are present"
           else
             echo "Patched libssh2 install/runtime-symbol verification failed (opkg_rc=$LIBSSH2_RC)."
             opkg status libssh2-1 2>&1 || true
             ls -l "$LIBSSH2_SO" 2>&1 || true
-            fail "SDK-built patched libssh2 1.11.1 was not installed or is missing an r49 runtime API"
+            fail "SDK-built patched libssh2 1.11.1 was not installed or is missing a required libssh2 runtime API"
           fi
 
           echo "========== INSTALL R50 MIPS IPK (OFFLINE) =========="
@@ -955,8 +958,8 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r50'; then
-            pass "opkg installed passwall-ssh-core r50 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r51'; then
+            pass "opkg installed passwall-ssh-core r51 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
           fi
