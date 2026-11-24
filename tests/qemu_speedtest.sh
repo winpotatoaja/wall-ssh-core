@@ -258,6 +258,15 @@ run_diag_self_test() {
         rm -rf "$TEST_ROOT"
         return 1
     fi
+    case "$THREAD_TEST" in
+        100.0\|*) ;;
+        *)
+            echo "DIAG SELF-TEST FAIL: aggregated process CPU should be 100.0%, got $THREAD_TEST"
+            rm -rf "$TEST_ROOT"
+            return 1
+            ;;
+    esac
+
     PROC_TEST=$(awk -v a=68 -v b=168 -v ref="$CPU_REFERENCE" 'BEGIN{d=b-a;if(d<0)d=0;printf "%.1f",(ref>0?100*d/ref:0)}')
     if [ "$PROC_TEST" != "100.0" ]; then
         echo "DIAG SELF-TEST FAIL: process CPU normalization is incorrect: $PROC_TEST"
@@ -290,6 +299,19 @@ run_diag_self_test() {
     SLEEP_TEST=$(elapsed_seconds "$SLEEP_START" "$SLEEP_END")
     if ! awk -v elapsed="$SLEEP_TEST" 'BEGIN { exit !(elapsed >= 0.60 && elapsed <= 1.50) }'; then
         echo "DIAG SELF-TEST FAIL: three nanosleep 250ms calls should total 0.60-1.50s, got $SLEEP_TEST"
+        rm -rf "$TEST_ROOT"
+        return 1
+    fi
+
+    thread_snapshot "$$" "" > "$TEST_ROOT/runtime-threads"
+    if ! grep -Eq "^$$ [0-9]+ ssh_owner$" "$TEST_ROOT/runtime-threads"; then
+        echo "DIAG SELF-TEST FAIL: live /proc thread snapshot did not find the current shell owner"
+        rm -rf "$TEST_ROOT"
+        return 1
+    fi
+    net_snapshot "" > "$TEST_ROOT/runtime-net"
+    if ! grep -Eq '^[^ ]+ [0-9]+ [0-9]+$' "$TEST_ROOT/runtime-net"; then
+        echo "DIAG SELF-TEST FAIL: live /proc/net/dev snapshot returned no RX/TX interface counters"
         rm -rf "$TEST_ROOT"
         return 1
     fi
@@ -474,7 +496,6 @@ main() {
             # the relay path, not the preceding direct download.
             cpu_snapshot > "$RESULT/cpu.prev"
             net_snapshot "" > "$RESULT/net.prev"
-            PREV_TICKS=$(proc_ticks "$CORE_PID")
             thread_snapshot "$CORE_PID" "" > "$RESULT/threads.prev"
             PREV_SAMPLE_MS=$(monotonic_milliseconds)
             curl -4 -sS -fL --connect-timeout 15 --max-time 50 --max-filesize 110000000 --retry 0 \
