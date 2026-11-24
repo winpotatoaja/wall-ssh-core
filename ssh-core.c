@@ -119,11 +119,19 @@ static uint32_t io_worker_count_for_cpu_count(long cpu_count) {
 }
 
 static unsigned int chacha_worker_count_for_cpu_count(long cpu_count) {
-    /* One CPU keeps the sole compute lane on Owner; otherwise every CPU
-     * receives a dedicated ChaCha worker and Owner only coordinates packets. */
+    /*
+     * r50 keeps two ChaCha payload lanes available on a dual-core MT7621.
+     * r49 used one worker for Poly1305 out of a two-worker pool, leaving only
+     * one ChaCha worker to decrypt the entire SSH packet. The Owner waits for
+     * the packet tasks, so a third persistent worker is useful for the short
+     * Poly1305 job while both data workers remain active.
+     *
+     * The pool is capped at four workers: three ChaCha lanes plus one MAC lane.
+     * A single-core device retains the serial Owner path.
+     */
     if (cpu_count <= 1L) return 0U;
-    if (cpu_count > 4L) return 4U;
-    return (unsigned int)cpu_count;
+    if (cpu_count == 2L) return 3U;
+    return 4U;
 }
 
 static long g_detected_cpu_count = 1;
@@ -5101,7 +5109,7 @@ static int core_worker_run(int argc, char **argv) {
     unsigned int chacha_workers =
         chacha_worker_count_for_cpu_count(g_detected_cpu_count);
     libssh2_session_set_chacha_workers(session, chacha_workers);
-    log_blue("[ChaCha] r49 S2C payload: detected_cpus=%ld owner_payload_lanes=%u crypto_workers=%u poly1305_workers=%u chacha_payload_workers=%u active_compute_lanes=%u threshold=4096 bytes",
+    log_blue("[ChaCha] r50 S2C payload: detected_cpus=%ld owner_payload_lanes=%u crypto_workers=%u poly1305_workers=%u chacha_payload_workers=%u active_worker_lanes=%u threshold=4096 bytes",
              g_detected_cpu_count, chacha_workers ? 0U : 1U,
              chacha_workers, chacha_workers >= 2U ? 1U : 0U,
              chacha_workers >= 2U ? chacha_workers - 1U : 0U,
