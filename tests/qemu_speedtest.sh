@@ -194,11 +194,16 @@ run_diag_self_test() {
         return 1
     fi
     SLEEP_START=$(uptime_seconds)
-    sleep 0.05
+    sleep 0.25
+    sleep 0.25
+    sleep 0.25
     SLEEP_END=$(uptime_seconds)
     SLEEP_TEST=$(elapsed_seconds "$SLEEP_START" "$SLEEP_END")
-    if ! awk -v elapsed="$SLEEP_TEST" 'BEGIN { exit !(elapsed >= 0.03 && elapsed <= 0.35) }'; then
-        echo "DIAG SELF-TEST FAIL: fractional sleep/proc uptime timing is not reliable: $SLEEP_TEST"
+    # /proc/uptime has 10 ms resolution. Measure three quarter-second sleeps
+    # cumulatively so scheduler/tick alignment cannot false-fail one short read.
+    # A whole-second-only sleep implementation takes about 3 seconds and fails.
+    if ! awk -v elapsed="$SLEEP_TEST" 'BEGIN { exit !(elapsed >= 0.55 && elapsed <= 1.25) }'; then
+        echo "DIAG SELF-TEST FAIL: three fractional 250ms sleeps should total 0.55-1.25s, got $SLEEP_TEST"
         rm -rf "$TEST_ROOT"
         return 1
     fi
