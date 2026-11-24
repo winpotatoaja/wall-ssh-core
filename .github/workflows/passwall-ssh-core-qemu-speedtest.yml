@@ -9,11 +9,11 @@ on:
   workflow_dispatch:
     inputs:
       sdk_run_id:
-        description: "Successful r49 MIPS SDK workflow run ID"
+        description: "Successful r50 MIPS SDK workflow run ID"
         required: true
         type: string
       source_sha:
-        description: "Exact source commit used by the r49 SDK build"
+        description: "Exact source commit used by the r50 SDK build"
         required: true
         type: string
       verify_only_run_id:
@@ -27,7 +27,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: r49-datapacket-bandwidth-qemu
+  group: r50-datapacket-bandwidth-qemu
   cancel-in-progress: true
 
 jobs:
@@ -100,7 +100,7 @@ jobs:
         if: ${{ steps.sdkmeta.outputs.verify_only_run_id != '' }}
         uses: actions/download-artifact@v4
         with:
-          name: r49-qemu-internet-bandwidth
+          name: r50-qemu-internet-bandwidth
           run-id: ${{ steps.sdkmeta.outputs.verify_only_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -129,7 +129,7 @@ jobs:
           ACTUAL_SOURCE_SHA="$(tr -d '\r\n' < package/build-source.sha)"
           printf '%s' "$EXPECTED_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           test "$ACTUAL_SOURCE_SHA" = "$EXPECTED_SOURCE_SHA"
-          echo "Verified r49 core+patched libssh2 IPK checksums and source SHA: $ACTUAL_SOURCE_SHA"
+          echo "Verified r50 core+patched libssh2 IPK checksums and source SHA: $ACTUAL_SOURCE_SHA"
           test -s package/diag-timer
           (cd package && sha256sum -c diag-timer.sha256)
           readelf -h package/diag-timer | grep -q 'MIPS'
@@ -361,12 +361,12 @@ jobs:
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
               -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
               -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && tar -czf /tmp/r49-internet-bandwidth.tgz qemu-speedtest'
+              'cd /tmp/mips-test && tar -czf /tmp/r50-internet-bandwidth.tgz qemu-speedtest'
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
               -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              root@127.0.0.1:/tmp/r49-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
-            if [ -s bandwidth-results/r49-internet-bandwidth.tgz ]; then
-              tar -xzf bandwidth-results/r49-internet-bandwidth.tgz -C bandwidth-results
+              root@127.0.0.1:/tmp/r50-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r50-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r50-internet-bandwidth.tgz -C bandwidth-results
             fi
           fi
           cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
@@ -487,7 +487,7 @@ jobs:
         run: |
           SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
           if [ -s "$SUMMARY" ]; then
-            echo "## r49 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "## r50 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
           else
@@ -498,7 +498,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r49-qemu-internet-bandwidth
+          name: r50-qemu-internet-bandwidth
           path: bandwidth-results/**
           if-no-files-found: warn
           retention-days: 14
