@@ -72,7 +72,7 @@ thread_snapshot() {
                 comm = "unknown"
 
             stat = $0
-            sub(/^\.*\) /, "", stat)
+            sub(/^.*\) /, "", stat)
             count = split(stat, field, " ")
             ticks = count >= 13 ? field[12] + field[13] : 0
             printf "%s %.0f %s\n", tid, ticks, comm
