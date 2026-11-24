@@ -41,6 +41,7 @@ jobs:
         with:
           sparse-checkout: |
             tests/qemu_speedtest.sh
+            tests/diag_timer.c
             .github/speedtest.trigger
           sparse-checkout-cone-mode: false
 
@@ -71,8 +72,10 @@ jobs:
 
       - name: Self-test benchmark diagnostics before QEMU provisioning
         run: |
+          set -euo pipefail
           sh -n tests/qemu_speedtest.sh
-          sh tests/qemu_speedtest.sh --self-test
+          gcc -std=c11 -Os -Wall -Wextra -Werror tests/diag_timer.c -o "$RUNNER_TEMP/diag-timer-native"
+          DIAG_TIMER="$RUNNER_TEMP/diag-timer-native" sh tests/qemu_speedtest.sh --self-test
 
       - name: Install QEMU host requirements
         if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
