@@ -53,10 +53,10 @@ jobs:
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror -I. tests/client_lifetime_test.c client_lifetime.c -o /tmp/client-lifetime-test
           timeout 10s /tmp/client-lifetime-test | tee test-results/client-lifetime-test-native.log
           gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/client_event_token_test.c -o /tmp/client-event-token-test
-          gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/io_worker_completion_tracker_test.c io_worker_completion_tracker.c io_worker_pool.c -pthread -o /tmp/io-worker-completion-tracker-test
-          timeout 10s /tmp/io-worker-completion-tracker-test | tee test-results/io-worker-completion-tracker-test-native.log
-          timeout 10s /tmp/client-event-token-test | tee test-results/client-event-token-test-native.log
-      - name: Download OpenWrt 24.10.7 SDK
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -I"$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/io_worker_completion_tracker_test.c" "$GITHUB_WORKSPACE/io_worker_completion_tracker.c" "$GITHUB_WORKSPACE/io_worker_pool.c" -pthread -o "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
+          file "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" | tee "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum io-worker-completion-tracker-test > io-worker-completion-tracker.sha256)
         shell: bash
         run: |
           set -euo pipefail
@@ -430,7 +430,7 @@ jobs:
             false
           fi
           (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256 mips32-chacha-asm-test.sha256)
-          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test
+          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test test-results/mips32-chacha-asm-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           test -s test-results/passwall-ssh-core_1.0.0-r53_mipsel_24kc.ipk
@@ -1011,7 +1011,6 @@ jobs:
             fail "installed package version or executable path mismatch"
           fi
 
-          if [ -f "$LOG/spsc-rb-test" ]; then
           if [ -f "$LOG/mips32-chacha-asm-test" ] && cp "$LOG/mips32-chacha-asm-test" /usr/bin/mips32-chacha-asm-test; then
             chmod 0755 /usr/bin/mips32-chacha-asm-test
             if /usr/bin/mips32-chacha-asm-test >"$LOG/mips32-chacha-asm-test.log" 2>&1; then
@@ -1024,6 +1023,8 @@ jobs:
           else
             fail "MIPS32r2 ChaCha assembly KAT helper missing"
           fi
+
+          if [ -f "$LOG/spsc-rb-test" ]; then
 
             chmod 0755 "$LOG/spsc-rb-test"
             if cp "$LOG/spsc-rb-test" /usr/bin/spsc-rb-test; then
