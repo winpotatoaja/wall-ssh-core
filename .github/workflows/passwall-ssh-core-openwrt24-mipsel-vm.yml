@@ -1619,11 +1619,11 @@ jobs:
           cat "$LOG/tcp-ssh-core.log" 2>/dev/null || true
           echo "========== TLS SSH CORE LOG =========="
           cat "$LOG/tls-ssh-core.log" 2>/dev/null || true
-          echo "========== VERIFY R59 INLINE POLY1305 AND CHACHA PHASE TELEMETRY =========="
-          if python3 "$GITHUB_WORKSPACE/tests/r59_perf_log_parser_test.py" "$LOG/tcp-ssh-core.log"; then
-            pass "r59 inline Poly1305 timing and parallel/offload phase metrics are valid"
+          echo "========== R59 TELEMETRY LOG READY FOR HOST VERIFICATION =========="
+          if [ -s "$LOG/tcp-ssh-core.log" ]; then
+            pass "TCP runtime telemetry log captured for runner-side verification"
           else
-            fail "r59 inline Poly1305 timing or parallel/offload ChaCha metrics were missing or inconsistent"
+            fail "TCP runtime telemetry log is missing"
           fi
           echo "MIPS TEST STATUS: $STATUS" | tee "$LOG/test-status"
           exit "$STATUS"
@@ -1633,6 +1633,17 @@ jobs:
             "$GITHUB_WORKSPACE/test-results/run-mips-guest-tests.sh" root@127.0.0.1:/tmp/mips-test/run-tests.sh
           ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null root@127.0.0.1 'sh /tmp/mips-test/run-tests.sh'
+
+          # The guest has no GitHub runner workspace. Retrieve its runtime log
+          # and execute the Python telemetry verifier on the Ubuntu Actions host.
+          mkdir -p "$GITHUB_WORKSPACE/test-results/guest"
+          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            root@127.0.0.1:/tmp/mips-test/tcp-ssh-core.log \
+            "$GITHUB_WORKSPACE/test-results/guest/tcp-ssh-core.log"
+          echo "========== VERIFY R59 INLINE POLY1305 AND CHACHA PHASE TELEMETRY ON RUNNER =========="
+          python3 "$GITHUB_WORKSPACE/tests/r59_perf_log_parser_test.py" \
+            "$GITHUB_WORKSPACE/test-results/guest/tcp-ssh-core.log" \
+            | tee "$GITHUB_WORKSPACE/test-results/r59-perf-log-runtime.log"
 
           echo "========== VERIFY HOST OBSERVED TCP AND TLS HALF-CLOSE =========="
           cat /tmp/mips-http-server.log
