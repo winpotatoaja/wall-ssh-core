@@ -181,10 +181,7 @@ jobs:
           STAGING="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -maxdepth 1 -type d -name 'target-*' -print -quit)"
           test -n "$MIPS_CC"
           test -n "$STAGING"
-          "$MIPS_CC" -std=gnu11 -O2 -static -mips32r2 -mno-mips16 -pthread -ffunction-sections -fdata-sections \
-            -DHAVE_CONFIG_H -DLIBSSH2_OPENSSL -DLIBSSH2_HAVE_ZLIB \
-            -I"$LIBSSH2_CONFIG_DIR" -I"$LIBSSH2_SRC/src" -I"$LIBSSH2_SRC/include" -I"$STAGING/usr/include" \
-            # Link the same MIPS32r2 assembly backends used by libssh2 itself.
+          # Link the same MIPS32r2 assembly backends used by libssh2 itself.
           test -s "$LIBSSH2_SRC/src/chacha-core.S"
           test -s "$LIBSSH2_SRC/src/poly1305-core.S"
           "$MIPS_CC" -std=gnu11 -O2 -static -mips32r2 -mno-mips16 -pthread -ffunction-sections -fdata-sections \
