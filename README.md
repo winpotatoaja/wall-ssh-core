@@ -2,6 +2,26 @@
 
 Terakhir diperbarui: 2026-11-25
 
+## r57 — phase-level ChaCha20-Poly1305 profiling
+
+Branch eksperimen terpisah: \`experiment/r57-chachapoly-profile\`, dibuat dari r56 yang telah dinyatakan selesai. Package release dinaikkan menjadi \`1.0.0-r57\`.
+
+R57 tidak mengubah cipher, format paket, pembagian byte, jumlah worker, atau urutan autentikasi/dekripsi. Perubahan hanya menambahkan pengukuran ketika diagnostik libssh2 aktif:
+
+- \`chacha_poly1305_ns\`: waktu kerja fungsi Poly1305 pada worker (atau jalur serial lama).
+- \`chacha_poly1305_wall_ns\`: wall time fase autentikasi, termasuk wake-up worker dan barrier.
+- \`chacha20_decrypt_wall_ns\`: wall time fase dekripsi sejak task dipublikasikan sampai seluruh worker selesai.
+- \`chacha20_worker_cpu_ns\`: jumlah durasi kerja aktif semua worker dekripsi; nilainya dapat lebih besar dari wall time karena worker berjalan bersamaan.
+- \`chacha20_worker_critical_ns\`: akumulasi durasi worker terlama untuk setiap paket pada interval PERF.
+- \`chacha20_parallel_other_ns\`: sisa waktu dalam envelope pemanggilan parallel setelah wall time fase autentikasi dan dekripsi dikurangi; bukan pengukuran mutex murni.
+- \`chacha20_profile_packets\`: jumlah paket parallel yang masuk ke profil.
+
+Waktu worker diukur hanya jika diagnostik aktif. Ketika diagnostik tidak aktif, tidak ada pembacaan clock tambahan di jalur worker. Log \`[PERF]\` menampilkan nilai dalam mikrodetik. Regresi native menghasilkan beberapa sampel ukuran 4 KiB, 16 KiB, dan 32 KiB dengan 2–4 worker untuk memastikan counter terisi dan konsisten.
+
+**Cara membaca hasil:** bandingkan \`poly_worker_us\` dengan \`poly_wall_us\` untuk melihat biaya worker/wakeup pada fase autentikasi; bandingkan \`worker_cpu_us\`, \`worker_critical_us\`, dan \`chacha_decrypt_wall_us\` untuk melihat overlap serta ketimpangan beban worker. Jangan menjumlahkan worker CPU sebagai wall time. \`parallel_other_us\` berisi sisa setup, pembentukan task, pemeriksaan tag, dan overhead koordinator di dalam interval parallel.
+
+**Validasi:** workflow menjalankan source verifier dan regresi timing native sebelum kompilasi MIPS. Jika SDK sukses, job MT7621 QEMU memakai artifact dari run yang sama. Benchmark bandwidth Internet tidak dijalankan otomatis. Hasil SDK/QEMU r57 masih menunggu; data native host hanya menguji instrumentasi, bukan performa MT7621.
+
 ## r56 — authenticated normalized ChaCha output (skip padding memmove)
 
 Branch eksperimen terpisah: `experiment/r56-skip-padding-memmove`, dibuat dari commit r55 yang sudah lulus SDK dan QEMU standar #820. Core IPK menggunakan release `1.0.0-r56`.
@@ -14,7 +34,7 @@ Regresi native diperluas untuk membandingkan output biasa r55 dan output normali
 
 **Otomasi validasi:** commit bertanda `[mips-stage=sdk]` menjalankan SDK lebih dahulu; QEMU job otomatis memakai artifact dari run yang sama hanya bila SDK sukses. Tes bandwidth Internet tidak dijalankan otomatis.
 
-**Status:** SDK #825 gagal pada anchor lane; #829 gagal pada anchor pemanggilan decrypt `crypt.c`. Keduanya sudah dikoreksi. SDK #833 (`45595039182`) kemudian berhasil menerapkan seluruh patch R43–R56, melewati source verifier, dan test R56 melaporkan `PASS`. Workflow berhenti setelah test tersebut karena `grep` regresi native masih mencari kalimat sukses lama R55, bukan pesan sukses baru R56. Jadi belum terjadi kompilasi libssh2 MIPS, pembuatan IPK, atau QEMU. Pemeriksaan workflow sudah diperbarui agar mencari pesan R56 yang benar; retry berikutnya akan melanjutkan SDK dan QEMU hanya bila SDK lulus. Belum ada klaim speedup; benchmark A/B fisik tetap diperlukan.
+**Status:** R56 dinyatakan selesai oleh pengguna. Detail nomor run dan log final tidak dicantumkan dalam catatan ini. Tidak ada klaim peningkatan throughput; pengukuran A/B pada router MT7621 fisik tetap diperlukan.
 
 ## r55 — authenticated out-of-place ChaCha20-Poly1305 decrypt
 
