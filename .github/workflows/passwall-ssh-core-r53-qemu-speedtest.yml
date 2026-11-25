@@ -1,0 +1,505 @@
+name: r53 Datapacket Internet Bandwidth Benchmark (QEMU)
+
+on:
+  push:
+    branches:
+      - experiment/r53-mips32-crypto-path
+    paths:
+      - ".github/speedtest-r53.trigger"
+  workflow_dispatch:
+    inputs:
+      sdk_run_id:
+        description: "Successful r53 MIPS SDK workflow run ID"
+        required: true
+        type: string
+      source_sha:
+        description: "Exact source commit used by the r53 SDK build"
+        required: true
+        type: string
+      verify_only_run_id:
+        description: "Existing benchmark run ID to validate from its uploaded artifact; skips QEMU and all network transfers"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: r53-datapacket-bandwidth-qemu
+  cancel-in-progress: true
+
+jobs:
+  internet-bandwidth:
+    name: Download Datapacket direct vs r53 SOCKS5
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout benchmark script only
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            tests/qemu_speedtest_r53.sh
+            tests/diag_timer.c
+            .github/speedtest-r53.trigger
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve SDK artifact provenance
+        id: sdkmeta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERIFY_ONLY_RUN_ID=''
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            SDK_RUN_ID='${{ github.event.inputs.sdk_run_id }}'
+            SOURCE_SHA='${{ github.event.inputs.source_sha }}'
+            VERIFY_ONLY_RUN_ID='${{ github.event.inputs.verify_only_run_id }}'
+          else
+            SDK_RUN_ID="$(sed -n 's/^sdk_run_id=//p' .github/speedtest-r53.trigger | head -n1)"
+            SOURCE_SHA="$(sed -n 's/^source_sha=//p' .github/speedtest-r53.trigger | head -n1)"
+            VERIFY_ONLY_RUN_ID="$(sed -n 's/^verify_only_run_id=//p' .github/speedtest-r53.trigger | head -n1)"
+          fi
+          [[ "$SDK_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ -n "$VERIFY_ONLY_RUN_ID" ]]; then
+            [[ "$VERIFY_ONLY_RUN_ID" =~ ^[0-9]+$ ]]
+            echo "Verification-only mode: using existing bandwidth artifact from run $VERIFY_ONLY_RUN_ID; no QEMU/network test will be executed."
+          fi
+          echo "sdk_run_id=$SDK_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "verify_only_run_id=$VERIFY_ONLY_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Self-test benchmark diagnostics before QEMU provisioning
+        run: |
+          set -euo pipefail
+          sh -n tests/qemu_speedtest_r53.sh
+          gcc -std=c11 -Os -Wall -Wextra -Werror tests/diag_timer.c -o "$RUNNER_TEMP/diag-timer-native"
+          DIAG_TIMER="$RUNNER_TEMP/diag-timer-native" sh tests/qemu_speedtest_r53.sh --self-test
+
+      - name: Install QEMU host requirements
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl unzip zstd python3 openssh-client openssh-server \
+            socat mtd-utils gdisk wget ca-certificates binutils file gawk
+
+      - name: Download the source-matched r53 MIPS package
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r53-ipk
+          run-id: ${{ steps.sdkmeta.outputs.sdk_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          path: package
+
+      - name: Download previous benchmark artifact for verification only
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: r53-qemu-internet-bandwidth
+          run-id: ${{ steps.sdkmeta.outputs.verify_only_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          path: bandwidth-results
+
+      - name: Prepare MT7621 QEMU and OpenWrt firmware
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ steps.sdkmeta.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          IPK="$(find package -maxdepth 1 -type f -name 'passwall-ssh-core_1.0.0-r53_mipsel_24kc.ipk' -print -quit)"
+          test -n "$IPK"
+          CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
+          printf '%s\n' "$CONTROL" | grep -Fq 'Package: passwall-ssh-core'
+          printf '%s\n' "$CONTROL" | grep -Fq 'Version: 1.0.0-r53'
+          printf '%s\n' "$CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
+          LIBSSH2_IPK="$(find package -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
+          test -n "$LIBSSH2_IPK"
+          LIBSSH2_CONTROL="$(tar -xOzf "$LIBSSH2_IPK" ./control.tar.gz | tar -xzO ./control)"
+          printf '%s\n' "$LIBSSH2_CONTROL" | grep -Fq 'Package: libssh2-1'
+          printf '%s\n' "$LIBSSH2_CONTROL" | grep -Fq 'Version: 1.11.1-r1'
+          printf '%s\n' "$LIBSSH2_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
+          test -s package/ipk.sha256
+          (cd package && sha256sum -c ipk.sha256)
+          ACTUAL_SOURCE_SHA="$(tr -d '\r\n' < package/build-source.sha)"
+          printf '%s' "$EXPECTED_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+          test "$ACTUAL_SOURCE_SHA" = "$EXPECTED_SOURCE_SHA"
+          echo "Verified r53 core+patched libssh2 IPK checksums and source SHA: $ACTUAL_SOURCE_SHA"
+          test -s package/diag-timer
+          (cd package && sha256sum -c diag-timer.sha256)
+          readelf -h package/diag-timer | grep -q 'MIPS'
+          chmod 0755 package/diag-timer
+          echo "Verified static MIPS monotonic/nanosleep helper."
+          mkdir -p emulator
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-linux-x86_64.tar.gz \
+            -o /tmp/router-emulator.tar.gz
+          echo "8ae277cc0fecfb99da3a452fb4226f272ee6d571f362898ca2176513f3adb0b7  /tmp/router-emulator.tar.gz" | sha256sum -c -
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-presets.zip \
+            -o /tmp/router-emulator-presets.zip
+          echo "8146b505a9d75407c4504bf90638d7e3d3e3ccfc529d09c45a40b2b6868604a2  /tmp/router-emulator-presets.zip" | sha256sum -c -
+          tar -xzf /tmp/router-emulator.tar.gz -C emulator
+          EMU_DIR="$(find emulator -maxdepth 3 -type f -name emulator.sh -print -quit | xargs dirname)"
+          test -n "$EMU_DIR"
+          unzip -q /tmp/router-emulator-presets.zip -d "$EMU_DIR"
+          if [ -d "$EMU_DIR/Router-Emulator/presets" ]; then
+            mkdir -p "$EMU_DIR/presets"
+            cp -a "$EMU_DIR/Router-Emulator/presets/." "$EMU_DIR/presets/"
+          fi
+          QEMU_MIPSEL="$EMU_DIR/qemu/qemu-system-mipsel"
+          if [ ! -x "$QEMU_MIPSEL" ]; then
+            echo "Missing executable QEMU MIPS binary: $QEMU_MIPSEL"
+            ls -la "$EMU_DIR/qemu" 2>&1 || true
+            false
+          fi
+          "$QEMU_MIPSEL" --version
+          if "$QEMU_MIPSEL" -M help > /tmp/mips-qemu-machines.txt 2>/tmp/mips-qemu-machines.err; then
+            echo "QEMU machine help succeeded."
+          else
+            QEMU_RC=$?
+            echo "QEMU machine help failed with status $QEMU_RC"
+            cat /tmp/mips-qemu-machines.err
+            cat /tmp/mips-qemu-machines.txt
+            false
+          fi
+          cat /tmp/mips-qemu-machines.txt
+          if ! grep -qi 'mt7621-router' /tmp/mips-qemu-machines.txt; then
+            echo "QEMU binary does not advertise the MT7621 machine."
+            false
+          fi
+          PRESET_FILE="$EMU_DIR/presets/zbtlink-zbt-wg3526-16m.ini"
+          if [ ! -f "$PRESET_FILE" ]; then
+            echo "ZBT-WG3526-16M preset not found in downloaded preset archive."
+            find "$EMU_DIR" -maxdepth 4 -type f -iname '*wg3526*' -print
+            false
+          fi
+          echo "Preset file: $PRESET_FILE"
+          EMU_DIR="$(readlink -f "$EMU_DIR")"
+          echo "EMU_DIR=$EMU_DIR" >> "$GITHUB_ENV"
+
+          IB_BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
+          IB_FILE="openwrt-imagebuilder-24.10.7-ramips-mt7621.Linux-x86_64.tar.zst"
+          curl -fL --retry 3 --connect-timeout 20 --max-time 1200 "$IB_BASE/$IB_FILE" -o /tmp/openwrt-imagebuilder.tar.zst
+          echo "19f321d10a78a8ca768b934243789c6b45c003374618a3c0aa51c06e06553fcc  /tmp/openwrt-imagebuilder.tar.zst" | sha256sum -c -
+          tar --zstd -xf /tmp/openwrt-imagebuilder.tar.zst
+          IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-24.10.7-ramips-mt7621*' -print -quit)"
+          test -n "$IB_DIR"
+          IB_DIR="$(readlink -f "$IB_DIR")"
+          test -f "$IB_DIR/Makefile"
+          test -f "$IB_DIR/rules.mk"
+          echo "ImageBuilder rules.mk found."
+          echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
+
+          # ImageBuilder's checksum manifest is not consumed by the QEMU test.
+          # Keep calculating it, but do not let that ancillary target prevent
+          # use of a firmware image that is subsequently checked below.
+          python3 - "$IB_DIR/Makefile" <<'PY'
+          from pathlib import Path
+          import sys
+
+          makefile = Path(sys.argv[1])
+          content = makefile.read_text()
+          original = "\t$(MAKE) -s checksum\n"
+          replacement = "\t$(MAKE) -s checksum || echo 'WARNING: ImageBuilder checksum manifest failed; validating firmware image directly for QEMU'\n"
+          if content.count(original) == 1:
+              makefile.write_text(content.replace(original, replacement))
+              print("ImageBuilder checksum target made non-fatal for this QEMU-only workflow.")
+          else:
+              print("Could not uniquely locate ImageBuilder checksum target.")
+          PY
+          if ! grep -Fq "checksum || echo 'WARNING: ImageBuilder checksum manifest failed" "$IB_DIR/Makefile"; then
+            echo "ImageBuilder checksum hook patch was not applied."
+            false
+          fi
+
+          ssh-keygen -q -t ed25519 -N "" -f "$RUNNER_TEMP/mips-vm-key"
+          FILES_DIR="$RUNNER_TEMP/mips-image-files"
+          mkdir -p "$FILES_DIR/etc/dropbear" "$FILES_DIR/root/.ssh"
+          install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/etc/dropbear/authorized_keys"
+          install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/root/.ssh/authorized_keys"
+          cd "$IB_DIR"
+          make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2" FILES="$FILES_DIR"
+          echo "ImageBuilder completed; available firmware images:"
+          find bin/targets/ramips/mt7621 -maxdepth 1 -type f -printf '%f (%s bytes)\\n' | sort
+          SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*sysupgrade.bin' -print -quit)"
+          if [ -z "$SYSUP" ]; then
+            echo "No sysupgrade image was produced by ImageBuilder."
+            find bin/targets/ramips/mt7621 -maxdepth 2 -type f -print
+            false
+          fi
+          SYSUP="$(readlink -f "$SYSUP")"
+          test -s "$SYSUP"
+          echo "Selected firmware image: $SYSUP"
+          sha256sum "$SYSUP"
+
+          cd "$EMU_DIR"
+          BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
+          UBOOT_REL="u-boot-mt7621_zbtlink_zbt-wg3526-16m/u-boot-mt7621.bin"
+          mkdir -p "$EMU_DIR/firmware/24.10.7/$(dirname "$UBOOT_REL")"
+          curl -fL --retry 3 --connect-timeout 20 --max-time 300 \
+            "$BASE/$UBOOT_REL" \
+            -o "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
+          test -s "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
+          echo "U-Boot image downloaded successfully."
+          FLASH_DIR="$EMU_DIR/nor-zbt-wg3526-16m"
+          python3 "$EMU_DIR/tools/mknand.py" --prefix mt7621 nor -o "$FLASH_DIR" \
+            --size-mb 16 \
+            --parts "u-boot:0x30000,u-boot-env:0x10000,factory:0x10000,firmware:-" \
+            --bl2 "$EMU_DIR/firmware/24.10.7/$UBOOT_REL" \
+            --sysupgrade "$SYSUP" \
+            --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
+          test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
+          test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
+          echo "r53 package and MT7621A QEMU firmware are ready."
+
+      - name: Start SSH endpoint for real internet forwarding
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo useradd -m -s /bin/bash sshcore-ci
+          echo 'sshcore-ci:OpenWrt-CI-SSH-Only-2026' | sudo chpasswd
+          sudo ssh-keygen -A
+          sudo install -d -m 0755 -o root -g root /run/sshd
+          sudo /usr/sbin/sshd -D -e -f /dev/null \
+            -p 2222 \
+            -o PidFile=/tmp/mips-sshd.pid \
+            -o HostKey=/etc/ssh/ssh_host_ed25519_key \
+            -o ListenAddress=0.0.0.0 \
+            -o PasswordAuthentication=yes \
+            -o KbdInteractiveAuthentication=no \
+            -o PubkeyAuthentication=no \
+            -o PermitRootLogin=no \
+            -o UsePAM=no \
+            -o StrictModes=no \
+            -o AllowUsers=sshcore-ci \
+            -o AllowTcpForwarding=yes \
+            -o PermitOpen=any \
+            -o MaxSessions=64 \
+            -o LogLevel=VERBOSE >/tmp/mips-sshd.log 2>&1 &
+          echo "$!" > /tmp/mips-sshd.pid
+          for attempt in $(seq 1 30); do
+            if timeout 2 bash -c '</dev/tcp/127.0.0.1/2222' 2>/dev/null; then
+              echo "SSH forwarding endpoint is ready."
+              break
+            fi
+            sleep 1
+          done
+          timeout 2 bash -c '</dev/tcp/127.0.0.1/2222'
+
+      - name: Boot MT7621 and run only the internet bandwidth benchmark
+        if: ${{ steps.sdkmeta.outputs.verify_only_run_id == '' }}
+        shell: bash
+        timeout-minutes: 65
+        run: |
+          set -euo pipefail
+          cd "$EMU_DIR"
+          mkdir -p work
+          setsid ./emulator.sh -P zbtlink-zbt-wg3526-16m -w user -l user \
+            -o "lan-forwards=8022:22" -u none \
+            -S work/mips-console.sock -L work/logs >work/mips-emulator.log 2>&1 &
+          EMU_PID=$!
+          echo "$EMU_PID" > "$GITHUB_WORKSPACE/mips-emulator.pid"
+          SSH_KEY="$RUNNER_TEMP/mips-vm-key"
+          READY=0
+          for attempt in $(seq 1 360); do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then
+              cat work/mips-emulator.log
+              false
+            fi
+            if ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o ConnectTimeout=5 \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              root@127.0.0.1 'echo MIPS_GUEST_READY' 2>/dev/null | grep -q MIPS_GUEST_READY; then
+              READY=1
+              break
+            fi
+            sleep 2
+          done
+          test "$READY" -eq 1
+          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 'mkdir -p /tmp/mips-test'
+          IPK="$(find "$GITHUB_WORKSPACE/package" -maxdepth 1 -type f -name 'passwall-ssh-core*.ipk' -print -quit)"
+          LIBSSH2_IPK="$(find "$GITHUB_WORKSPACE/package" -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
+          test -n "$IPK"
+          test -n "$LIBSSH2_IPK"
+          cat > "$RUNNER_TEMP/tcp.env" <<'TCP_ENV'
+          TRANSPORT=TCP
+          HOST=10.0.2.2
+          HOST_PORT=2222
+          USERNAME=sshcore-ci
+          PASSWORD=OpenWrt-CI-SSH-Only-2026
+          DELAY=0
+          FIX_CRLF=1
+          SOCKS_ADDR=127.0.0.1:1080
+          KEEPALIVE=15
+          VERIFY_TLS=0
+          MAX_CLIENTS=32
+          IDLE_TIMEOUT=600
+          WORKERS=2
+          LOG_BACKPRESSURE=1
+          TCP_ENV
+          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            "$IPK" "$LIBSSH2_IPK" "$GITHUB_WORKSPACE/package/diag-timer" "$GITHUB_WORKSPACE/tests/qemu_speedtest_r53.sh" "$RUNNER_TEMP/tcp.env" \
+            root@127.0.0.1:/tmp/mips-test/
+          ssh -i "$SSH_KEY" -p 8022 -o BatchMode=yes -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
+            "opkg --force-reinstall install /tmp/mips-test/libssh2-1_1.11.1-r1_mipsel_24kc.ipk && grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 && opkg install /tmp/mips-test/passwall-ssh-core*.ipk && chmod 0700 /tmp/mips-test/diag-timer /tmp/mips-test/qemu_speedtest.sh && /tmp/mips-test/qemu_speedtest.sh --self-test && /tmp/mips-test/qemu_speedtest.sh"
+
+      - name: Collect benchmark results
+        if: ${{ always() && steps.sdkmeta.outputs.verify_only_run_id == '' }}
+        shell: bash
+        run: |
+          set +e
+          mkdir -p bandwidth-results
+          if [ -f "$RUNNER_TEMP/mips-vm-key" ]; then
+            ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes \
+              -o ConnectTimeout=3 -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
+              'cd /tmp/mips-test && tar -czf /tmp/r53-internet-bandwidth.tgz qemu-speedtest'
+            scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=3 \
+              -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              root@127.0.0.1:/tmp/r53-internet-bandwidth.tgz bandwidth-results/ 2>/dev/null
+            if [ -s bandwidth-results/r53-internet-bandwidth.tgz ]; then
+              tar -xzf bandwidth-results/r53-internet-bandwidth.tgz -C bandwidth-results
+            fi
+          fi
+          cp /tmp/mips-sshd.log bandwidth-results/host-sshd.log 2>/dev/null
+          if [ -n "${EMU_DIR:-}" ]; then
+            cp "$EMU_DIR/work/mips-emulator.log" bandwidth-results/mips-emulator.log 2>/dev/null
+            if [ -f "$GITHUB_WORKSPACE/mips-emulator.pid" ]; then
+              kill -- "-$(cat "$GITHUB_WORKSPACE/mips-emulator.pid")" 2>/dev/null
+            fi
+            pkill -x qemu-system-mipsel 2>/dev/null || true
+          fi
+
+      - name: Verify exactly one SSH authentication and session
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          CORE_LOG=bandwidth-results/qemu-speedtest/core.log
+          CORE_STDOUT=bandwidth-results/qemu-speedtest/core-stdout.log
+          HOST_LOG=bandwidth-results/host-sshd.log
+          test -s "$CORE_LOG"
+          test -s "$CORE_STDOUT"
+          test -s "$HOST_LOG"
+          CORE_AUTH_COUNT="$(grep -cF '[AUTH-DIAG] authentication accepted' "$CORE_LOG" || true)"
+          SESSION_KEY_COUNT="$(grep -cF 'Session Keys Established' "$CORE_LOG" || true)"
+          HOST_AUTH_COUNT="$(grep -cF 'Accepted password for sshcore-ci' "$HOST_LOG" || true)"
+          SINGLE_SESSION_COUNT="$(grep -cF 'SSH_sessions=1 mode=single-session' "$CORE_STDOUT" || true)"
+          test "$CORE_AUTH_COUNT" -eq 1
+          test "$SESSION_KEY_COUNT" -eq 1
+          test "$HOST_AUTH_COUNT" -eq 1
+          test "$SINGLE_SESSION_COUNT" -eq 1
+          echo "PASS: exactly one host authentication, one core authentication, one key establishment and one SSH session."
+      - name: Verify negotiated ChaCha20-Poly1305 SSH cipher
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          CORE_LOG=bandwidth-results/qemu-speedtest/core.log
+          test -s "$CORE_LOG"
+          grep -Fq 'SSH cipher preference: chacha20-poly1305@openssh.com first' "$CORE_LOG"
+          grep -Fq 'SSH Cipher: chacha20-poly1305@openssh.com' "$CORE_LOG"
+          echo "PASS: MT7621 negotiated upstream libssh2 ChaCha20-Poly1305."
+
+      - name: Verify S2C timing instrumentation
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          CORE_LOG=bandwidth-results/qemu-speedtest/core.log
+          SAMPLE_LOG=bandwidth-results/qemu-speedtest/samples.log
+          test -s "$CORE_LOG"
+          test -s "$SAMPLE_LOG"
+          ENV_LOG=bandwidth-results/qemu-speedtest/environment.log
+          test -s "$ENV_LOG"
+          grep -Fq 'VCPU_COUNT=4' "$ENV_LOG"
+          grep -Fq 'CPU_TOPOLOGY_PHYSICAL_CORES=2' "$ENV_LOG"
+          grep -Fq 'SAMPLE_INTERVAL_MS=250' "$ENV_LOG"
+          grep -Fq 'SAMPLE_CLOCK=clock_gettime(CLOCK_MONOTONIC)' "$ENV_LOG"
+                    for worker_id in 0 1 2; do
+            grep -Eq "tid=[0-9]+/chacha-dec${worker_id}:([1-9][0-9]*([.][0-9]+)?|0[.]([0-9]*[1-9][0-9]*))%" "$SAMPLE_LOG"
+          done
+          # Require measured CPU activity for all three reused ChaCha workers after the Poly1305-first phase.
+          grep -Eq '\[ChaCha\] r51 S2C payload: detected_cpus=4 detected_cores=2 owner_payload_lanes=0 crypto_workers=3 poly1305_workers=1 chacha_payload_workers=3 active_worker_lanes=3 threshold=4096 bytes' "$CORE_LOG"
+          SAMPLE_COUNT=$(grep -c '^sample=' "$SAMPLE_LOG")
+          test "$SAMPLE_COUNT" -ge 10
+          awk '
+            /^sample=/ {
+              elapsed=$2
+              sub(/^elapsed=/, "", elapsed)
+              sub(/s$/, "", elapsed)
+              sample[n++] = elapsed + 0
+            }
+            END {
+              if(n < 20) exit 1
+              for(i=0; i<n; i++)
+                for(j=i+1; j<n; j++)
+                  if(sample[j] < sample[i]) {
+                    t=sample[i]; sample[i]=sample[j]; sample[j]=t
+                  }
+              median=sample[int(n/2)]
+              maximum=sample[n-1]
+              if(median > 0.30 || maximum > 0.35) exit 1
+              printf "PASS: %d samples; median %.3f s, max %.3f s (250 ms target)\\n", n, median, maximum
+            }
+          ' "$SAMPLE_LOG"
+          awk '
+            /^\[PERF\]/ &&
+            /s2c_read_bytes=[1-9][0-9]*/ &&
+            /perf_s2c_read_us=[1-9][0-9]*/ &&
+            /perf_ssh_recv_s2c_cb_us=[0-9]+/ &&
+            /perf_s2c_internal_us=[0-9]+/ &&
+            /perf_ssh_recv_syscall_us=[0-9]+/ &&
+            /perf_socks_tx_us=[1-9][0-9]*/ { found=1 }
+            END { exit !found }
+          ' "$CORE_LOG"
+          grep -Fq '[LIBSSH2-DIAG] r49 timing instrumentation enabled (libssh2 1.11.1; worker-only ChaCha20 plus overlapped Poly1305 S2C)' "$CORE_LOG"
+          # log_raw's 2 KiB message buffer truncates the final parallel_bytes/parallel_packets fields.
+          # Verify parallel execution using the visible parallel_us counter plus nonzero CPU for each worker TID above.
+          awk '
+            /^\[PERF\]/ &&
+            /libssh2_decrypt_path_calls=[0-9]+/ &&
+            /libssh2_decrypt_path_bytes=[0-9]+/ &&
+            /libssh2_transport_read_us=[1-9][0-9]*/ &&
+            /libssh2_transport_other_us=[0-9]+/ &&
+            /libssh2_packet_drain_us=[0-9]+/ &&
+            /libssh2_packet_queue_peak_bytes=[1-9][0-9]*/ &&
+            /libssh2_chacha_workers_requested=3/ &&
+            /libssh2_chacha_workers_active=3/ &&
+            /libssh2_chacha_poly1305_us=[1-9][0-9]*/ &&
+            /libssh2_chacha_poly1305_offloaded_packets=[1-9][0-9]*/ &&
+            /libssh2_chacha20_parallel_us=[1-9][0-9]*/ { found=1 }
+            END { exit !found }
+          ' "$CORE_LOG"
+          echo "PASS: r53 two-core crypto worker plan, 250 ms sampling and S2C counters were recorded."
+
+      - name: Publish benchmark results in Actions UI
+        if: always()
+        shell: bash
+        run: |
+          SUMMARY="bandwidth-results/qemu-speedtest/summary.txt"
+          if [ -s "$SUMMARY" ]; then
+            echo "## r53 100 MB Internet Speedtest Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            cat "$SUMMARY" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Benchmark summary file was not collected." | tee "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload bandwidth benchmark artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r53-qemu-internet-bandwidth
+          path: bandwidth-results/**
+          if-no-files-found: warn
+          retention-days: 14
