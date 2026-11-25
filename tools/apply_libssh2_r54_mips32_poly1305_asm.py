@@ -121,9 +121,9 @@ def patch(root: Path, project_root: Path) -> None:
 
     asm_text = asm_path.read_text()
     for required in (
-        ".globl poly1305_init",
-        ".globl poly1305_blocks",
-        ".globl poly1305_emit",
+        ".globl\tpoly1305_init",
+        ".globl\tpoly1305_blocks",
+        ".globl\tpoly1305_emit",
         "maddu",
         "multu",
     ):
@@ -152,7 +152,9 @@ def patch(root: Path, project_root: Path) -> None:
     poly = replace_once(
         poly,
         '#include "poly1305.h"\n',
-        '#include "poly1305.h"\n\n' + guard,
+        '#include "poly1305.h"\n\n'
+        "void poly1305_auth_portable(unsigned char out[POLY1305_TAGLEN], const unsigned char *m, size_t inlen, const unsigned char key[POLY1305_KEYLEN]);\n\n"
+        + guard,
         "select the backend only on 32-bit MIPS ISA revisions 2-5 outside MIPS16",
     )
     poly = poly.rstrip() + "\n\n" + WRAPPER.lstrip()
