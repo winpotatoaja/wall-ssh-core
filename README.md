@@ -2,6 +2,20 @@
 
 Terakhir diperbarui: 2026-11-25
 
+## r55 — authenticated out-of-place ChaCha20-Poly1305 decrypt
+
+Branch eksperimen terpisah: `experiment/r55-outofplace-chacha-decrypt`, dibuat dari r54 setelah SDK #794 lulus dan pengguna mengonfirmasi QEMU r54 sukses. Core IPK dinaikkan menjadi `1.0.0-r55`.
+
+R55 mengubah hanya jalur inbound cipher `chacha20-poly1305@openssh.com` pada libssh2 1.11.1. Transport sekarang mengautentikasi packet wire asli (`4-byte packet-length AAD + ciphertext`) sebelum menulis plaintext. Setelah tag Poly1305 cocok, dekripsi langsung menulis body packet ke `p->wptr` / alokasi `p->payload`. Jalur khusus ini melewati salinan `memcpy(p->wptr, &p->buf[p->readidx], numbytes)` dan tidak menghasilkan ulang empat byte AAD yang tidak dipakai parser. Byte packet-length dan ciphertext sumber tetap utuh sampai selesai diproses.
+
+Pada jalur worker, Poly1305 tetap menjadi fase pertama yang membaca pointer ciphertext asli; hanya setelah perbandingan tag selesai, worker ChaCha diberi destination body-only (offset output AAD = 0). Jalur serial/small-packet mengikuti urutan autentikasi yang sama. API internal memisahkan `aadlen` (panjang AAD yang diautentikasi) dari `dest_aadlen` (panjang AAD yang ditulis ke output). Mode enkripsi dan mode decrypt in-place yang lama tetap memakai offset 4; mode transport r55 memakai offset 0. Cipher selain OpenSSH ChaCha20-Poly1305 tetap memakai callback dan copy path sebelumnya.
+
+Uji regresi diperluas untuk payload 0, 1, 63, 64, 65, 4095, 4096, 4097, 8191, 8192, 16384, dan 32768 byte dengan 1–4 worker. Uji memeriksa mode in-place, mode body-only out-of-place, source ciphertext tidak berubah, plaintext cocok, serta bahwa tag salah tidak mengubah source maupun destination. Source verifier juga memastikan jalur transport hanya melewati copy lama untuk cipher ChaCha tersebut dan bahwa normalisasi byte padding di `fullpacket()` tetap belum diubah.
+
+**Otomasi validasi:** commit bertanda `[mips-stage=sdk]` menjalankan SDK lebih dahulu. QEMU job bergantung pada job SDK dan otomatis mengambil artifact dari run yang sama hanya bila SDK sukses; ketika SDK gagal, QEMU dilewati. Pemicu QEMU manual lama tetap tersedia. Tes bandwidth Internet 100 MB tidak ikut dijalankan otomatis.
+
+**Status:** perubahan r55 dan workflow sudah disiapkan; SDK/QEMU r55 belum dijalankan. R55 mengurangi satu packet copy di jalur inbound ChaCha, tetapi belum ada klaim throughput/latency membaik. Hasil yang menentukan tetap benchmark A/B pada router MT7621 fisik. Penghapusan `memmove` satu-byte untuk padding, perubahan worker synchronization/topology, packet queue, dan threshold dispatch sengaja tidak dicampur ke r55.
+
 ## r54 — eksperimen Poly1305 MIPS32r2/o32 assembly (SDK dan QEMU lulus)
 
 Branch eksperimen terpisah: `experiment/r54-mips32-poly1305-asm`, dibuat dari r53 yang sudah lulus QEMU standar #767. Release core IPK dinaikkan menjadi `1.0.0-r54`; source ChaCha20 r53 dan hardening autentikasi-dulu r51/lifecycle r52 tetap dipertahankan.
