@@ -79,7 +79,7 @@ jobs:
           set -euo pipefail
           for VERSION in r59 r62; do
             DIR="package-$VERSION"
-            CORE_IPK="$(find "$DIR" -maxdepth 1 -type f -name "passwall-ssh-core_1.0.0-$VERSION_mipsel_24kc.ipk" -print -quit)"
+            CORE_IPK="$(find "$DIR" -maxdepth 1 -type f -name "passwall-ssh-core_1.0.0-${VERSION}_mipsel_24kc.ipk" -print -quit)"
             LIBSSH2_IPK="$(find "$DIR" -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
             test -n "$CORE_IPK"
             test -n "$LIBSSH2_IPK"
@@ -302,13 +302,14 @@ jobs:
             LABEL="$1"; REPEAT="$2"
             DEST="qemu-speedtest-$LABEL-rep$REPEAT"
             REMOTE="set -u
-              opkg --force-reinstall --force-downgrade install /tmp/mips-test/package-$LABEL/libssh2-1_1.11.1-r1_mipsel_24kc.ipk || exit \\$?
-              opkg --force-reinstall --force-downgrade install /tmp/mips-test/package-$LABEL/passwall-ssh-core_1.0.0-$LABEL_mipsel_24kc.ipk || exit \\$?
-              grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 || exit \\$?
+              rm -rf /tmp/mips-test/qemu-speedtest
+              opkg --force-reinstall --force-downgrade install /tmp/mips-test/package-${LABEL}/libssh2-1_1.11.1-r1_mipsel_24kc.ipk || exit \$?
+              opkg --force-reinstall --force-downgrade install /tmp/mips-test/package-${LABEL}/passwall-ssh-core_1.0.0-${LABEL}_mipsel_24kc.ipk || exit \$?
+              grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 || exit \$?
               /tmp/mips-test/qemu_speedtest_r53.sh
-              RC=\\$?
+              RC=\$?
               mv /tmp/mips-test/qemu-speedtest /tmp/mips-test/$DEST
-              exit \\$RC"
+              exit \$RC"
             RC=0
             if ssh "${SSH_OPTS[@]}" root@127.0.0.1 "$REMOTE"; then RC=0; else RC=$?; fi
             echo "$LABEL $REPEAT $RC" | tee -a "$GITHUB_WORKSPACE/benchmark-status.txt"
