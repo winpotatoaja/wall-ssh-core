@@ -8,8 +8,8 @@ Target akhir rangkaian ini adalah **r62 sebagai kandidat uji bandwidth MT7621A f
 
 | Milestone | Status | Fokus dan keluaran yang diwajibkan |
 |---|---|---|
-| **r60 — worker hot-path cleanup** | Sedang dikerjakan | Hapus tugas Poly1305 worker yang sudah tidak dipakai sejak r59, hapus pointer borrowed `const u8 *poly_input` beserta field dan reset metadata Poly1305 worker (alokasi snapshot sudah dihapus sejak r51), pindahkan penamaan thread menjadi sekali saat startup, dan hilangkan completion broadcast prematur ketika \`active_workers == 0\`. Pertahankan autentikasi-sebelum-dekripsi, normalisasi padding r56, profiling r57, dan lifecycle join r52. Tambahkan source-regression khusus r60; lulus native + SDK + QEMU. |
-| **r61 — packet queue dan backpressure** | Direncanakan | Audit jalur read-ahead \`_libssh2_channel_read()\`, antrean \`session->packets\`, ring S2C, serta kompaksi \`p->buf\`. Batasi pembacaan lanjutan saat kapasitas penerima sudah penuh hanya setelah memastikan control packet, WINDOW_ADJUST, multi-channel fairness, EOF, dan rekey tetap berjalan. Evaluasi \`PACKETBUFSIZE\` dan batas TLS receive secara terpisah; jangan menggabungkan perubahan yang belum terbukti. Tambahkan telemetry/test untuk peak queue dan kondisi backpressure; lulus native + SDK + QEMU. |
+| **r60 — worker hot-path cleanup** | Lulus Actions #860 (SDK + QEMU) | Hapus tugas Poly1305 worker yang sudah tidak dipakai sejak r59, hapus pointer borrowed `const u8 *poly_input` beserta field dan reset metadata Poly1305 worker (alokasi snapshot sudah dihapus sejak r51), pindahkan penamaan thread menjadi sekali saat startup, dan hilangkan completion broadcast prematur ketika \`active_workers == 0\`. Pertahankan autentikasi-sebelum-dekripsi, normalisasi padding r56, profiling r57, dan lifecycle join r52. Tambahkan source-regression khusus r60; lulus native + SDK + QEMU. |
+| **r61 — packet queue dan backpressure** | Sedang dikerjakan | Batasi advertised receive window hanya untuk channel `direct-tcpip` menjadi 512 KiB (default libssh2 2 MiB), dua kali ring S2C 256 KiB, agar antrean payload per-channel dibatasi kredit SSH. Pertahankan packet size 32 KiB, WINDOW_ADJUST, control packet, multi-channel fairness, EOF, dan rekey; jangan ubah `PACKETBUFSIZE`, kompaksi `p->buf`, atau TLS receive sampai ada pengukuran terpisah. Verifikasi nilai window aktual pada TCP/TLS runtime; lulus native + SDK + QEMU. |
 | **r62 — runtime A/B controls dan code freeze** | Direncanakan | Tambahkan konfigurasi runtime tervalidasi untuk crypto worker \`0/1/2/3\` dan threshold \`4/8/16/24/32 KiB\`, tanpa rebuild untuk setiap varian. Catat nilai konfigurasi aktual dan fallback topology. Uji seluruh pilihan pada regresi/QEMU, pertahankan default konservatif sampai ada data fisik, lalu bekukan sumber kandidat r62. Lulus native + SDK + QEMU standar; tanpa bandwidth benchmark otomatis. |
 | **Setelah r62 — bandwidth dan audit eksternal** | Menunggu r62 | Jalankan test bandwidth terpisah pada r62 dengan baseline yang sama, unduhan berulang, hash/integritas, throughput per interval, jitter/stall, serta CPU tiap thread. Setelah hasil tersedia, kirim source inti, patcher, README/CHANGELOG, konfigurasi dan log relevan ke Copilot, Gemini, dan Grok untuk audit independen. Cocokkan setiap temuan dengan source dan log; jangan menerapkan saran tanpa validasi teknis. |
 
@@ -21,6 +21,26 @@ Target akhir rangkaian ini adalah **r62 sebagai kandidat uji bandwidth MT7621A f
 4. Pertahankan satu SSH Owner/session dan invariant **Poly1305 authenticate → constant-time tag check → ChaCha decrypt**. Jangan mengganti cipher atau membuka plaintext sebelum autentikasi.
 5. QEMU dipakai untuk kebenaran build/integrasi, bukan untuk menetapkan throughput MT7621A fisik. Tidak ada benchmark bandwidth sebelum r62 selesai.
 6. Sesudah satu milestone dinyatakan lulus oleh pengguna (\`done\`), lanjutkan ke branch milestone berikutnya. Jika \`gagal\`, perbaiki milestone yang sama dahulu.
+
+## r61 — per-channel S2C receive-window backpressure
+
+Branch: `experiment/r61-queue-backpressure`, dibuat dari R60 yang telah lulus SDK dan MT7621 QEMU. Package release menjadi `1.0.0-r61`.
+
+Telemetry R59 #855 pernah menunjukkan packet queue mencapai 1,921,536 byte pada satu interval backpressure, sementara initial receive window default libssh2 adalah 2 MiB dan ring S2C lokal sebesar 256 KiB. Ini satu observasi saat backpressure, bukan ukuran rata-rata semua transfer.
+
+R61 membatasi advertised receive window awal hanya pada channel `direct-tcpip` menjadi **512 KiB** (dua kali kapasitas ring S2C 256 KiB). Ketika aplikasi mengonsumsi data, mekanisme `_libssh2_channel_read()` dan WINDOW_ADJUST milik libssh2 tetap berjalan seperti sebelumnya. Channel tipe lain tetap memakai nilai default. Ini pembatasan kredit SSH per-channel, bukan penghentian transport read global.
+
+Packet size channel tetap 32 KiB. R61 tidak mengubah antrean/control-packet handler `session->packets`, `PACKETBUFSIZE`, kompaksi `p->buf`, transport refill, maupun TLS receive buffer. Handler WINDOW_ADJUST, control packet, EOF, CLOSE, dan rekey tidak dipotong atau ditahan oleh limiter baru; channel lain tetap menggunakan mekanisme queue/flow control libssh2.
+
+R61 menambahkan source checks untuk nilai window dan memastikan jalur queue drain, transport refill, serta control packet upstream tetap utuh. QEMU runtime memeriksa nilai receive window aktual pada channel TCP dan TLS. Belum ada klaim peningkatan throughput; bandwidth fisik tetap dijadwalkan setelah R62.
+
+## r60 — worker hot-path cleanup
+
+Branch: `experiment/r60-worker-hotpath-cleanup`. Final source commit `3d5fc1b66dd205f416ec21c64da0affa07630cce`; package `1.0.0-r60`.
+
+R60 menghapus tugas Poly1305 worker dan metadata/scratch yang tidak lagi digunakan setelah R59 memindahkan MAC ke SSH Owner. Penamaan thread dipindahkan menjadi sekali saat startup worker, bukan dilakukan untuk setiap paket, dan Owner hanya dibangunkan ketika seluruh lane dekripsi pada generasi tersebut selesai. Jalur autentikasi-sebelum-dekripsi, normalized padding r56, profiling r57, serta join-before-free lifecycle r52 dipertahankan.
+
+**Validasi Actions #860 lulus:** job SDK membangun IPK MIPS dan job VM berhasil boot MT7621 serta menuntaskan tes TCP/TLS, half-close, full-duplex, dan pemeriksaan telemetry. SDK artifact ID `15042492821`; QEMU artifact ID `15043077421`. Tidak ada bandwidth benchmark.
 
 ## r59 — inline Owner Poly1305 before one decrypt dispatch
 
