@@ -139,8 +139,7 @@ def patch(root: Path) -> None:
     )
     replace_once(
         cipher_c,
-        "        poly1305_auth(dest + aadlen + len, dest, aadlen + len,\n"
-        "                      poly_key);",
+        "        poly1305_auth(dest + aadlen + len, dest, aadlen + len, poly_key);",
         "        poly1305_auth(dest + dest_aadlen + len, dest,\n"
         "                      dest_aadlen + len, poly_key);",
         "preserve normal encryption tag placement",
