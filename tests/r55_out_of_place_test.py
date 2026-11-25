@@ -53,6 +53,10 @@ def main(root: Path) -> None:
         body_write > tag_compare,
         "serial fallback authenticates source before writing AAD or payload",
     )
+    require(
+        "poly1305_auth(dest + dest_aadlen + len, dest, dest_aadlen + len," in cipher,
+        "encryption tag follows the configured output AAD layout",
+    )
 
     require(
         "_libssh2_chachapoly_decrypt_body" in crypt and
