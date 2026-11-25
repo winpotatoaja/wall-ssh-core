@@ -340,8 +340,7 @@ chacha_decrypt_poly_worker_only(struct chacha_parallel_pool *opaque_pool,
         else {
             pool->task_kind[worker] = CHACHA_TASK_DECRYPT;
             pool->offsets[worker] = (u_int)(first_block * CHACHA_BLOCKLEN);
-            pool->destination_offsets[worker] =
-                pool->offsets[worker] + dest_aadlen;
+            pool->destination_offsets[worker] = pool->offsets[worker];
             pool->lengths[worker] =
                 (u_int)(end_byte - pool->offsets[worker]);
             pool->states[worker] = *base_state;
@@ -631,8 +630,10 @@ def patch(root: Path) -> None:
     )
     replace_once(
         chacha_c,
+        "    unsigned int measure_poly;\n"
         "    const u8 *source;\n"
         "    u8 *destination;\n",
+        "    unsigned int measure_poly;\n"
         "    const u8 *source;\n"
         "    u8 *destination;\n"
         "    u8 *padding_length_out;\n",
