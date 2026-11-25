@@ -400,22 +400,8 @@ def patch(root: Path) -> None:
     )
 
     priv = root / "src/libssh2_priv.h"
-    fields = (
-        "        unsigned long long chacha20_parallel_packets;\n"
-        "    } passwall_diag;"
-    )
-    replace_once(
-        priv, fields,
-        "        unsigned long long chacha20_parallel_packets;\n"
-        "        unsigned long long chacha_poly1305_wall_ns;\n"
-        "        unsigned long long chacha20_decrypt_wall_ns;\n"
-        "        unsigned long long chacha20_worker_cpu_ns;\n"
-        "        unsigned long long chacha20_worker_critical_ns;\n"
-        "        unsigned long long chacha20_parallel_other_ns;\n"
-        "        unsigned long long chacha20_profile_packets;\n"
-        "    } passwall_diag;",
-        "add per-session ChaCha profile counters",
-    )
+    # The session counters and snapshot share LIBSSH2_DIAG_TIMING.
+    # Extend that one declaration; there is no separate passwall_diag struct.
     replace_once(
         priv,
         "    unsigned long long chacha20_parallel_packets;\n"
