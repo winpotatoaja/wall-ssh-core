@@ -65,6 +65,11 @@ def main(root: Path) -> None:
         "transport helper uses the session-aware crypto API for authenticated body-only output",
     )
     require(
+        "((u_int)buf_len) - 4, 4, 4,\n" in crypt and
+        "((u_int)buf_len),\n                                   4, 4, ctx->encrypt);" in crypt,
+        "legacy encrypt and in-place decrypt retain the four-byte output AAD layout",
+    )
+    require(
         "_libssh2_chachapoly_decrypt_body" in priv,
         "internal body-only helper is declared for transport.c",
     )
