@@ -46,7 +46,7 @@ def main(root: Path) -> None:
     )
 
     require(
-        "unsigned int drop_first, u_char *padding_length_out" in cipher and
+        "unsigned int drop_first,\n                 u_char *padding_length_out" in cipher and
         "unsigned int drop_first, u_char *padding_length_out" in cipher_h and
         "drop_first && (do_encrypt || dest_aadlen != 0U" in cipher,
         "ChaCha-Poly API explicitly scopes authenticated padding-byte omission to decrypt",
