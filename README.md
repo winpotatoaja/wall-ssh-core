@@ -1,6 +1,6 @@
 # Passwall SSH Core — Progres Pengerjaan Tahap 1–5
 
-Terakhir diperbarui: 2026-11-25
+Terakhir diperbarui: 2026-11-26
 
 ## Program kerja optimasi r60–r62
 
@@ -9,8 +9,8 @@ Target akhir rangkaian ini adalah **r62 sebagai kandidat uji bandwidth MT7621A f
 | Milestone | Status | Fokus dan keluaran yang diwajibkan |
 |---|---|---|
 | **r60 — worker hot-path cleanup** | Lulus Actions #860 (SDK + QEMU) | Hapus tugas Poly1305 worker yang sudah tidak dipakai sejak r59, hapus pointer borrowed `const u8 *poly_input` beserta field dan reset metadata Poly1305 worker (alokasi snapshot sudah dihapus sejak r51), pindahkan penamaan thread menjadi sekali saat startup, dan hilangkan completion broadcast prematur ketika \`active_workers == 0\`. Pertahankan autentikasi-sebelum-dekripsi, normalisasi padding r56, profiling r57, dan lifecycle join r52. Tambahkan source-regression khusus r60; lulus native + SDK + QEMU. |
-| **r61 — packet queue dan backpressure** | Sedang dikerjakan | Batasi advertised receive window hanya untuk channel `direct-tcpip` menjadi 512 KiB (default libssh2 2 MiB), dua kali ring S2C 256 KiB, agar antrean payload per-channel dibatasi kredit SSH. Pertahankan packet size 32 KiB, WINDOW_ADJUST, control packet, multi-channel fairness, EOF, dan rekey; jangan ubah `PACKETBUFSIZE`, kompaksi `p->buf`, atau TLS receive sampai ada pengukuran terpisah. Verifikasi nilai window aktual pada TCP/TLS runtime; lulus native + SDK + QEMU. |
-| **r62 — runtime A/B controls dan code freeze** | Direncanakan | Tambahkan konfigurasi runtime tervalidasi untuk crypto worker \`0/1/2/3\` dan threshold \`4/8/16/24/32 KiB\`, tanpa rebuild untuk setiap varian. Catat nilai konfigurasi aktual dan fallback topology. Uji seluruh pilihan pada regresi/QEMU, pertahankan default konservatif sampai ada data fisik, lalu bekukan sumber kandidat r62. Lulus native + SDK + QEMU standar; tanpa bandwidth benchmark otomatis. |
+| **r61 — packet queue dan backpressure** | Lulus Actions #861 (SDK + QEMU) | Channel `direct-tcpip` mengiklankan receive window awal 512 KiB (dua kali ring S2C 256 KiB), packet size tetap 32 KiB, WINDOW_ADJUST tetap normal. Runtime QEMU memverifikasi 19 channel TCP + 4 channel TLS (23 total). `PACKETBUFSIZE`, transport compaction, dan TLS receive tidak diubah. |
+| **r62 — runtime A/B controls dan code freeze** | Sedang dikerjakan | Tambahkan `CHACHA_WORKERS=auto|0|1|2|3` dan `CHACHA_THRESHOLD_KIB=4|8|16|24|32` (serta opsi CLI), dengan default auto topology + 4 KiB. Pastikan 1 worker benar-benar dipakai, 0 tetap serial, dan seluruh 20 kombinasi worker/threshold diuji pada batas threshold−1, threshold, threshold+1. Catat nilai diminta dan worker aktual setelah KEX serta threshold pada PERF-CHACHA. Lulus native + SDK + QEMU; freeze setelah semua lulus. Tanpa benchmark bandwidth otomatis. |
 | **Setelah r62 — bandwidth dan audit eksternal** | Menunggu r62 | Jalankan test bandwidth terpisah pada r62 dengan baseline yang sama, unduhan berulang, hash/integritas, throughput per interval, jitter/stall, serta CPU tiap thread. Setelah hasil tersedia, kirim source inti, patcher, README/CHANGELOG, konfigurasi dan log relevan ke Copilot, Gemini, dan Grok untuk audit independen. Cocokkan setiap temuan dengan source dan log; jangan menerapkan saran tanpa validasi teknis. |
 
 ### Aturan kerja r60–r62
@@ -22,6 +22,23 @@ Target akhir rangkaian ini adalah **r62 sebagai kandidat uji bandwidth MT7621A f
 5. QEMU dipakai untuk kebenaran build/integrasi, bukan untuk menetapkan throughput MT7621A fisik. Tidak ada benchmark bandwidth sebelum r62 selesai.
 6. Sesudah satu milestone dinyatakan lulus oleh pengguna (\`done\`), lanjutkan ke branch milestone berikutnya. Jika \`gagal\`, perbaiki milestone yang sama dahulu.
 
+## r62 — runtime ChaCha A/B controls and candidate freeze
+
+Branch: `experiment/r62-runtime-ab-controls`, dibuat dari R61 setelah Actions #861 (SDK + QEMU) lulus.
+
+R62 menyediakan dua pengaturan runtime melalui file env maupun CLI, tanpa rebuild untuk setiap varian:
+
+| Pengaturan | Nilai valid | Default |
+|---|---|---|
+| `CHACHA_WORKERS` / `-chacha-workers` | `auto`, `0`, `1`, `2`, `3` | `auto` |
+| `CHACHA_THRESHOLD_KIB` / `-chacha-threshold-kib` | `4`, `8`, `16`, `24`, `32` | `4` |
+
+Mode `auto` memilih serial Owner ketika hanya satu physical core terdeteksi; pada topology MT7621A dua core memilih tiga worker ChaCha persistent. Nilai `0` memakai serial Owner tanpa pool. Nilai `1` membuat dan memakai satu worker sungguhan; nilai `2` dan `3` memakai jumlah worker sesuai konfigurasi. Threshold diterapkan pada ukuran payload yang sudah berhasil diautentikasi: ukuran di bawah threshold memakai jalur serial, sedangkan ukuran tepat pada atau di atas ambang boleh di-offload.
+
+Regresi crypto menjalankan worker `0/1/2/3` untuk kelima threshold `4/8/16/24/32 KiB` pada batas threshold−1, threshold, dan threshold+1 (60 kasus A/B). Setiap kasus memeriksa plaintext, counter paket offload, dan timing worker. Helper yang sama akan dijalankan pada MIPS QEMU. Pemeriksaan runtime TCP/TLS memverifikasi setting yang diminta, jumlah worker aktual setelah KEX, dan nilai threshold yang dilaporkan PERF-CHACHA.
+
+Default tetap auto topology + 4 KiB. Panggilan libssh2 lain yang tidak menggunakan setter baru tetap mendapat fallback threshold 4 KiB. Default belum diubah berdasarkan perkiraan throughput; keputusan akhir menunggu pengukuran MT7621A fisik. QEMU hanya memvalidasi kebenaran implementasi, bukan kecepatan perangkat.
+
 ## r61 — per-channel S2C receive-window backpressure
 
 Branch: `experiment/r61-queue-backpressure`, dibuat dari R60 yang telah lulus SDK dan MT7621 QEMU. Package release menjadi `1.0.0-r61`.
@@ -32,7 +49,7 @@ R61 membatasi advertised receive window awal hanya pada channel `direct-tcpip` m
 
 Packet size channel tetap 32 KiB. R61 tidak mengubah antrean/control-packet handler `session->packets`, `PACKETBUFSIZE`, kompaksi `p->buf`, transport refill, maupun TLS receive buffer. Handler WINDOW_ADJUST, control packet, EOF, CLOSE, dan rekey tidak dipotong atau ditahan oleh limiter baru; channel lain tetap menggunakan mekanisme queue/flow control libssh2.
 
-R61 menambahkan source checks untuk nilai window dan memastikan jalur queue drain, transport refill, serta control packet upstream tetap utuh. QEMU runtime memeriksa nilai receive window aktual pada channel TCP dan TLS. Belum ada klaim peningkatan throughput; bandwidth fisik tetap dijadwalkan setelah R62.
+R61 menambahkan source checks untuk nilai window dan memastikan jalur queue drain, transport refill, serta control packet upstream tetap utuh. **Actions #861 lulus SDK + QEMU (`MIPS TEST STATUS: 0`);** runtime memeriksa 19 channel TCP dan 4 channel TLS, seluruhnya dengan receive window 512 KiB untuk ring S2C 256 KiB. Tidak ada klaim peningkatan throughput; bandwidth fisik tetap dijadwalkan setelah R62.
 
 ## r60 — worker hot-path cleanup
 
