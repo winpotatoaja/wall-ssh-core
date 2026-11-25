@@ -2,6 +2,26 @@
 
 Terakhir diperbarui: 2026-11-25
 
+## Program kerja optimasi r60–r62
+
+Target akhir rangkaian ini adalah **r62 sebagai kandidat uji bandwidth MT7621A fisik**. R60–r62 dikerjakan berurutan pada branch terpisah. Setiap milestone wajib melewati regresi native, SDK OpenWrt mipsel_24kc, dan QEMU MT7621 sebelum pekerjaan berikutnya dimulai. Benchmark bandwidth Internet tidak dimasukkan ke workflow SDK/QEMU dan baru dilakukan setelah r62 lulus.
+
+| Milestone | Status | Fokus dan keluaran yang diwajibkan |
+|---|---|---|
+| **r60 — worker hot-path cleanup** | Sedang dikerjakan | Hapus tugas Poly1305 worker yang sudah tidak dipakai sejak r59, buang alokasi/scratch ciphertext Poly1305 yang tersisa, pindahkan penamaan thread menjadi sekali saat startup, dan hilangkan completion broadcast prematur ketika \`active_workers == 0\`. Pertahankan autentikasi-sebelum-dekripsi, normalisasi padding r56, profiling r57, dan lifecycle join r52. Tambahkan source-regression khusus r60; lulus native + SDK + QEMU. |
+| **r61 — packet queue dan backpressure** | Direncanakan | Audit jalur read-ahead \`_libssh2_channel_read()\`, antrean \`session->packets\`, ring S2C, serta kompaksi \`p->buf\`. Batasi pembacaan lanjutan saat kapasitas penerima sudah penuh hanya setelah memastikan control packet, WINDOW_ADJUST, multi-channel fairness, EOF, dan rekey tetap berjalan. Evaluasi \`PACKETBUFSIZE\` dan batas TLS receive secara terpisah; jangan menggabungkan perubahan yang belum terbukti. Tambahkan telemetry/test untuk peak queue dan kondisi backpressure; lulus native + SDK + QEMU. |
+| **r62 — runtime A/B controls dan code freeze** | Direncanakan | Tambahkan konfigurasi runtime tervalidasi untuk crypto worker \`0/1/2/3\` dan threshold \`4/8/16/24/32 KiB\`, tanpa rebuild untuk setiap varian. Catat nilai konfigurasi aktual dan fallback topology. Uji seluruh pilihan pada regresi/QEMU, pertahankan default konservatif sampai ada data fisik, lalu bekukan sumber kandidat r62. Lulus native + SDK + QEMU standar; tanpa bandwidth benchmark otomatis. |
+| **Setelah r62 — bandwidth dan audit eksternal** | Menunggu r62 | Jalankan test bandwidth terpisah pada r62 dengan baseline yang sama, unduhan berulang, hash/integritas, throughput per interval, jitter/stall, serta CPU tiap thread. Setelah hasil tersedia, kirim source inti, patcher, README/CHANGELOG, konfigurasi dan log relevan ke Copilot, Gemini, dan Grok untuk audit independen. Cocokkan setiap temuan dengan source dan log; jangan menerapkan saran tanpa validasi teknis. |
+
+### Aturan kerja r60–r62
+
+1. Satu milestone/variabel utama per branch; jangan menggabungkan r60, r61, dan r62 dalam satu patch besar.
+2. Setiap perubahan yang diuji harus di-commit/push, dan README serta CHANGELOG diperbarui dengan hasil nyata Actions.
+3. Status SDK dan QEMU diverifikasi dari job/log masing-masing; commit atau build sukses saja bukan bukti lulus.
+4. Pertahankan satu SSH Owner/session dan invariant **Poly1305 authenticate → constant-time tag check → ChaCha decrypt**. Jangan mengganti cipher atau membuka plaintext sebelum autentikasi.
+5. QEMU dipakai untuk kebenaran build/integrasi, bukan untuk menetapkan throughput MT7621A fisik. Tidak ada benchmark bandwidth sebelum r62 selesai.
+6. Sesudah satu milestone dinyatakan lulus oleh pengguna (\`done\`), lanjutkan ke branch milestone berikutnya. Jika \`gagal\`, perbaiki milestone yang sama dahulu.
+
 ## r59 — inline Owner Poly1305 before one decrypt dispatch
 
 Branch eksperimen terpisah: `experiment/r59-inline-owner-poly1305`, dibuat dari r58 setelah SDK dan QEMU standar #850 sukses. Package release dinaikkan menjadi `1.0.0-r59`.
