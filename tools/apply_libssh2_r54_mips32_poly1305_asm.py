@@ -19,6 +19,9 @@ ASM_ALIASES = (
     ".hidden poly1305_init_mips\n"
     ".hidden poly1305_blocks_mips\n"
     ".hidden poly1305_emit_mips\n"
+    ".hidden poly1305_init_mips\n"
+    ".hidden poly1305_blocks_mips\n"
+    ".hidden poly1305_emit_mips\n"
 )
 
 WRAPPER = r'''
