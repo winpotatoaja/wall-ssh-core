@@ -20,7 +20,7 @@ Waktu worker diukur hanya jika diagnostik aktif. Ketika diagnostik tidak aktif, 
 
 **Cara membaca hasil:** bandingkan \`poly_worker_us\` dengan \`poly_wall_us\` untuk melihat biaya worker/wakeup pada fase autentikasi; bandingkan \`worker_cpu_us\`, \`worker_critical_us\`, dan \`chacha_decrypt_wall_us\` untuk melihat overlap serta ketimpangan beban worker. Jangan menjumlahkan worker CPU sebagai wall time. \`parallel_other_us\` berisi sisa setup, pembentukan task, pemeriksaan tag, dan overhead koordinator di dalam interval parallel.
 
-**Validasi:** workflow menjalankan source verifier dan regresi timing native sebelum kompilasi MIPS. Jika SDK sukses, job MT7621 QEMU memakai artifact dari run yang sama. Benchmark bandwidth Internet tidak dijalankan otomatis. Hasil SDK/QEMU r57 masih menunggu; data native host hanya menguji instrumentasi, bukan performa MT7621.
+**Validasi:** SDK run #842 (`45605512658`) berhasil menerapkan seluruh patch sampai r56 dan melewati regresi R56, tetapi berhenti pada patcher r57 sebelum kompilasi MIPS. Penyebabnya adalah anchor pengukuran elapsed muncul empat kali pada fungsi `chachapoly_crypt()`, sedangkan patcher mengharapkan satu. Patcher diperbaiki agar hanya mengubah blok sukses jalur worker-paralel; fallback serial tidak disentuh. Retry SDK dan QEMU dari run yang sama menunggu hasil validasi berikutnya. Benchmark bandwidth Internet tidak dijalankan otomatis. Data native host hanya menguji instrumentasi, bukan performa MT7621.
 
 ## r56 — authenticated normalized ChaCha output (skip padding memmove)
 
