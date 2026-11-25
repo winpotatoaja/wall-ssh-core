@@ -157,9 +157,9 @@ def patch(root: Path) -> None:
     )
     crypt_source = crypt_c.read_text()
     decrypt_call = re.compile(
-        r"(?m)^(?P<indent>[ \\t]*)ret = chachapoly_crypt\\(\\s*session,\\s*"
-        r"&ctx->chachapoly_ctx,\\s*seqno,\\s*buf,\\s*buf,\\s*"
-        r"\\(\\(u_int\\)buf_len\\),\\s*4,\\s*ctx->encrypt\\s*\\);"
+        r"(?m)^(?P<indent>[ \t]*)ret = chachapoly_crypt\(\s*session,\s*"
+        r"&ctx->chachapoly_ctx,\s*seqno,\s*buf,\s*buf,\s*"
+        r"\(\(u_int\)buf_len\),\s*4,\s*ctx->encrypt\s*\);"
     )
     matches = list(decrypt_call.finditer(crypt_source))
     if len(matches) != 1:
@@ -168,9 +168,9 @@ def patch(root: Path) -> None:
             f"expected one session-aware call, found {len(matches)}"
         )
     replacement = (
-        r"\\g<indent>ret = chachapoly_crypt(session, &ctx->chachapoly_ctx,\\n"
-        r"\\g<indent>                       seqno, buf, buf, ((u_int)buf_len),\\n"
-        r"\\g<indent>                       4, 4, ctx->encrypt);"
+        r"\g<indent>ret = chachapoly_crypt(session, &ctx->chachapoly_ctx,\n"
+        r"\g<indent>                       seqno, buf, buf, ((u_int)buf_len),\n"
+        r"\g<indent>                       4, 4, ctx->encrypt);"
     )
     crypt_c.write_text(decrypt_call.sub(replacement, crypt_source, count=1))
 
