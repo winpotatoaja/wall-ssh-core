@@ -344,30 +344,59 @@ def patch(root: Path) -> None:
         "            &decrypt_worker_ns, &decrypt_worker_max_ns, diag_enabled);",
         "collect independent phase and worker timings",
     )
-    replace_once(
-        cipher_c,
-        "                    unsigned long long elapsed = phase_ended - phase_started;\n"
-        "                    session->passwall_diag.chacha20_payload_ns += elapsed;",
-        "                    unsigned long long elapsed = phase_ended - phase_started;\n"
-        "                    parallel_elapsed_ns = elapsed;\n"
-        "                    session->passwall_diag.chacha20_payload_ns += elapsed;",
-        "retain total parallel elapsed time for overhead accounting",
-    )
-    replace_once(
-        cipher_c,
-        "                session->passwall_diag.chacha_poly1305_ns += poly_worker_ns;\n"
-        "                session->passwall_diag.chacha_poly1305_offloaded_packets++;",
-        "                session->passwall_diag.chacha_poly1305_ns += poly_worker_ns;\n"
-        "                session->passwall_diag.chacha_poly1305_wall_ns += poly_wall_ns;\n"
-        "                session->passwall_diag.chacha20_decrypt_wall_ns += decrypt_wall_ns;\n"
-        "                session->passwall_diag.chacha20_worker_cpu_ns += decrypt_worker_ns;\n"
-        "                session->passwall_diag.chacha20_worker_critical_ns += decrypt_worker_max_ns;\n"
-        "                if(parallel_elapsed_ns >= poly_wall_ns + decrypt_wall_ns)\n"
-        "                    session->passwall_diag.chacha20_parallel_other_ns +=\n"
-        "                        parallel_elapsed_ns - poly_wall_ns - decrypt_wall_ns;\n"
-        "                session->passwall_diag.chacha20_profile_packets++;\n"
-        "                session->passwall_diag.chacha_poly1305_offloaded_packets++;",
-        "record phase walls, aggregate worker CPU, critical worker and coordination time",
+    def patch_parallel_metrics(function: str) -> str:
+        branch_start = function.find("        if(parallel_rc == 1) {")
+        branch_end = function.find("        else if(parallel_rc < 0)", branch_start)
+        if branch_start < 0 or branch_end < 0:
+            raise RuntimeError("cipher-chachapoly.c: parallel success branch not found")
+        branch = function[branch_start:branch_end]
+
+        elapsed_anchor = (
+            "                    unsigned long long elapsed = phase_ended - phase_started;\\n"
+            "                    session->passwall_diag.chacha20_payload_ns += elapsed;"
+        )
+        if branch.count(elapsed_anchor) != 1:
+            raise RuntimeError(
+                "cipher-chachapoly.c: parallel elapsed anchor in worker-success branch "
+                f"expected one, found {branch.count(elapsed_anchor)}"
+            )
+        branch = branch.replace(
+            elapsed_anchor,
+            "                    unsigned long long elapsed = phase_ended - phase_started;\\n"
+            "                    parallel_elapsed_ns = elapsed;\\n"
+            "                    session->passwall_diag.chacha20_payload_ns += elapsed;",
+            1,
+        )
+
+        metrics_anchor = (
+            "                session->passwall_diag.chacha_poly1305_ns += poly_worker_ns;\\n"
+            "                session->passwall_diag.chacha_poly1305_offloaded_packets++;"
+        )
+        if branch.count(metrics_anchor) != 1:
+            raise RuntimeError(
+                "cipher-chachapoly.c: profile metrics anchor in worker-success branch "
+                f"expected one, found {branch.count(metrics_anchor)}"
+            )
+        branch = branch.replace(
+            metrics_anchor,
+            "                session->passwall_diag.chacha_poly1305_ns += poly_worker_ns;\\n"
+            "                session->passwall_diag.chacha_poly1305_wall_ns += poly_wall_ns;\\n"
+            "                session->passwall_diag.chacha20_decrypt_wall_ns += decrypt_wall_ns;\\n"
+            "                session->passwall_diag.chacha20_worker_cpu_ns += decrypt_worker_ns;\\n"
+            "                session->passwall_diag.chacha20_worker_critical_ns += decrypt_worker_max_ns;\\n"
+            "                if(parallel_elapsed_ns >= poly_wall_ns + decrypt_wall_ns)\\n"
+            "                    session->passwall_diag.chacha20_parallel_other_ns +=\\n"
+            "                        parallel_elapsed_ns - poly_wall_ns - decrypt_wall_ns;\\n"
+            "                session->passwall_diag.chacha20_profile_packets++;\\n"
+            "                session->passwall_diag.chacha_poly1305_offloaded_packets++;",
+            1,
+        )
+        return function[:branch_start] + branch + function[branch_end:]
+
+    replace_function(
+        cipher_c, "int\\nchachapoly_crypt(",
+        patch_parallel_metrics,
+        "record worker-only ChaCha phase and coordination timings",
     )
 
     priv = root / "src/libssh2_priv.h"
