@@ -107,128 +107,128 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-                    mkdir -p emulator
-                    curl -fL --retry 3 --connect-timeout 20 \
-                      https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-linux-x86_64.tar.gz \
-                      -o /tmp/router-emulator.tar.gz
-                    echo "8ae277cc0fecfb99da3a452fb4226f272ee6d571f362898ca2176513f3adb0b7  /tmp/router-emulator.tar.gz" | sha256sum -c -
-                    curl -fL --retry 3 --connect-timeout 20 \
-                      https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-presets.zip \
-                      -o /tmp/router-emulator-presets.zip
-                    echo "8146b505a9d75407c4504bf90638d7e3d3e3ccfc529d09c45a40b2b6868604a2  /tmp/router-emulator-presets.zip" | sha256sum -c -
-                    tar -xzf /tmp/router-emulator.tar.gz -C emulator
-                    EMU_DIR="$(find emulator -maxdepth 3 -type f -name emulator.sh -print -quit | xargs dirname)"
-                    test -n "$EMU_DIR"
-                    unzip -q /tmp/router-emulator-presets.zip -d "$EMU_DIR"
-                    if [ -d "$EMU_DIR/Router-Emulator/presets" ]; then
-                      mkdir -p "$EMU_DIR/presets"
-                      cp -a "$EMU_DIR/Router-Emulator/presets/." "$EMU_DIR/presets/"
-                    fi
-                    QEMU_MIPSEL="$EMU_DIR/qemu/qemu-system-mipsel"
-                    if [ ! -x "$QEMU_MIPSEL" ]; then
-                      echo "Missing executable QEMU MIPS binary: $QEMU_MIPSEL"
-                      ls -la "$EMU_DIR/qemu" 2>&1 || true
-                      false
-                    fi
-                    "$QEMU_MIPSEL" --version
-                    if "$QEMU_MIPSEL" -M help > /tmp/mips-qemu-machines.txt 2>/tmp/mips-qemu-machines.err; then
-                      echo "QEMU machine help succeeded."
-                    else
-                      QEMU_RC=$?
-                      echo "QEMU machine help failed with status $QEMU_RC"
-                      cat /tmp/mips-qemu-machines.err
-                      cat /tmp/mips-qemu-machines.txt
-                      false
-                    fi
-                    cat /tmp/mips-qemu-machines.txt
-                    if ! grep -qi 'mt7621-router' /tmp/mips-qemu-machines.txt; then
-                      echo "QEMU binary does not advertise the MT7621 machine."
-                      false
-                    fi
-                    PRESET_FILE="$EMU_DIR/presets/zbtlink-zbt-wg3526-16m.ini"
-                    if [ ! -f "$PRESET_FILE" ]; then
-                      echo "ZBT-WG3526-16M preset not found in downloaded preset archive."
-                      find "$EMU_DIR" -maxdepth 4 -type f -iname '*wg3526*' -print
-                      false
-                    fi
-                    echo "Preset file: $PRESET_FILE"
-                    EMU_DIR="$(readlink -f "$EMU_DIR")"
-                    echo "EMU_DIR=$EMU_DIR" >> "$GITHUB_ENV"
-          
-                    IB_BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
-                    IB_FILE="openwrt-imagebuilder-24.10.7-ramips-mt7621.Linux-x86_64.tar.zst"
-                    curl -fL --retry 3 --connect-timeout 20 --max-time 1200 "$IB_BASE/$IB_FILE" -o /tmp/openwrt-imagebuilder.tar.zst
-                    echo "19f321d10a78a8ca768b934243789c6b45c003374618a3c0aa51c06e06553fcc  /tmp/openwrt-imagebuilder.tar.zst" | sha256sum -c -
-                    tar --zstd -xf /tmp/openwrt-imagebuilder.tar.zst
-                    IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-24.10.7-ramips-mt7621*' -print -quit)"
-                    test -n "$IB_DIR"
-                    IB_DIR="$(readlink -f "$IB_DIR")"
-                    test -f "$IB_DIR/Makefile"
-                    test -f "$IB_DIR/rules.mk"
-                    echo "ImageBuilder rules.mk found."
-                    echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
-          
-                    # ImageBuilder's checksum manifest is not consumed by the QEMU test.
-                    # Keep calculating it, but do not let that ancillary target prevent
-                    # use of a firmware image that is subsequently checked below.
-                    python3 - "$IB_DIR/Makefile" <<'PY'
-                    from pathlib import Path
-                    import sys
-          
-                    makefile = Path(sys.argv[1])
-                    content = makefile.read_text()
-                    original = "\t$(MAKE) -s checksum\n"
-                    replacement = "\t$(MAKE) -s checksum || echo 'WARNING: ImageBuilder checksum manifest failed; validating firmware image directly for QEMU'\n"
-                    if content.count(original) == 1:
-                        makefile.write_text(content.replace(original, replacement))
-                        print("ImageBuilder checksum target made non-fatal for this QEMU-only workflow.")
-                    else:
-                        print("Could not uniquely locate ImageBuilder checksum target.")
-                    PY
-                    if ! grep -Fq "checksum || echo 'WARNING: ImageBuilder checksum manifest failed" "$IB_DIR/Makefile"; then
-                      echo "ImageBuilder checksum hook patch was not applied."
-                      false
-                    fi
-          
-                    ssh-keygen -q -t ed25519 -N "" -f "$RUNNER_TEMP/mips-vm-key"
-                    FILES_DIR="$RUNNER_TEMP/mips-image-files"
-                    mkdir -p "$FILES_DIR/etc/dropbear" "$FILES_DIR/root/.ssh"
-                    install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/etc/dropbear/authorized_keys"
-                    install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/root/.ssh/authorized_keys"
-                    cd "$IB_DIR"
-                    make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2" FILES="$FILES_DIR"
-                    echo "ImageBuilder completed; available firmware images:"
-                    find bin/targets/ramips/mt7621 -maxdepth 1 -type f -printf '%f (%s bytes)\\n' | sort
-                    SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*sysupgrade.bin' -print -quit)"
-                    if [ -z "$SYSUP" ]; then
-                      echo "No sysupgrade image was produced by ImageBuilder."
-                      find bin/targets/ramips/mt7621 -maxdepth 2 -type f -print
-                      false
-                    fi
-                    SYSUP="$(readlink -f "$SYSUP")"
-                    test -s "$SYSUP"
-                    echo "Selected firmware image: $SYSUP"
-                    sha256sum "$SYSUP"
-          
-                    cd "$EMU_DIR"
-                    BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
-                    UBOOT_REL="u-boot-mt7621_zbtlink_zbt-wg3526-16m/u-boot-mt7621.bin"
-                    mkdir -p "$EMU_DIR/firmware/24.10.7/$(dirname "$UBOOT_REL")"
-                    curl -fL --retry 3 --connect-timeout 20 --max-time 300 \
-                      "$BASE/$UBOOT_REL" \
-                      -o "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
-                    test -s "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
-                    echo "U-Boot image downloaded successfully."
-                    FLASH_DIR="$EMU_DIR/nor-zbt-wg3526-16m"
-                    python3 "$EMU_DIR/tools/mknand.py" --prefix mt7621 nor -o "$FLASH_DIR" \
-                      --size-mb 16 \
-                      --parts "u-boot:0x30000,u-boot-env:0x10000,factory:0x10000,firmware:-" \
-                      --bl2 "$EMU_DIR/firmware/24.10.7/$UBOOT_REL" \
-                      --sysupgrade "$SYSUP" \
-                      --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
-                    test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
-                    test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
-                    echo "R59/R62 packages and MT7621A QEMU firmware are ready."
+          mkdir -p emulator
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-linux-x86_64.tar.gz \
+            -o /tmp/router-emulator.tar.gz
+          echo "8ae277cc0fecfb99da3a452fb4226f272ee6d571f362898ca2176513f3adb0b7  /tmp/router-emulator.tar.gz" | sha256sum -c -
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/stavultras/router-emulator/releases/download/v4.1/Router-Emulator-4.1-presets.zip \
+            -o /tmp/router-emulator-presets.zip
+          echo "8146b505a9d75407c4504bf90638d7e3d3e3ccfc529d09c45a40b2b6868604a2  /tmp/router-emulator-presets.zip" | sha256sum -c -
+          tar -xzf /tmp/router-emulator.tar.gz -C emulator
+          EMU_DIR="$(find emulator -maxdepth 3 -type f -name emulator.sh -print -quit | xargs dirname)"
+          test -n "$EMU_DIR"
+          unzip -q /tmp/router-emulator-presets.zip -d "$EMU_DIR"
+          if [ -d "$EMU_DIR/Router-Emulator/presets" ]; then
+            mkdir -p "$EMU_DIR/presets"
+            cp -a "$EMU_DIR/Router-Emulator/presets/." "$EMU_DIR/presets/"
+          fi
+          QEMU_MIPSEL="$EMU_DIR/qemu/qemu-system-mipsel"
+          if [ ! -x "$QEMU_MIPSEL" ]; then
+            echo "Missing executable QEMU MIPS binary: $QEMU_MIPSEL"
+            ls -la "$EMU_DIR/qemu" 2>&1 || true
+            false
+          fi
+          "$QEMU_MIPSEL" --version
+          if "$QEMU_MIPSEL" -M help > /tmp/mips-qemu-machines.txt 2>/tmp/mips-qemu-machines.err; then
+            echo "QEMU machine help succeeded."
+          else
+            QEMU_RC=$?
+            echo "QEMU machine help failed with status $QEMU_RC"
+            cat /tmp/mips-qemu-machines.err
+            cat /tmp/mips-qemu-machines.txt
+            false
+          fi
+          cat /tmp/mips-qemu-machines.txt
+          if ! grep -qi 'mt7621-router' /tmp/mips-qemu-machines.txt; then
+            echo "QEMU binary does not advertise the MT7621 machine."
+            false
+          fi
+          PRESET_FILE="$EMU_DIR/presets/zbtlink-zbt-wg3526-16m.ini"
+          if [ ! -f "$PRESET_FILE" ]; then
+            echo "ZBT-WG3526-16M preset not found in downloaded preset archive."
+            find "$EMU_DIR" -maxdepth 4 -type f -iname '*wg3526*' -print
+            false
+          fi
+          echo "Preset file: $PRESET_FILE"
+          EMU_DIR="$(readlink -f "$EMU_DIR")"
+          echo "EMU_DIR=$EMU_DIR" >> "$GITHUB_ENV"
+
+          IB_BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
+          IB_FILE="openwrt-imagebuilder-24.10.7-ramips-mt7621.Linux-x86_64.tar.zst"
+          curl -fL --retry 3 --connect-timeout 20 --max-time 1200 "$IB_BASE/$IB_FILE" -o /tmp/openwrt-imagebuilder.tar.zst
+          echo "19f321d10a78a8ca768b934243789c6b45c003374618a3c0aa51c06e06553fcc  /tmp/openwrt-imagebuilder.tar.zst" | sha256sum -c -
+          tar --zstd -xf /tmp/openwrt-imagebuilder.tar.zst
+          IB_DIR="$(find . -maxdepth 1 -type d -name 'openwrt-imagebuilder-24.10.7-ramips-mt7621*' -print -quit)"
+          test -n "$IB_DIR"
+          IB_DIR="$(readlink -f "$IB_DIR")"
+          test -f "$IB_DIR/Makefile"
+          test -f "$IB_DIR/rules.mk"
+          echo "ImageBuilder rules.mk found."
+          echo "IB_DIR=$IB_DIR" >> "$GITHUB_ENV"
+
+          # ImageBuilder's checksum manifest is not consumed by the QEMU test.
+          # Keep calculating it, but do not let that ancillary target prevent
+          # use of a firmware image that is subsequently checked below.
+          python3 - "$IB_DIR/Makefile" <<'PY'
+          from pathlib import Path
+          import sys
+
+          makefile = Path(sys.argv[1])
+          content = makefile.read_text()
+          original = "\t$(MAKE) -s checksum\n"
+          replacement = "\t$(MAKE) -s checksum || echo 'WARNING: ImageBuilder checksum manifest failed; validating firmware image directly for QEMU'\n"
+          if content.count(original) == 1:
+              makefile.write_text(content.replace(original, replacement))
+              print("ImageBuilder checksum target made non-fatal for this QEMU-only workflow.")
+          else:
+              print("Could not uniquely locate ImageBuilder checksum target.")
+          PY
+          if ! grep -Fq "checksum || echo 'WARNING: ImageBuilder checksum manifest failed" "$IB_DIR/Makefile"; then
+            echo "ImageBuilder checksum hook patch was not applied."
+            false
+          fi
+
+          ssh-keygen -q -t ed25519 -N "" -f "$RUNNER_TEMP/mips-vm-key"
+          FILES_DIR="$RUNNER_TEMP/mips-image-files"
+          mkdir -p "$FILES_DIR/etc/dropbear" "$FILES_DIR/root/.ssh"
+          install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/etc/dropbear/authorized_keys"
+          install -m 0600 "$RUNNER_TEMP/mips-vm-key.pub" "$FILES_DIR/root/.ssh/authorized_keys"
+          cd "$IB_DIR"
+          make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2" FILES="$FILES_DIR"
+          echo "ImageBuilder completed; available firmware images:"
+          find bin/targets/ramips/mt7621 -maxdepth 1 -type f -printf '%f (%s bytes)\\n' | sort
+          SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*sysupgrade.bin' -print -quit)"
+          if [ -z "$SYSUP" ]; then
+            echo "No sysupgrade image was produced by ImageBuilder."
+            find bin/targets/ramips/mt7621 -maxdepth 2 -type f -print
+            false
+          fi
+          SYSUP="$(readlink -f "$SYSUP")"
+          test -s "$SYSUP"
+          echo "Selected firmware image: $SYSUP"
+          sha256sum "$SYSUP"
+
+          cd "$EMU_DIR"
+          BASE="https://downloads.openwrt.org/releases/24.10.7/targets/ramips/mt7621"
+          UBOOT_REL="u-boot-mt7621_zbtlink_zbt-wg3526-16m/u-boot-mt7621.bin"
+          mkdir -p "$EMU_DIR/firmware/24.10.7/$(dirname "$UBOOT_REL")"
+          curl -fL --retry 3 --connect-timeout 20 --max-time 300 \
+            "$BASE/$UBOOT_REL" \
+            -o "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
+          test -s "$EMU_DIR/firmware/24.10.7/$UBOOT_REL"
+          echo "U-Boot image downloaded successfully."
+          FLASH_DIR="$EMU_DIR/nor-zbt-wg3526-16m"
+          python3 "$EMU_DIR/tools/mknand.py" --prefix mt7621 nor -o "$FLASH_DIR" \
+            --size-mb 16 \
+            --parts "u-boot:0x30000,u-boot-env:0x10000,factory:0x10000,firmware:-" \
+            --bl2 "$EMU_DIR/firmware/24.10.7/$UBOOT_REL" \
+            --sysupgrade "$SYSUP" \
+            --mac-part factory --mac-off 0xe000 --mac 80:af:ca:11:22:33
+          test -s "$FLASH_DIR/mt7621.mtd0.u-boot.bin"
+          test -s "$FLASH_DIR/mt7621.mtd3.firmware.bin"
+          echo "r53 package and MT7621A QEMU firmware are ready."
 
       - name: Start host SSH endpoint
         shell: bash
@@ -331,7 +331,7 @@ jobs:
           mkdir -p bandwidth-results
           if [ -f "$RUNNER_TEMP/mips-vm-key" ]; then
             ssh -i "$RUNNER_TEMP/mips-vm-key" -p 8022 -o BatchMode=yes -o ConnectTimeout=4 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@127.0.0.1 \
-              'cd /tmp/mips-test && find . -maxdepth 1 -type d -name "qemu-speedtest-*" -printf "%f\\n" > /tmp/bench-dirs.txt && test -s /tmp/bench-dirs.txt && tar -czf /tmp/r59-r62-results.tgz -T /tmp/bench-dirs.txt' 2>/dev/null
+              'cd /tmp/mips-test && find . -maxdepth 1 -type d -name "qemu-speedtest-*" -print > /tmp/bench-dirs.txt && test -s /tmp/bench-dirs.txt && tar -czf /tmp/r59-r62-results.tgz -T /tmp/bench-dirs.txt' 2>/dev/null
             scp -O -i "$RUNNER_TEMP/mips-vm-key" -P 8022 -o ConnectTimeout=4 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
               root@127.0.0.1:/tmp/r59-r62-results.tgz bandwidth-results/ 2>/dev/null
             if [ -s bandwidth-results/r59-r62-results.tgz ]; then tar -xzf bandwidth-results/r59-r62-results.tgz -C bandwidth-results; fi
