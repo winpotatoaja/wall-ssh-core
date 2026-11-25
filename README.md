@@ -2,7 +2,7 @@
 
 Terakhir diperbarui: 2026-11-25
 
-## r53 — eksperimen ChaCha20 MIPS32r2 assembly (validasi pending)
+## r53 — eksperimen ChaCha20 MIPS32r2 assembly (SDK lulus, QEMU berikutnya)
 
 Branch eksperimen terpisah: `experiment/r53-mips32-crypto-path`, dibuat dari baseline hardening r52. Core IPK menggunakan release `1.0.0-r53`; artefak r51/r52 tidak disentuh.
 
@@ -12,7 +12,7 @@ Assembly hanya menerima rentang blok lengkap 64-byte. Sisa byte di akhir paket t
 
 Regression MIPS baru membandingkan hasil assembly terhadap reference ChaCha20 dan known-answer vector RFC 8439; menguji 0/64/128/192 byte, multi-block, in-place/out-of-place, seluruh kombinasi alignment 0–3, dan update counter. SDK juga mengarsipkan disassembly simbol assembly untuk memastikan encoding native 32-bit dan instruksi MIPS32r2. Tes source, cross-build, KAT pada QEMU dan uji integrasi harus lulus sebelum perubahan dianggap valid.
 
-**Status validasi:** SDK run #750 (`45529789232`) berhasil mengompilasi, melink, dan memasang patched `libssh2`, tetapi tahap validator disassembly gagal karena pemeriksaan masih mencari string mnemonic literal `rotr`/`addu`. Validator kini memeriksa encoding opcode MIPS32r2 langsung dari kata instruksi 32-bit dan menormalisasi dua urutan byte. Commit ini memicu retry SDK; core IPK r53 dan QEMU belum dihasilkan/lulus. Tidak ada klaim kenaikan throughput. Benchmark internet 100 MB tetap opt-in dan tidak dijalankan dalam tahap ini. Pengukuran performa final tetap memerlukan A/B pada router MT7621 fisik.
+**Status validasi:** SDK run #751 (`45545892308`) lulus penuh dari source commit `0a69a5002ee0e8bf1605f0ce705dfe43dac5df10`. OpenWrt 24.10.7 SDK berhasil membangun patched `libssh2` dan core IPK `passwall-ssh-core_1.0.0-r53_mipsel_24kc.ipk`; checksum IPK SHA-256 `75375eac09db905a39d9ddbeb5e07372cd0eaa301af79bd86a94ace8b9e90c05`. Artifact SDK `14991248458` (`passwall-ssh-core-openwrt-24.10.7-mipsel-r53-ipk`, SHA-256 ZIP `628ef81e894b2c4f23787bd4f0583f369a49031b4e7fdab2c294cc78f44a8da1`) berisi IPK, helper regresi, checksum, serta disassembly/symbol report. Validator disassembly kini lolos dengan pemeriksaan field opcode MIPS32r2 ROTR/ADDU. Tahap berikutnya menjalankan KAT assembly dan regresi integrasi pada QEMU dengan artifact SDK #751; hasil runtime QEMU dan performa belum tersedia. Tidak ada klaim kenaikan throughput. Benchmark internet 100 MB tetap opt-in dan tidak dijalankan. Pengukuran performa final tetap memerlukan A/B pada router MT7621 fisik.
 
 Tahap ini sengaja belum mengubah Poly1305, jumlah/affinity worker, threshold dispatch, mutex/condition-variable model, packet queue/read-ahead, framing/copy `transport.c`, atau pipeline SSH. EVP ChaCha20-Poly1305 juga tidak dipakai karena format SSH OpenSSH tidak sama dengan RFC 8439 AEAD EVP. Perubahan lain diuji terpisah setelah backend ChaCha r53 lolos.
 
