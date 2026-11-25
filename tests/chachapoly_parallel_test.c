@@ -88,7 +88,7 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
         goto out;
     }
 
-    /* r55 output has no four-byte AAD prefix; the authenticated source stays intact. */
+    /* r55 body-only output has no four-byte AAD prefix; source stays intact. */
     memset(body, OUTPUT_SENTINEL, payload_len ? payload_len : 1U);
     if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, body, cipher_copy,
                         payload_len, PACKET_HEADER_LEN, 0U, 0U, NULL, 0) != 0) {
@@ -143,7 +143,7 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     memcpy(bad_guard, bad, wire_len);
     memset(body, OUTPUT_SENTINEL, payload_len ? payload_len : 1U);
     if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, body, bad,
-                        payload_len, PACKET_HEADER_LEN, 0U, 0) == 0) {
+                        payload_len, PACKET_HEADER_LEN, 0U, 0U, NULL, 0) == 0) {
         fprintf(stderr, "out-of-place tampered tag accepted for payload %u\n",
                 payload_len);
         goto out;
@@ -182,7 +182,7 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     bad[wire_len - 1U] ^= 0x80U;
     memcpy(bad_guard, bad, wire_len);
     if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, bad, bad,
-                        payload_len, PACKET_HEADER_LEN, PACKET_HEADER_LEN, 0) == 0) {
+                        payload_len, PACKET_HEADER_LEN, PACKET_HEADER_LEN, 0U, NULL, 0) == 0) {
         fprintf(stderr, "in-place tampered tag accepted for payload %u\n", payload_len);
         goto out;
     }
