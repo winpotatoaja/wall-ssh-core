@@ -2,14 +2,14 @@ name: Passwall SSH core - OpenWrt 24.10.7 mipsel_24kc
 # r61 S2C backpressure: bound direct-tcpip receive credit to twice the 256 KiB client ring; keep SSH control flow unchanged.
 on:
   push:
-    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration, phase2/tls-engine-integration-rxfix, phase3/io-worker-pool-foundation, benchmark/r39-internet-speedtest, experiment/r51-mips32-crypto, experiment/r52-safe-topology-lifecycle, experiment/r53-mips32-crypto-path, experiment/r54-mips32-poly1305-asm, experiment/r55-outofplace-chacha-decrypt, experiment/r56-skip-padding-memmove, experiment/r57-chachapoly-profile, experiment/r58-chacha-perf-log-split, experiment/r59-inline-owner-poly1305, experiment/r60-worker-hotpath-cleanup, experiment/r61-queue-backpressure]
+    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration, phase2/tls-engine-integration-rxfix, phase3/io-worker-pool-foundation, benchmark/r39-internet-speedtest, experiment/r51-mips32-crypto, experiment/r52-safe-topology-lifecycle, experiment/r53-mips32-crypto-path, experiment/r54-mips32-poly1305-asm, experiment/r55-outofplace-chacha-decrypt, experiment/r56-skip-padding-memmove, experiment/r57-chachapoly-profile, experiment/r58-chacha-perf-log-split, experiment/r59-inline-owner-poly1305, experiment/r60-worker-hotpath-cleanup, experiment/r61-queue-backpressure, experiment/r62-runtime-ab-controls]
 permissions:
   contents: read
   actions: write
   statuses: write
 
 concurrency:
-  group: openwrt24-mipsel-r61-${{ github.ref }}
+  group: openwrt24-mipsel-r62-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   sdk:
@@ -29,8 +29,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_hotpath_test.py tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py
+          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_hotpath_test.py tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py
           mkdir -p test-results
+          gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/chacha_runtime_config_test.c -o /tmp/r62-config-parser-test
+          /tmp/r62-config-parser-test | tee test-results/r62-config-parser.log
           python3 tests/r58_chacha_perf_log_test.py ssh-core.c | tee test-results/r58-chacha-perf-log.log
           python3 tests/r59_perf_log_parser_test.py | tee test-results/r59-perf-log-parser-selftest.log
           gcc -std=gnu11 -O1 -g -Wall -Wextra -pthread \
@@ -159,6 +161,9 @@ jobs:
           python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r61_window_backpressure.py" "$LIBSSH2_SRC"
           test -s "$LIBSSH2_SRC/.passwall-r61-window-backpressure-patched"
           python3 "$GITHUB_WORKSPACE/tests/r61_window_backpressure_test.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE/ssh-core.c" | tee "$GITHUB_WORKSPACE/test-results/r61-window-backpressure.log"
+          python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r62_runtime_controls.py" "$LIBSSH2_SRC"
+          test -s "$LIBSSH2_SRC/.passwall-r62-runtime-ab-controls-patched"
+          python3 "$GITHUB_WORKSPACE/tests/r62_chacha_config_source_test.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE/ssh-core.c" | tee "$GITHUB_WORKSPACE/test-results/r62-chacha-config-source.log"
           python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log"
           python3 "$GITHUB_WORKSPACE/tests/poly1305_mips_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/poly1305-mips-hotpath.log"
           # Configure first so the host-side crypto regression uses the exact
@@ -170,12 +175,23 @@ jobs:
           gcc -std=gnu11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -pthread -ffunction-sections -fdata-sections -DHAVE_CONFIG_H -DLIBSSH2_OPENSSL -DLIBSSH2_HAVE_ZLIB -I"$LIBSSH2_CONFIG_DIR" -I"$LIBSSH2_SRC/src" -I"$LIBSSH2_SRC/include" "$GITHUB_WORKSPACE/tests/chachapoly_parallel_test.c" "$LIBSSH2_SRC/src/cipher-chachapoly.c" "$LIBSSH2_SRC/src/chacha.c" "$LIBSSH2_SRC/src/poly1305.c" "$LIBSSH2_SRC/src/misc.c" -Wl,--gc-sections -o /tmp/chachapoly-parallel-test
           /tmp/chachapoly-parallel-test | tee "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
           test -s "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
-          grep -Fq 'PASS: r59 inline Poly1305 timing matches wall time and ChaCha worker phases remain valid' "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
-          echo "PASS: authenticated ChaCha20 parallel regression completed before OpenWrt source cleanup."
+          grep -Fq 'PASS: r62 A/B matrix 0/1/2/3 workers and 4/8/16/24/32 KiB thresholds; r59 crypto phases remain valid' "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
+          echo "PASS: R62 crypto and worker/threshold A/B matrix passed."
           MIPS_CC="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -path '*/bin/*-openwrt-linux-musl-gcc' -print -quit)"
           STAGING="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -maxdepth 1 -type d -name 'target-*' -print -quit)"
           test -n "$MIPS_CC"
           test -n "$STAGING"
+          "$MIPS_CC" -std=gnu11 -O2 -static -mips32r2 -mno-mips16 -pthread -ffunction-sections -fdata-sections \
+            -DHAVE_CONFIG_H -DLIBSSH2_OPENSSL -DLIBSSH2_HAVE_ZLIB \
+            -I"$LIBSSH2_CONFIG_DIR" -I"$LIBSSH2_SRC/src" -I"$LIBSSH2_SRC/include" \
+            "$GITHUB_WORKSPACE/tests/chachapoly_parallel_test.c" \
+            "$LIBSSH2_SRC/src/cipher-chachapoly.c" "$LIBSSH2_SRC/src/chacha.c" \
+            "$LIBSSH2_SRC/src/poly1305.c" "$LIBSSH2_SRC/src/misc.c" \
+            -Wl,--gc-sections -o "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r62-mips-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r62-mips-test"
+          file "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r62-mips-test" | tee "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r62-mips-file.txt"
+          readelf -h "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r62-mips-test" | grep -q MIPS
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum chachapoly-parallel-r62-mips-test > chachapoly-parallel-r62-mips.sha256)
           "$MIPS_CC" -std=gnu11 -O2 -static -mips32r2 -mno-mips16 -ffunction-sections -fdata-sections \
             -DHAVE_CONFIG_H -DLIBSSH2_OPENSSL -DLIBSSH2_HAVE_ZLIB \
             -I"$LIBSSH2_CONFIG_DIR" -I"$LIBSSH2_SRC/src" -I"$LIBSSH2_SRC/include" -I"$STAGING/usr/include" \
@@ -222,8 +238,8 @@ jobs:
           test -s "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm"
           python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" --verify-disasm "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm" | tee -a "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log"
           python3 "$GITHUB_WORKSPACE/tests/poly1305_mips_hotpath_test.py" --verify-disasm "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm" | tee -a "$GITHUB_WORKSPACE/test-results/poly1305-mips-hotpath.log"
-# Core IPK release r61 applies per-channel receive-window backpressure; libssh2 crypto patch series remains r60 and earlier.
-      - name: Build r61 MIPS IPK with bounded S2C receive-window backpressure
+# Core IPK release r62 provides runtime ChaCha A/B controls and retains R61 backpressure.
+      - name: Build r62 MIPS IPK with runtime ChaCha A/B controls
         shell: bash
         run: |
           set -euo pipefail
@@ -231,7 +247,7 @@ jobs:
           mkdir -p "$PKG_DIR"
           cp Makefile "$PKG_DIR/Makefile"
           cp ssh-core.c "$PKG_DIR/ssh-core.c"
-          cp tls_engine.c tls_engine.h libssh2_diag.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h client_lifetime.c client_lifetime.h io_worker_completion_tracker.c io_worker_completion_tracker.h "$PKG_DIR/"
+          cp tls_engine.c tls_engine.h libssh2_diag.h chacha_runtime_config.h spsc_rb.h io_worker_pool.c io_worker_pool.h client_event_token.h client_lifetime.c client_lifetime.h io_worker_completion_tracker.c io_worker_completion_tracker.h "$PKG_DIR/"
           cd "$GITHUB_WORKSPACE/sdk"
           echo "CONFIG_PACKAGE_passwall-ssh-core=y" >> .config
           make defconfig
@@ -243,14 +259,14 @@ jobs:
             false
           fi
           echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
-          IPK="$(find bin/packages -type f -name 'passwall-ssh-core_1.0.0-r61_mipsel_24kc.ipk' | head -n 1)"
+          IPK="$(find bin/packages -type f -name 'passwall-ssh-core_1.0.0-r62_mipsel_24kc.ipk' | head -n 1)"
           LIBSSH2_IPK="$(find bin/packages -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' | head -n 1)"
           test -n "$IPK"
           IPK_CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
           printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Package: passwall-ssh-core'
-          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Version: 1.0.0-r61'
+          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Version: 1.0.0-r62'
           printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
-          echo "PASS: core IPK filename and embedded control metadata both identify 1.0.0-r61."
+          echo "PASS: core IPK filename and embedded control metadata both identify 1.0.0-r62."
           test -n "$LIBSSH2_IPK"
           mkdir -p "$GITHUB_WORKSPACE/test-results"
           cp "$IPK" "$LIBSSH2_IPK" "$GITHUB_WORKSPACE/test-results/"
@@ -331,7 +347,7 @@ jobs:
       - name: Upload MIPS IPK and helper
         uses: actions/upload-artifact@v4
         with:
-          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r61-ipk
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r62-ipk
           path: |
             test-results/passwall-ssh-core*.ipk
             test-results/libssh2-1_1.11.1-r1_mipsel_24kc.ipk
@@ -380,6 +396,11 @@ jobs:
             test-results/r59-inline-poly1305.log
             test-results/r59-perf-log-parser-selftest.log
             test-results/r61-window-backpressure.log
+            test-results/r62-config-parser.log
+            test-results/r62-chacha-config-source.log
+            test-results/chachapoly-parallel-r62-mips-test
+            test-results/chachapoly-parallel-r62-mips.sha256
+            test-results/chachapoly-parallel-r62-mips-file.txt
             test-results/chachapoly-auth-order.log
             test-results/mips32-hotpath-annotation.log
             test-results/libssh2-chacha-mips.disasm
@@ -462,7 +483,7 @@ jobs:
       - name: Download the MIPS IPK and test helper
         uses: actions/download-artifact@v4
         with:
-          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r61-ipk
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r62-ipk
           run-id: ${{ env.SDK_RUN_ID }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -475,17 +496,17 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c tools/mips32/chacha-core.S tests/mips32_chacha_asm_test.c tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_asm_test.c tests/poly1305_mips_hotpath_test.py tools/mips32/poly1305-mips.pl LICENSES/BSD-3-Clause.txt tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c tools/mips32/chacha-core.S tests/mips32_chacha_asm_test.c tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_asm_test.c tests/poly1305_mips_hotpath_test.py tools/mips32/poly1305-mips.pl LICENSES/BSD-3-Clause.txt tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py; then
             echo "SDK artifact was built from different package or test sources."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py
             false
           fi
-          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256 mips32-chacha-asm-test.sha256 poly1305-mips-asm-test.sha256)
-          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test test-results/mips32-chacha-asm-test test-results/poly1305-mips-asm-test
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256 mips32-chacha-asm-test.sha256 poly1305-mips-asm-test.sha256 chachapoly-parallel-r62-mips.sha256)
+          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test test-results/mips32-chacha-asm-test test-results/poly1305-mips-asm-test test-results/chachapoly-parallel-r62-mips-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          test -s test-results/passwall-ssh-core_1.0.0-r61_mipsel_24kc.ipk
-          grep -Fq 'Version: 1.0.0-r61' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r61_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
+          test -s test-results/passwall-ssh-core_1.0.0-r62_mipsel_24kc.ipk
+          grep -Fq 'Version: 1.0.0-r62' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r62_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
           LIBSSH2_IPK="$(find test-results -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
           test -n "$LIBSSH2_IPK"
           LIBSSH2_CONTROL="$(tar -xOzf "$LIBSSH2_IPK" ./control.tar.gz | tar -xzO ./control)"
@@ -504,6 +525,7 @@ jobs:
           readelf -h test-results/diag-timer | grep -q 'MIPS'
           readelf -h test-results/mips32-chacha-asm-test | grep -q 'MIPS'
           readelf -h test-results/poly1305-mips-asm-test | grep -q 'MIPS'
+          readelf -h test-results/chachapoly-parallel-r62-mips-test | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
         shell: bash
@@ -1019,6 +1041,7 @@ jobs:
              "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" \
             "$GITHUB_WORKSPACE/test-results/mips32-chacha-asm-test" \
             "$GITHUB_WORKSPACE/test-results/poly1305-mips-asm-test" \
+            "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r62-mips-test" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
@@ -1075,7 +1098,8 @@ jobs:
              grep -aFq 'libssh2_session_diag_timing_snapshot' "$LIBSSH2_SO" &&
              grep -aFq 'libssh2_session_diag_timing_enable' "$LIBSSH2_SO" &&
              grep -aFq 'libssh2_session_callback_set2' "$LIBSSH2_SO" &&
-             grep -aFq 'libssh2_session_set_chacha_workers' "$LIBSSH2_SO"; then
+             grep -aFq 'libssh2_session_set_chacha_workers' "$LIBSSH2_SO" && \
+            grep -aFq 'libssh2_session_set_chacha_threshold' "$LIBSSH2_SO"; then
             pass "SDK-built patched libssh2 1.11.1 installed; r49 base APIs plus r51 authentication ordering are present"
           else
             echo "Patched libssh2 install/runtime-symbol verification failed (opkg_rc=$LIBSSH2_RC)."
@@ -1084,7 +1108,7 @@ jobs:
             fail "SDK-built patched libssh2 1.11.1 was not installed or is missing a required libssh2 runtime API"
           fi
 
-          echo "========== INSTALL R61 MIPS IPK (OFFLINE) =========="
+          echo "========== INSTALL R62 MIPS IPK (OFFLINE) =========="
           if [ "$STATUS" -eq 0 ]; then
             opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
@@ -1093,10 +1117,28 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r61'; then
-            pass "opkg installed passwall-ssh-core r61 on mipsel_24kc"
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r62'; then
+            pass "opkg installed passwall-ssh-core r62 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
+          fi
+
+          if [ -f "$LOG/chachapoly-parallel-r62-mips-test" ] && cp "$LOG/chachapoly-parallel-r62-mips-test" /usr/bin/chachapoly-parallel-r62-mips-test; then
+            chmod 0755 /usr/bin/chachapoly-parallel-r62-mips-test
+            R62_CRYPTO_RC=0
+            if command -v timeout >/dev/null 2>&1; then
+              timeout 240 /usr/bin/chachapoly-parallel-r62-mips-test >"$LOG/chachapoly-parallel-r62-mips-test.log" 2>&1 || R62_CRYPTO_RC=$?
+            else
+              /usr/bin/chachapoly-parallel-r62-mips-test >"$LOG/chachapoly-parallel-r62-mips-test.log" 2>&1 || R62_CRYPTO_RC=$?
+            fi
+            cat "$LOG/chachapoly-parallel-r62-mips-test.log"
+            if [ "$R62_CRYPTO_RC" -eq 0 ]; then
+              pass "MIPS R62 crypto A/B matrix 0/1/2/3 workers x 4/8/16/24/32 KiB threshold boundaries"
+            else
+              fail "MIPS R62 crypto A/B matrix failed (rc=$R62_CRYPTO_RC)"
+            fi
+          else
+            fail "MIPS R62 crypto A/B regression helper missing"
           fi
 
           if [ -f "$LOG/mips32-chacha-asm-test" ] && cp "$LOG/mips32-chacha-asm-test" /usr/bin/mips32-chacha-asm-test; then
@@ -1250,6 +1292,8 @@ jobs:
           MAX_CLIENTS=32
           IDLE_TIMEOUT=600
           WORKERS=2
+          CHACHA_WORKERS=auto
+          CHACHA_THRESHOLD_KIB=4
           LOG_BACKPRESSURE=1
           TCP_ENV
 
@@ -1660,6 +1704,11 @@ jobs:
             "$GITHUB_WORKSPACE/test-results/guest/tcp-ssh-core.log" \
             "$GITHUB_WORKSPACE/test-results/guest/tls-ssh-core.log" \
             | tee "$GITHUB_WORKSPACE/test-results/r61-window-runtime.log"
+          echo "========== VERIFY R62 RUNTIME CHACHA WORKER/THRESHOLD SETTINGS =========="
+          python3 "$GITHUB_WORKSPACE/tests/r62_chacha_runtime_test.py" \
+            "$GITHUB_WORKSPACE/test-results/guest/tcp-ssh-core.log" \
+            "$GITHUB_WORKSPACE/test-results/guest/tls-ssh-core.log" \
+            | tee "$GITHUB_WORKSPACE/test-results/r62-chacha-runtime.log"
 
           echo "========== VERIFY HOST OBSERVED TCP AND TLS HALF-CLOSE =========="
           cat /tmp/mips-http-server.log
