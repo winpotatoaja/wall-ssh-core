@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/passwall-ssh-core-qemu-r59-r62-bandwidth.yml"
       - "tests/analyze_qemu_speedtest_r59_r62.py"
+      - "tests/qemu_speedtest_r53.sh"
 
 permissions:
   contents: read

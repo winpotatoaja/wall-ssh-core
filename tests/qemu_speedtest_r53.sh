@@ -430,13 +430,21 @@ main() {
     fi
     echo "PASS: ChaCha20-Poly1305 negotiated before bandwidth tests begin."
 
-    # Do not spend the two 100 MB transfers unless the inbound ChaCha worker
-    # pool was actually created during the SSH key exchange.
+    # Verify the actual three-worker crypto plan after key exchange. R59 logs
+    # the legacy r51 ChaCha plan; R62 logs the runtime requested/active controls.
     CRYPTO_WORKERS_READY=0
+    CRYPTO_PLAN=unknown
     N=0
     while [ "$N" -lt 10 ]; do
-        if grep -Eq '\[ChaCha\] r51 S2C payload: detected_cpus=4 detected_cores=2 owner_payload_lanes=0 crypto_workers=3 poly1305_workers=1 chacha_payload_workers=3 active_worker_lanes=3 threshold=4096 bytes' "$RESULT/core.log"; then
+        if grep -Fq '[ChaCha] r51 S2C payload: detected_cpus=4 detected_cores=2 owner_payload_lanes=0 crypto_workers=3 poly1305_workers=1 chacha_payload_workers=3 active_worker_lanes=3 threshold=4096 bytes' "$RESULT/core.log"; then
             CRYPTO_WORKERS_READY=1
+            CRYPTO_PLAN=r59-legacy-3-workers-threshold-4KiB
+            break
+        fi
+        if grep -Fq '[CHACHA-CONFIG] mode=auto requested_workers=3 threshold_kib=4 threshold_bytes=4096 detected_cores=2' "$RESULT/core.log" &&
+           grep -Fq '[CHACHA-CONFIG-ACTIVE] requested_workers=3 active_workers=3 threshold_bytes=4096' "$RESULT/core.log"; then
+            CRYPTO_WORKERS_READY=1
+            CRYPTO_PLAN=r62-auto-requested-3-active-3-threshold-4KiB
             break
         fi
         kill -0 "$CORE_PID" 2>/dev/null || break
@@ -444,12 +452,12 @@ main() {
         sleep 1
     done
     if [ "$CRYPTO_WORKERS_READY" -ne 1 ]; then
-        echo "ERROR: expected r51 authenticated 3-worker ChaCha plan was not active; skipping both 100 MB downloads"
-        grep -E '\[PERF\]|ChaCha|SSH Cipher' "$RESULT/core.log" 2>/dev/null || :
+        echo "ERROR: neither R59 legacy nor R62 runtime 3-worker ChaCha plan was active; skipping both 100 MB downloads"
+        grep -Ei '\[PERF\]|ChaCha|CHACHA-CONFIG|SSH Cipher' "$RESULT/core.log" 2>/dev/null || :
         kill -TERM "$CORE_PID" 2>/dev/null || :
         return 2
     fi
-    echo "PASS: MT7621A topology detected as 2 physical cores / 4 Linux CPUs; r51 authenticated with Poly1305 first, then used all 3 workers for ChaCha20."
+    echo "PASS: crypto plan verified: $CRYPTO_PLAN; MT7621 topology=2 physical cores/4 Linux CPUs."
 
     thread_snapshot "$CORE_PID" "" > "$RESULT/threads.prev"
     PREV_SAMPLE_MS=$(monotonic_milliseconds)
