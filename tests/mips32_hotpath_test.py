@@ -32,8 +32,10 @@ def verify_source(root: Path) -> int:
             and "defined(__mips64)" in chacha_text
         ),
         "counter-wrap packets remain on the portable C path": (
-            "mips_blocks <= 0xffffffffULL - (unsigned long long)x->input[12]" in chacha_text
-            and "chacha_crypt_mips(x->input, c, m, bytes, 20);" in chacha_text
+            "mips_full_bytes = bytes & ~(CHACHA_BLOCKLEN - 1U)" in chacha_text
+            and "mips_blocks <= 0xffffffffULL - (unsigned long long)x->input[12]" in chacha_text
+            and "chacha_crypt_mips(x->input, c, m, mips_full_bytes, 20);" in chacha_text
+            and "bytes -= mips_full_bytes;" in chacha_text
         ),
         "r51 authenticate-before-decrypt remains in the build": (
             (root / ".passwall-r51-auth-before-decrypt-patched").is_file()
