@@ -2,6 +2,16 @@
 
 Terakhir diperbarui: 2026-11-25
 
+## r59 — inline Owner Poly1305 before one decrypt dispatch
+
+Branch eksperimen terpisah: `experiment/r59-inline-owner-poly1305`, dibuat dari r58 setelah SDK dan QEMU standar #850 sukses. Package release dinaikkan menjadi `1.0.0-r59`.
+
+Telemetry r58 menunjukkan satu interval QEMU dengan 641 paket terprofil: kerja Poly1305 sekitar 39.853 µs, tetapi wall time fase Poly1305 mencapai 269.018 µs. Worker pool sebelumnya membangunkan semua worker untuk tugas Poly1305 tunggal (worker lain idle), menunggu barrier, lalu membangunkan pool sekali lagi untuk dekripsi.
+
+R59 mengubah hanya urutan dispatch pada helper authenticated ChaCha20-Poly1305: Owner menghitung Poly1305 langsung pada ciphertext asli, membandingkan tag secara constant-time, lalu—hanya jika valid—mendistribusikan dekripsi ke seluruh worker persistent dalam satu broadcast/barrier. Jalur r56 untuk mengeluarkan padding-length byte tetap dipertahankan. Paket yang gagal autentikasi tetap tidak menulis plaintext atau metadata padding ke destination.
+
+Dua field log yang sudah ada, `libssh2_chacha_poly1305_us` dan `libssh2_chacha_poly1305_wall_us`, kini mengukur pemanggilan Poly1305 inline yang sama dan diharapkan bernilai sama; nama field tetap dipertahankan agar parser tidak rusak. Ini memindahkan beban komputasi MAC ke thread Owner, jadi CPU Owner perlu diamati: pengurangan waktu tunggu belum membuktikan kenaikan throughput. Validasi SDK dan QEMU standar akan dijalankan; tidak ada benchmark bandwidth otomatis dan belum ada klaim speedup.
+
 ## r58 — split ChaCha phase telemetry into a dedicated PERF record
 
 Branch eksperimen terpisah: `experiment/r58-chacha-perf-log-split`, dibuat dari r57 setelah SDK dan QEMU standar #848 sukses. Core IPK dinaikkan menjadi `1.0.0-r58`.
@@ -12,7 +22,7 @@ Tujuannya murni observabilitas: log r57 dari QEMU #848 menunjukkan baris `[PERF]
 
 **Perbaikan workflow setelah run #849:** SDK berhasil membangun dan mengunggah artifact r58 (`15022651141`), tetapi job VM masih meminta nama artifact r57. Tiga referensi versi di job VM—artifact download, nama file IPK dan versi pasca-install—diselaraskan ke r58. Tidak ada perubahan sumber crypto pada perbaikan workflow ini.
 
-Tidak ada perubahan pada cipher, pembagian payload, worker count, format paket, atau urutan authenticate-before-decrypt. Tidak ada benchmark bandwidth Internet otomatis dan tidak ada klaim peningkatan throughput. SDK berjalan lebih dahulu; QEMU MT7621 otomatis memakai artifact dari run yang sama hanya bila SDK sukses. Validasi r58 masih menunggu.
+Tidak ada perubahan pada cipher, pembagian payload, worker count, format paket, atau urutan authenticate-before-decrypt. Tidak ada benchmark bandwidth Internet otomatis dan tidak ada klaim peningkatan throughput. SDK berjalan lebih dahulu; QEMU MT7621 otomatis memakai artifact dari run yang sama hanya bila SDK sukses. Validasi standar r58 selesai pada Actions #850 (`45617986268`): SDK dan QEMU sukses, guest melaporkan `MIPS TEST STATUS: 0`. Tidak ada benchmark bandwidth; hasil ini hanya memvalidasi build dan integrasi.
 
 ## r57 — phase-level ChaCha20-Poly1305 profiling
 

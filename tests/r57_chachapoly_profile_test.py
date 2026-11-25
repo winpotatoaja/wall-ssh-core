@@ -92,7 +92,7 @@ def main() -> int:
               "r57 patch marker is present"),
         check("pool->poly_wall_ns" in parallel and
               "poly_wall_started_ns = chacha_parallel_now_ns()" in parallel,
-              "Poly1305 phase wall time includes worker dispatch and barrier"),
+              "Poly1305 phase wall time measures the direct Owner authentication call"),
         check("pool->decrypt_wall_ns" in parallel and
               "decrypt_wall_started_ns = chacha_parallel_now_ns()" in parallel,
               "ChaCha decrypt phase wall time includes worker dispatch and barrier"),

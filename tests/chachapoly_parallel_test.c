@@ -222,7 +222,7 @@ out:
 
 
 static int
-test_r57_profile(struct chachapoly_ctx *encrypt_ctx,
+test_r59_profile(struct chachapoly_ctx *encrypt_ctx,
                  struct chachapoly_ctx *decrypt_ctx,
                  unsigned int workers, u_int payload_len, unsigned int seed)
 {
@@ -273,6 +273,8 @@ test_r57_profile(struct chachapoly_ctx *encrypt_ctx,
 
     if(diag_session.passwall_diag.chacha_poly1305_ns == 0ULL ||
        diag_session.passwall_diag.chacha_poly1305_wall_ns == 0ULL ||
+       diag_session.passwall_diag.chacha_poly1305_wall_ns !=
+           diag_session.passwall_diag.chacha_poly1305_ns ||
        diag_session.passwall_diag.chacha20_decrypt_wall_ns == 0ULL ||
        diag_session.passwall_diag.chacha20_worker_cpu_ns == 0ULL ||
        diag_session.passwall_diag.chacha20_worker_critical_ns == 0ULL ||
@@ -280,12 +282,12 @@ test_r57_profile(struct chachapoly_ctx *encrypt_ctx,
        diag_session.passwall_diag.chacha_poly1305_offloaded_packets != 1ULL ||
        diag_session.passwall_diag.chacha20_worker_cpu_ns <
            diag_session.passwall_diag.chacha20_worker_critical_ns) {
-        fprintf(stderr, "r57 phase timing counters missing or inconsistent "
+        fprintf(stderr, "r59 inline Poly1305 and r57 phase timing counters missing or inconsistent "
                 "(workers=%u)\n", workers);
         goto out;
     }
 
-    printf("R57_PROFILE payload=%u workers=%u poly_worker_ns=%llu "
+    printf("R59_PROFILE payload=%u workers=%u poly_worker_ns=%llu "
            "poly_wall_ns=%llu chacha_wall_ns=%llu worker_cpu_ns=%llu "
            "worker_critical_ns=%llu coordinator_other_ns=%llu\n",
            payload_len, workers,
@@ -362,7 +364,7 @@ main(void)
     for(i = 1U; i < 4U; i++) {
         static const u_int profile_lengths[] = { 4096U, 16384U, MAX_PAYLOAD };
         for(j = 0U; j < sizeof(profile_lengths) / sizeof(profile_lengths[0]); j++) {
-            if(test_r57_profile(&encrypt_ctx, &decrypt_ctx[i],
+            if(test_r59_profile(&encrypt_ctx, &decrypt_ctx[i],
                                 worker_counts[i], profile_lengths[j],
                                 0x570000U + (unsigned int)(i * 32U + j)) != 0) {
                 for(j = 0; j < 4U; j++)
@@ -376,6 +378,6 @@ main(void)
     for(i = 0; i < 4U; i++)
         chachapoly_cleanup(&decrypt_ctx[i]);
     chachapoly_cleanup(&encrypt_ctx);
-    puts("PASS: r57 phase timing captures Poly1305, ChaCha worker and coordination intervals");
+    puts("PASS: r59 inline Poly1305 timing matches wall time and ChaCha worker phases remain valid");
     return 0;
 }
