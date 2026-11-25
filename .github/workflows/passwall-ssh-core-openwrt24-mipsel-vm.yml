@@ -510,7 +510,7 @@ jobs:
           exec docker run --rm --network host \
             --user "$(id -u):$(id -g)" \
             --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
-            --workdir "$GITHUB_WORKSPACE" \
+            --workdir "$EMU_DIR" \
             --env HOME=/tmp \
             ubuntu:26.04 \
             "$QEMU_MIPSEL_REAL" "\$@"
