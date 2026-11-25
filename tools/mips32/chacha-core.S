@@ -279,6 +279,7 @@ chacha_crypt_mips:
 
 	/* The caller passes complete 64-byte blocks only. */
 	bgtz	BYTES, .Loop_chacha_rounds
+	nop
 	addiu	NONCE_0, 1
 	b	.Lchacha_mips_xor_done
 	nop
