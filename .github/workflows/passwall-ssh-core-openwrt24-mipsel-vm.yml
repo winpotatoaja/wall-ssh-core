@@ -497,7 +497,7 @@ jobs:
           import re
           import sys
 
-          match = re.fullmatch(r"glibc (\\d+)\\.(\\d+)", sys.argv[1])
+          match = re.fullmatch(r"glibc (\d+)\.(\d+)", sys.argv[1])
           if not match or tuple(map(int, match.groups())) < (2, 42):
               raise SystemExit(f"Ubuntu 26.04 container has insufficient glibc: {sys.argv[1]}")
           print("PASS: QEMU runtime container provides glibc >= 2.42")
@@ -507,13 +507,13 @@ jobs:
           cat > "$QEMU_MIPSEL" <<EOF
           #!/usr/bin/env bash
           set -euo pipefail
-          exec docker run --rm --network host \\
-            --user "$(id -u):$(id -g)" \\
-            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \\
-            --workdir "$GITHUB_WORKSPACE" \\
-            --env HOME=/tmp \\
-            ubuntu:26.04 \\
-            "$QEMU_MIPSEL_REAL" "\\$@"
+          exec docker run --rm --network host \
+            --user "$(id -u):$(id -g)" \
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            --workdir "$GITHUB_WORKSPACE" \
+            --env HOME=/tmp \
+            ubuntu:26.04 \
+            "$QEMU_MIPSEL_REAL" "\$@"
           EOF
           chmod 0755 "$QEMU_MIPSEL"
           echo "Running only the MT7621 QEMU process in the Ubuntu 26.04 runtime container."
