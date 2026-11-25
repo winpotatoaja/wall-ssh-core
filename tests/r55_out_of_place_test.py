@@ -66,7 +66,9 @@ def main(root: Path) -> None:
     )
     require(
         "((u_int)buf_len) - 4, 4, 4,\n" in crypt and
-        "((u_int)buf_len),\n                                   4, 4, ctx->encrypt);" in crypt,
+        "((u_int)buf_len)," in crypt and
+        "4, 4, ctx->encrypt);" in crypt and
+        "chachapoly_crypt(session, &ctx->chachapoly_ctx" in crypt,
         "legacy encrypt and in-place decrypt retain the four-byte output AAD layout",
     )
     require(
