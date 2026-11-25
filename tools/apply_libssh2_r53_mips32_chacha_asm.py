@@ -62,21 +62,26 @@ def patch(root: Path, project_root: Path) -> None:
         "      return;\n",
         "  u_int i;\n"
         "#if defined(LIBSSH2_HAVE_MIPS32R2_CHACHA_ASM)\n"
+        "  u_int mips_full_bytes;\n"
         "  unsigned long long mips_blocks;\n"
         "#endif\n\n"
-        "  if(!bytes)\n"
-        "      return;\n"
         "#if defined(LIBSSH2_HAVE_MIPS32R2_CHACHA_ASM)\n"
-        "  /* The assembly backend increments the low 32-bit block counter.\n"
-        "   * Keep the portable C path for a packet that would carry into word 13.\n"
+        "  /* Assembly processes complete blocks; portable C handles any tail.\n"
+        "   * Fall back entirely if the 32-bit counter would wrap into word 13.\n"
         "   */\n"
-        "  mips_blocks = ((unsigned long long)bytes + CHACHA_BLOCKLEN - 1ULL) /\n"
-        "                CHACHA_BLOCKLEN;\n"
-        "  if(mips_blocks <= 0xffffffffULL - (unsigned long long)x->input[12]) {\n"
-        "      chacha_crypt_mips(x->input, c, m, bytes, 20);\n"
-        "      return;\n"
+        "  mips_full_bytes = bytes & ~(CHACHA_BLOCKLEN - 1U);\n"
+        "  if(mips_full_bytes != 0U) {\n"
+        "      mips_blocks = (unsigned long long)mips_full_bytes / CHACHA_BLOCKLEN;\n"
+        "      if(mips_blocks <= 0xffffffffULL - (unsigned long long)x->input[12]) {\n"
+        "          chacha_crypt_mips(x->input, c, m, mips_full_bytes, 20);\n"
+        "          m += mips_full_bytes;\n"
+        "          c += mips_full_bytes;\n"
+        "          bytes -= mips_full_bytes;\n"
+        "      }\n"
         "  }\n"
-        "#endif\n",
+        "#endif\n\n"
+        "  if(!bytes)\n"
+        "      return;\n",
         "dispatch MIPS32r2 packets without 32-bit counter wrap to assembly",
     )
     chacha_path.write_text(chacha)
@@ -92,7 +97,9 @@ def patch(root: Path, project_root: Path) -> None:
         '# r53: use the audited MIPS32r2 ChaCha core only on 32-bit MIPS targets.\n'
         'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips")\n'
         '  list(APPEND _sources "${CMAKE_CURRENT_SOURCE_DIR}/chacha-core.S")\n'
-        '  set_source_files_properties(chacha-core.S PROPERTIES\n'
+        '  set(_chacha_mips_asm "${CMAKE_CURRENT_SOURCE_DIR}/chacha-core.S")\n'
+        '  list(APPEND _sources "${_chacha_mips_asm}")\n'
+        '  set_source_files_properties("${_chacha_mips_asm}" PROPERTIES\n'
         '    COMPILE_OPTIONS "-mno-mips16;-mips32r2")\n'
         'endif()',
         "add the MIPS32r2 ChaCha assembly source with source-specific ISA flags",
