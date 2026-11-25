@@ -731,10 +731,8 @@ def patch(root: Path) -> None:
     )
     replace_once(
         crypt_c,
-        "                                   ((u_int)buf_len),\n"
-        "                                   4, 4, ctx->encrypt);",
-        "                                   ((u_int)buf_len),\n"
-        "                                   4, 4, 0U, NULL, ctx->encrypt);",
+        "                       4, 4, ctx->encrypt);",
+        "                       4, 4, 0U, NULL, ctx->encrypt);",
         "keep legacy in-place decryption in four-byte-AAD mode",
     )
 
