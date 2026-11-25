@@ -657,18 +657,30 @@ def patch(root: Path) -> None:
         "    pool->source = NULL;\n"
         "    pool->destination = NULL;\n"
         "    pool->poly_input = NULL;\n"
-        "    pool->poly_len = 0U;",
+        "    pool->poly_len = 0U;\n"
+        "    pool->measure_poly = 0U;\n"
+        "    pool->active_workers = 0U;",
         "    pool->source = NULL;\n"
         "    pool->destination = NULL;\n"
         "    pool->padding_length_out = NULL;\n"
         "    pool->poly_input = NULL;\n"
-        "    pool->poly_len = 0U;",
+        "    pool->poly_len = 0U;\n"
+        "    pool->measure_poly = 0U;\n"
+        "    pool->active_workers = 0U;",
         "clear padding output pointer when worker pool stops",
     )
     replace_once(
         chacha_c,
+        "    pool->completed = pool->worker_count;\n"
+        "    chacha_parallel_wipe(pool->states, sizeof(pool->states));\n"
+        "    chacha_parallel_wipe(pool->poly_key, sizeof(pool->poly_key));\n"
+        "    chacha_parallel_wipe(pool->poly_tag, sizeof(pool->poly_tag));\n"
         "    memset(pool->offsets, 0, sizeof(pool->offsets));\n"
         "    memset(pool->lengths, 0, sizeof(pool->lengths));",
+        "    pool->completed = pool->worker_count;\n"
+        "    chacha_parallel_wipe(pool->states, sizeof(pool->states));\n"
+        "    chacha_parallel_wipe(pool->poly_key, sizeof(pool->poly_key));\n"
+        "    chacha_parallel_wipe(pool->poly_tag, sizeof(pool->poly_tag));\n"
         "    memset(pool->offsets, 0, sizeof(pool->offsets));\n"
         "    memset(pool->destination_offsets, 0, sizeof(pool->destination_offsets));\n"
         "    memset(pool->lengths, 0, sizeof(pool->lengths));",
