@@ -53,10 +53,9 @@ jobs:
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror -I. tests/client_lifetime_test.c client_lifetime.c -o /tmp/client-lifetime-test
           timeout 10s /tmp/client-lifetime-test | tee test-results/client-lifetime-test-native.log
           gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/client_event_token_test.c -o /tmp/client-event-token-test
-          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -I"$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/io_worker_completion_tracker_test.c" "$GITHUB_WORKSPACE/io_worker_completion_tracker.c" "$GITHUB_WORKSPACE/io_worker_pool.c" -pthread -o "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
-          chmod 0755 "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
-          file "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" | tee "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-file.txt"
-          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum io-worker-completion-tracker-test > io-worker-completion-tracker.sha256)
+          gcc -std=gnu11 -O2 -Wall -Wextra -Werror -I. tests/io_worker_completion_tracker_test.c io_worker_completion_tracker.c io_worker_pool.c -pthread -o /tmp/io-worker-completion-tracker-test
+          timeout 10s /tmp/io-worker-completion-tracker-test | tee test-results/io-worker-completion-tracker-test-native.log
+          timeout 10s /tmp/client-event-token-test | tee test-results/client-event-token-test-native.log
         shell: bash
         run: |
           set -euo pipefail
@@ -289,11 +288,10 @@ jobs:
           chmod 0755 "$GITHUB_WORKSPACE/test-results/client-event-token-test"
           file "$GITHUB_WORKSPACE/test-results/client-event-token-test" | tee "$GITHUB_WORKSPACE/test-results/client-event-token-file.txt"
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum client-event-token-test > client-event-token.sha256)
-           "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -I"$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/io_worker_completion_tracker_test.c" "$GITHUB_WORKSPACE/io_worker_completion_tracker.c" "$GITHUB_WORKSPACE/io_worker_pool.c" -pthread -o "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
-            "$GITHUB_WORKSPACE/test-results/mips32-chacha-asm-test" \
-           chmod 0755 "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
-           file "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" | tee "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-file.txt"
-           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum io-worker-completion-tracker-test > io-worker-completion-tracker.sha256)
+          "$CROSS_CC" -std=c11 -Os -static -Wall -Wextra -Werror -I"$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/tests/io_worker_completion_tracker_test.c" "$GITHUB_WORKSPACE/io_worker_completion_tracker.c" "$GITHUB_WORKSPACE/io_worker_pool.c" -pthread -o "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test"
+          file "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" | tee "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-file.txt"
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum io-worker-completion-tracker-test > io-worker-completion-tracker.sha256)
       - name: Upload MIPS IPK and helper
         uses: actions/upload-artifact@v4
         with:
@@ -931,6 +929,7 @@ jobs:
             "$GITHUB_WORKSPACE/test-results/client-lifetime-test" \
             "$GITHUB_WORKSPACE/test-results/client-event-token-test" \
              "$GITHUB_WORKSPACE/test-results/io-worker-completion-tracker-test" \
+            "$GITHUB_WORKSPACE/test-results/mips32-chacha-asm-test" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
