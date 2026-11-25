@@ -306,9 +306,15 @@ jobs:
               opkg --force-reinstall --force-downgrade install /tmp/mips-test/package-${LABEL}/libssh2-1_1.11.1-r1_mipsel_24kc.ipk || exit \$?
               opkg --force-reinstall --force-downgrade install /tmp/mips-test/package-${LABEL}/passwall-ssh-core_1.0.0-${LABEL}_mipsel_24kc.ipk || exit \$?
               grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 || exit \$?
-              /tmp/mips-test/qemu_speedtest_r53.sh
+              chmod 0700 /tmp/mips-test/diag-timer || exit \$?
+              sh /tmp/mips-test/qemu_speedtest_r53.sh
               RC=\$?
-              mv /tmp/mips-test/qemu-speedtest /tmp/mips-test/$DEST
+              if [ -d /tmp/mips-test/qemu-speedtest ]; then
+                mv /tmp/mips-test/qemu-speedtest /tmp/mips-test/$DEST
+              else
+                echo "ERROR: benchmark result directory was not created for $LABEL repeat $REPEAT"
+                if [ \$RC -eq 0 ]; then RC=1; fi
+              fi
               exit \$RC"
             RC=0
             if ssh "${SSH_OPTS[@]}" root@127.0.0.1 "$REMOTE"; then RC=0; else RC=$?; fi
