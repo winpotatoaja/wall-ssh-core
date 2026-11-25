@@ -2,6 +2,20 @@
 
 Terakhir diperbarui: 2026-11-25
 
+## r56 — authenticated normalized ChaCha output (skip padding memmove)
+
+Branch eksperimen terpisah: `experiment/r56-skip-padding-memmove`, dibuat dari commit r55 yang sudah lulus SDK dan QEMU standar #820. Core IPK menggunakan release `1.0.0-r56`.
+
+R56 melanjutkan r55 hanya pada inbound `chacha20-poly1305@openssh.com`: byte `padding_length` dipulihkan secara terpisah, sedangkan byte packet mulai dari SSH message type ditulis langsung ke `p->payload`. Akibatnya, `fullpacket()` tidak perlu lagi melakukan `memmove(p->payload, &p->payload[1], p->packet_length - 1)` untuk ChaCha. Buffer `p->payload` tetap memakai alamat alokasi aslinya; hanya panjang logis `total_num/data_num/wptr` yang disesuaikan menjadi `packet_length - 1`, sementara read pointer tetap mengonsumsi seluruh ciphertext dan tag.
+
+Keamanan r51/r55 tetap dipertahankan: Poly1305 membaca packet wire asli (4-byte AAD + ciphertext) dan membandingkan tag sebelum output plaintext atau `padding_length` ditulis. Pada jalur worker, worker pertama mengonsumsi ChaCha block pertama, mengambil `padding_length`, dan menulis 63 byte sesudahnya ke offset output nol. Worker berikutnya melanjutkan pada counter ChaCha yang sesuai dengan source offset 64 dan destination offset 63. Jalur serial/small-packet melakukan normalisasi yang sama. API in-place/enkripsi lama dan copy/memmove cipher selain ChaCha dipertahankan.
+
+Regresi native diperluas untuk membandingkan output biasa r55 dan output normalized r56 pada ukuran 0, 1, 63, 64, 65, 4095, 4096, 4097, 8191, 8192, 16384, dan 32768 byte dengan 1–4 worker. Pemeriksaan juga meliputi source ciphertext yang tetap utuh, output tail tidak tertimpa, padding length yang benar, dan tag salah yang tidak mengubah destination maupun padding length. Source verifier memastikan autentikasi mendahului output dan bahwa penghilangan `memmove` hanya berlaku pada cipher ChaCha tersebut.
+
+**Otomasi validasi:** commit bertanda `[mips-stage=sdk]` menjalankan SDK lebih dahulu; QEMU job otomatis memakai artifact dari run yang sama hanya bila SDK sukses. Tes bandwidth Internet tidak dijalankan otomatis.
+
+**Status:** patcher, regresi native, source verifier, serta wiring SDK→QEMU telah disiapkan. Hasil SDK/QEMU r56 belum tersedia. Belum ada klaim speedup; benchmark A/B pada router MT7621 fisik tetap diperlukan.
+
 ## r55 — authenticated out-of-place ChaCha20-Poly1305 decrypt
 
 Branch eksperimen terpisah: `experiment/r55-outofplace-chacha-decrypt`, dibuat dari r54 setelah SDK #794 lulus dan pengguna mengonfirmasi QEMU r54 sukses. Core IPK dinaikkan menjadi `1.0.0-r55`.
@@ -14,7 +28,7 @@ Uji regresi diperluas untuk payload 0, 1, 63, 64, 65, 4095, 4096, 4097, 8191, 81
 
 **Otomasi validasi:** commit bertanda `[mips-stage=sdk]` menjalankan SDK lebih dahulu. QEMU job bergantung pada job SDK dan otomatis mengambil artifact dari run yang sama hanya bila SDK sukses; ketika SDK gagal, QEMU dilewati. Pemicu QEMU manual lama tetap tersedia. Tes bandwidth Internet 100 MB tidak ikut dijalankan otomatis.
 
-**Status:** SDK #45574750057 gagal pada anchor posisi tag enkripsi, SDK #45579024151 pada anchor decrypt, dan SDK #813 kembali gagal karena anchor decrypt masih terikat whitespace. Patcher kini memakai regex Python dengan escape yang sudah diperiksa untuk mengenali struktur argumen call session-aware `chachapoly_crypt()`, lalu menambahkan output AAD=4 untuk jalur in-place lama. Regex diuji terhadap bentuk call-site hasil patch r47; verifier memeriksa semantik call-site dan framing, bukan indentasi. Retry SDK berikutnya baru dipicu setelah koreksi escape regex ini. Belum ada hasil SDK/QEMU r55 maupun klaim speedup.
+**Status:** SDK dan QEMU standar r55 berhasil pada run #820 (`45585185768`). Artifact SDK r55 berhasil diverifikasi, firmware OpenWrt 24.10.7 MT7621 dibangun, VM boot, IPK `1.0.0-r55` terpasang, dan regresi assembly ChaCha20/Poly1305 MIPS32r2 lulus. QEMU berjalan sebagai job `vm` pada run yang sama, bukan workflow terpisah. Belum ada klaim peningkatan kecepatan; benchmark bandwidth dan pengujian router MT7621 fisik belum dilakukan.
 
 ## r54 — eksperimen Poly1305 MIPS32r2/o32 assembly (SDK dan QEMU lulus)
 
