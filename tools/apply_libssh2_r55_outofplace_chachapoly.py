@@ -156,9 +156,10 @@ def patch(root: Path) -> None:
     )
     replace_once(
         crypt_c,
-        "                                   ((u_int)buf_len), 4, ctx->encrypt);",
-        "                                   ((u_int)buf_len), 4, 4,\n"
-        "                                   ctx->encrypt);",
+        "                                   ((u_int)buf_len),\n"
+        "                                   4, ctx->encrypt);",
+        "                                   ((u_int)buf_len),\n"
+        "                                   4, 4, ctx->encrypt);",
         "preserve existing in-place decrypt framing",
     )
 
@@ -180,8 +181,7 @@ _libssh2_chachapoly_decrypt_body(LIBSSH2_SESSION *session,
     struct crypt_ctx *ctx;
     int rc;
 
-    (void)session;
-    if(!abstract || !*abstract || !source || !destination ||
+    if(!session || !abstract || !*abstract || !source || !destination ||
        source == destination || tag_len != 16U)
         return LIBSSH2_ERROR_INVAL;
 
@@ -189,7 +189,7 @@ _libssh2_chachapoly_decrypt_body(LIBSSH2_SESSION *session,
     if(ctx->encrypt)
         return LIBSSH2_ERROR_INVAL;
 
-    rc = chachapoly_crypt(&ctx->chachapoly_ctx, seqno,
+    rc = chachapoly_crypt(session, &ctx->chachapoly_ctx, seqno,
                           destination, source, payload_len, 4U, 0U, 0);
     if(rc == 0)
         memset(destination + payload_len, 0, tag_len);
