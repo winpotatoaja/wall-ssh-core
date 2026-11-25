@@ -645,11 +645,11 @@ def patch(root: Path) -> None:
     )
     replace_once(
         chacha_c,
-        "        pool->offsets[lane - 1U] = (u_int)(first_block * CHACHA_BLOCKLEN);\n"
-        "        pool->lengths[lane - 1U] =\n",
-        "        pool->offsets[lane - 1U] = (u_int)(first_block * CHACHA_BLOCKLEN);\n"
-        "        pool->destination_offsets[lane - 1U] = pool->offsets[lane - 1U];\n"
-        "        pool->lengths[lane - 1U] =\n",
+        "        pool->offsets[lane] = (u_int)(first_block * CHACHA_BLOCKLEN);\n"
+        "        pool->lengths[lane] =\n",
+        "        pool->offsets[lane] = (u_int)(first_block * CHACHA_BLOCKLEN);\n"
+        "        pool->destination_offsets[lane] = pool->offsets[lane];\n"
+        "        pool->lengths[lane] =\n",
         "preserve identical offsets for existing parallel decrypt tasks",
     )
     replace_once(
