@@ -35,7 +35,7 @@ def main() -> int:
               "libssh2 validates all five supported thresholds"),
         check("unsigned int min_parallel_bytes);" in cipher_h and
               "session->passwall_diag.chacha_threshold_bytes" in crypt,
-              "session threshold reaches each inbound ChaCha context") &&
+              "session threshold reaches each inbound ChaCha context"),
         check("session->passwall_diag.chacha_threshold_bytes : 4096U" in crypt,
               "legacy libssh2 callers retain the 4 KiB default when no threshold is set"),
         check(priv.count("unsigned int chacha_threshold_bytes;") == 2 and
