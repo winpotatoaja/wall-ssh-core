@@ -32,6 +32,12 @@ typedef struct {
     unsigned long long chacha20_parallel_ns;
     unsigned long long chacha20_parallel_bytes;
     unsigned long long chacha20_parallel_packets;
+    unsigned long long chacha_poly1305_wall_ns;
+    unsigned long long chacha20_decrypt_wall_ns;
+    unsigned long long chacha20_worker_cpu_ns;
+    unsigned long long chacha20_worker_critical_ns;
+    unsigned long long chacha20_parallel_other_ns;
+    unsigned long long chacha20_profile_packets;
 } LIBSSH2_DIAG_TIMING;
 
 LIBSSH2_API void
