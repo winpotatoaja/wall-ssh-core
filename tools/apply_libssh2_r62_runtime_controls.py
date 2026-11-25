@@ -137,7 +137,9 @@ def patch(root: Path) -> None:
          "                       encrypt ? 0U : session->passwall_diag.chacha_workers_requested)) {",
          "    if(chachapoly_init(&ctx->chachapoly_ctx, secret, method->secret_len,\n"
          "                       encrypt ? 0U : session->passwall_diag.chacha_workers_requested,\n"
-         "                       encrypt ? 4096U : session->passwall_diag.chacha_threshold_bytes)) {",
+         "                       encrypt ? 4096U :\n"
+         "                           (session->passwall_diag.chacha_threshold_bytes\n"
+         "                            ? session->passwall_diag.chacha_threshold_bytes : 4096U))) {",
          "pass threshold into crypto context")
 
     session_c = root / "src/session.c"
