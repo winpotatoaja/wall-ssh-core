@@ -1628,7 +1628,10 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             "libssh2_chacha20_header_us=%llu libssh2_chacha20_payload_us=%llu "
             "libssh2_chacha20_serial_us=%llu libssh2_chacha20_serial_bytes=%llu "
             "libssh2_chacha20_serial_packets=%llu libssh2_chacha20_parallel_us=%llu "
-            "libssh2_chacha20_parallel_bytes=%llu libssh2_chacha20_parallel_packets=%llu",
+            "libssh2_chacha20_parallel_bytes=%llu libssh2_chacha20_parallel_packets=%llu "
+            "libssh2_chacha_poly1305_wall_us=%llu libssh2_chacha20_decrypt_wall_us=%llu "
+            "libssh2_chacha20_worker_cpu_us=%llu libssh2_chacha20_worker_critical_us=%llu "
+            "libssh2_chacha20_parallel_other_us=%llu libssh2_chacha20_profile_packets=%llu",
             span_ms, g_client_count, relay_clients,
             (unsigned long long)g_perf_stats.epoll_calls,
             (unsigned long long)g_perf_stats.epoll_wait_ms,
@@ -1703,7 +1706,13 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             (unsigned long long)libssh2_diag.chacha20_serial_packets,
             (unsigned long long)(libssh2_diag.chacha20_parallel_ns / 1000U),
             (unsigned long long)libssh2_diag.chacha20_parallel_bytes,
-            (unsigned long long)libssh2_diag.chacha20_parallel_packets);
+            (unsigned long long)libssh2_diag.chacha20_parallel_packets,
+            (unsigned long long)(libssh2_diag.chacha_poly1305_wall_ns / 1000U),
+            (unsigned long long)(libssh2_diag.chacha20_decrypt_wall_ns / 1000U),
+            (unsigned long long)(libssh2_diag.chacha20_worker_cpu_ns / 1000U),
+            (unsigned long long)(libssh2_diag.chacha20_worker_critical_ns / 1000U),
+            (unsigned long long)(libssh2_diag.chacha20_parallel_other_ns / 1000U),
+            (unsigned long long)libssh2_diag.chacha20_profile_packets);
 
     memset(&g_perf_stats, 0, sizeof(g_perf_stats));
     g_perf_window_start_ms = now;
