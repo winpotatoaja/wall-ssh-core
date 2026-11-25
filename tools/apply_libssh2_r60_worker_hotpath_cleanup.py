@@ -78,8 +78,19 @@ def patch_pool_struct(source: str) -> str:
         raise RuntimeError("crypto pool struct body not found")
     end = find_matching_brace(source, brace)
     block = source[start:end]
+    pointer_fields = (
+        "    u8 *poly_input;\n",
+        "    const u8 *poly_input;\n",
+    )
+    pointer_matches = [line for line in pointer_fields if block.count(line) == 1]
+    if len(pointer_matches) != 1 or sum(block.count(line) for line in pointer_fields) != 1:
+        raise RuntimeError(
+            "remove obsolete Poly1305 borrowed/scratch pointer: "
+            "expected exactly one mutable or const pool field"
+        )
+    block = block.replace(pointer_matches[0], "", 1)
+
     for line, label in (
-        ("    u8 *poly_input;\n", "remove obsolete Poly1305 scratch pointer"),
         ("    size_t poly_len;\n", "remove obsolete Poly1305 worker length"),
         ("    unsigned int measure_poly;\n", "remove obsolete Poly1305 worker timing flag"),
     ):
