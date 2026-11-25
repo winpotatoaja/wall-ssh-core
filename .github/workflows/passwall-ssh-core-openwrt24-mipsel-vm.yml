@@ -362,6 +362,8 @@ jobs:
             test-results/poly1305-mips-hotpath.log
             test-results/r55-out-of-place.log
             test-results/r56-skip-padding.log
+            test-results/chachapoly-parallel-test.log
+            test-results/r57-chachapoly-profile-source.log
             test-results/r57-chachapoly-profile-source.log
             test-results/chachapoly-auth-order.log
             test-results/mips32-hotpath-annotation.log
