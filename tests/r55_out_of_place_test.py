@@ -60,8 +60,9 @@ def main(root: Path) -> None:
 
     require(
         "_libssh2_chachapoly_decrypt_body" in crypt and
+        "chachapoly_crypt(session, &ctx->chachapoly_ctx, seqno" in crypt and
         "destination, source, payload_len, 4U, 0U, 0" in crypt,
-        "transport helper requests authenticated body-only output",
+        "transport helper uses the session-aware crypto API for authenticated body-only output",
     )
     require(
         "_libssh2_chachapoly_decrypt_body" in priv,
