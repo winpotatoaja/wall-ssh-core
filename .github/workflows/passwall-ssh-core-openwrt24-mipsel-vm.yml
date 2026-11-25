@@ -184,9 +184,16 @@ jobs:
           "$MIPS_CC" -std=gnu11 -O2 -static -mips32r2 -mno-mips16 -pthread -ffunction-sections -fdata-sections \
             -DHAVE_CONFIG_H -DLIBSSH2_OPENSSL -DLIBSSH2_HAVE_ZLIB \
             -I"$LIBSSH2_CONFIG_DIR" -I"$LIBSSH2_SRC/src" -I"$LIBSSH2_SRC/include" -I"$STAGING/usr/include" \
+            # Link the same MIPS32r2 assembly backends used by libssh2 itself.
+          test -s "$LIBSSH2_SRC/src/chacha-core.S"
+          test -s "$LIBSSH2_SRC/src/poly1305-core.S"
+          "$MIPS_CC" -std=gnu11 -O2 -static -mips32r2 -mno-mips16 -pthread -ffunction-sections -fdata-sections \
+            -DHAVE_CONFIG_H -DLIBSSH2_OPENSSL -DLIBSSH2_HAVE_ZLIB \
+            -I"$LIBSSH2_CONFIG_DIR" -I"$LIBSSH2_SRC/src" -I"$LIBSSH2_SRC/include" -I"$STAGING/usr/include" \
             "$GITHUB_WORKSPACE/tests/chachapoly_parallel_test.c" \
             "$LIBSSH2_SRC/src/cipher-chachapoly.c" "$LIBSSH2_SRC/src/chacha.c" \
             "$LIBSSH2_SRC/src/poly1305.c" "$LIBSSH2_SRC/src/misc.c" \
+            "$LIBSSH2_SRC/src/chacha-core.S" "$LIBSSH2_SRC/src/poly1305-core.S" \
             -Wl,--gc-sections -o "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r62-mips-test"
           chmod 0755 "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r62-mips-test"
           file "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r62-mips-test" | tee "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r62-mips-file.txt"
