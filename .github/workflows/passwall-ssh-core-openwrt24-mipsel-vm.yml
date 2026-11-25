@@ -468,6 +468,8 @@ jobs:
           tar -xzf /tmp/router-emulator.tar.gz -C emulator
           EMU_DIR="$(find emulator -maxdepth 3 -type f -name emulator.sh -print -quit | xargs dirname)"
           test -n "$EMU_DIR"
+          EMU_DIR="$(readlink -f "$EMU_DIR")"
+          case "$EMU_DIR" in /*) ;; *) echo "EMU_DIR is not absolute: $EMU_DIR"; false ;; esac
           unzip -q /tmp/router-emulator-presets.zip -d "$EMU_DIR"
           # v4.1 preset ZIP contains Router-Emulator/presets; emulator.sh
           # resolves presets relative to EMU_DIR, so flatten that one level.
