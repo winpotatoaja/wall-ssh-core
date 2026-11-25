@@ -14,6 +14,18 @@ Regression helper MIPS statis akan memeriksa RFC Poly1305 known-answer vector da
 
 **Status:** patch, source verifier, SDK/QEMU workflow, package identity dan dokumentasi sudah disiapkan. Build SDK, test KAT di QEMU, dan bandwidth r54 belum dijalankan. Tidak ada klaim peningkatan kecepatan sebelum hasil pengujian. Poly1305 assembly adalah satu tahap terpisah; optimasi zero-copy, worker topology/dispatch, packet queue, dan threshold belum diterapkan.
 
+## r54 — eksperimen Poly1305 MIPS32r2/o32 assembly (validasi belum dijalankan)
+
+Branch eksperimen terpisah: `experiment/r54-mips32-poly1305-asm`, dibuat dari r53 yang sudah lulus QEMU standar #767. Release core IPK dinaikkan menjadi `1.0.0-r54`; source ChaCha20 r53 dan hardening autentikasi-dulu r51/lifecycle r52 tetap dipertahankan.
+
+Tahap ini menambahkan backend Poly1305 Cryptogams untuk ABI MIPS32 o32. Generator `poly1305-mips.pl` diambil dari Linux v6.12 `arch/mips/crypto/poly1305-mips.pl` (upstream blob `b05bab884ed26d597bafeaf86aea5916c907ea90`), dengan deklarasi dual-license `GPL-1.0+ OR BSD-3-Clause`; teks lisensi BSD-3-Clause disertakan di `LICENSES/BSD-3-Clause.txt`. Patcher menjalankan generator dengan flavour `o32`, memberi nama simbol internal `poly1305_*_mips`, dan memasukkan hasilnya hanya pada target MIPS 32-bit. Compile assembly dipaksa ke `-mno-mips16 -mips32r2`. CMake tidak memasukkan file assembly ini pada MIPS64 atau target non-MIPS.
+
+`poly1305_auth()` memakai init, full-block processing dan emit assembly pada MIPS32 ISA revision 2–5. Tail 1–15 byte dibentuk sebagai blok akhir standar Poly1305 dengan byte `1` dan `hibit=0`. Implementasi C asli dipertahankan sebagai `poly1305_auth_portable()` untuk fallback non-MIPS dan oracle regresi; format tag dan wire protocol tidak diubah.
+
+Regression helper MIPS statis akan memeriksa RFC Poly1305 known-answer vector dan membandingkan assembly terhadap C oracle pada panjang 0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255, 256, 257, 4095, 4096, 4097, 32768, 34996, dan 35000 byte, termasuk variasi alignment input/key/output. SDK mengarsipkan helper, checksum dan disassembly; QEMU menjalankan helper di guest MT7621 serta memeriksa bahwa blok Poly1305 memakai instruksi MIPS32 32-bit `MULTU/MADDU`.
+
+**Status:** patch, source verifier, SDK/QEMU workflow, package identity dan dokumentasi sudah disiapkan. Build SDK, test KAT di QEMU, dan bandwidth r54 belum dijalankan. Tidak ada klaim peningkatan kecepatan sebelum hasil pengujian. Poly1305 assembly adalah satu tahap terpisah; optimasi zero-copy, worker topology/dispatch, packet queue, dan threshold belum diterapkan.
+
 ## r53 — eksperimen ChaCha20 MIPS32r2 assembly (SDK dan QEMU lulus; bandwidth berikutnya)
 
 Branch eksperimen terpisah: `experiment/r53-mips32-crypto-path`, dibuat dari baseline hardening r52. Core IPK menggunakan release `1.0.0-r53`; artefak r51/r52 tidak disentuh.
