@@ -18,6 +18,7 @@ def verify_source(root: Path) -> int:
         "r53 MIPS32r2 assembly patch marker exists": marker.is_file(),
         "CMake includes assembly only for MIPS targets": (
             'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips")' in cmake_text
+            and "enable_language(ASM)" in cmake_text
             and 'set(_chacha_mips_asm "${CMAKE_CURRENT_SOURCE_DIR}/chacha-core.S")' in cmake_text
             and 'list(APPEND _sources "${_chacha_mips_asm}")' in cmake_text
         ),
