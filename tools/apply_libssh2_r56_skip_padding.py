@@ -159,7 +159,7 @@ chacha_parallel_worker_main(void *opaque)
             /* Worker zero consumes block one, exports padding length, and
              * writes the remaining 63 bytes directly in normalized layout. */
             chacha_encrypt_bytes(&local_state, zero_block, first_keystream,
-                                 CHACHA_BLOCKLEN);
+                                 64U);
             if(padding_length_out)
                 *padding_length_out = (u8)(source[0] ^ first_keystream[0]);
             for(i = 1U; i < CHACHA_BLOCKLEN; i++)
@@ -405,8 +405,8 @@ chachapoly_crypt(struct _LIBSSH2_SESSION *session,
 {
     u_char seqbuf[8];
     const u_char one[8] = { 1, 0, 0, 0, 0, 0, 0, 0 };
-    u_char zero_block[CHACHA_BLOCKLEN] = { 0 };
-    u_char first_keystream[CHACHA_BLOCKLEN];
+    u_char zero_block[64] = { 0 };
+    u_char first_keystream[64];
     u_char expected_tag[POLY1305_TAGLEN], poly_key[POLY1305_KEYLEN];
     int r = LIBSSH2_ERROR_INVAL;
     int parallel_done = 0;
@@ -516,7 +516,7 @@ chachapoly_crypt(struct _LIBSSH2_SESSION *session,
         }
 
         if(drop_first) {
-            u_int prefix_len = len < CHACHA_BLOCKLEN ? len : CHACHA_BLOCKLEN;
+            u_int prefix_len = len < 64U ? len : 64U;
             u_int i;
 
             chacha_encrypt_bytes(&ctx->main_ctx, zero_block, first_keystream,
@@ -524,11 +524,11 @@ chachapoly_crypt(struct _LIBSSH2_SESSION *session,
             *padding_length_out = (u_char)(src[aadlen] ^ first_keystream[0]);
             for(i = 1U; i < prefix_len; i++)
                 dest[i - 1U] = (u_char)(src[aadlen + i] ^ first_keystream[i]);
-            if(len > CHACHA_BLOCKLEN)
+            if(len > 64U)
                 chacha_encrypt_bytes(&ctx->main_ctx,
-                                     src + aadlen + CHACHA_BLOCKLEN,
-                                     dest + CHACHA_BLOCKLEN - 1U,
-                                     len - CHACHA_BLOCKLEN);
+                                     src + aadlen + 64U,
+                                     dest + 63U,
+                                     len - 64U);
             if(diag_enabled) {
                 phase_ended = _libssh2_diag_now_ns();
                 if(phase_ended >= phase_started) {
@@ -586,8 +586,8 @@ out:
     memset(expected_tag, 0, sizeof(expected_tag));
     memset(seqbuf, 0, sizeof(seqbuf));
     memset(poly_key, 0, sizeof(poly_key));
-    chacha_parallel_wipe(first_keystream, sizeof(first_keystream));
-    chacha_parallel_wipe(zero_block, sizeof(zero_block));
+    memset(first_keystream, 0, sizeof(first_keystream));
+    memset(zero_block, 0, sizeof(zero_block));
     return r;
 }
 '''
