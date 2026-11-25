@@ -20,3 +20,5 @@ jobs:
         shell: bash
         run: |
           ruby -e 'require "yaml"; YAML.parse_file(".github/workflows/passwall-ssh-core-openwrt24-mipsel-vm.yml"); puts "PASS: workflow YAML syntax"'
+          go install github.com/rhysd/actionlint/cmd/actionlint@latest
+          "$(go env GOPATH)/bin/actionlint" -color .github/workflows/passwall-ssh-core-openwrt24-mipsel-vm.yml
