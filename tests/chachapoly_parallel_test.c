@@ -1,7 +1,7 @@
 /*
- * Passwall r47: ChaCha20-Poly1305 packet parallelism regression.
- * Verifies serial encryption against one-, two- and four-worker decryption,
- * including block tails and authentication failure before in-place writes.
+ * Passwall r55: ChaCha20-Poly1305 authentication and out-of-place decrypt.
+ * Verifies serial/in-place compatibility, body-only output, unchanged
+ * ciphertext input, worker-count equivalence, block tails and tag rejection.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +13,7 @@
 #define PACKET_HEADER_LEN 4U
 #define POLY_TAG_LEN 16U
 #define MAX_PAYLOAD 32768U
+#define OUTPUT_SENTINEL 0xa5U
 
 static unsigned int
 pattern_byte(unsigned int seed, size_t offset)
@@ -27,6 +28,17 @@ pattern_byte(unsigned int seed, size_t offset)
 }
 
 static int
+all_bytes_are(const unsigned char *data, size_t length, unsigned char value)
+{
+    size_t i;
+    for(i = 0; i < length; i++) {
+        if(data[i] != value)
+            return 0;
+    }
+    return 1;
+}
+
+static int
 test_case(struct chachapoly_ctx *encrypt_ctx,
           struct chachapoly_ctx *decrypt_ctx,
           unsigned int seed, u_int payload_len, unsigned int workers)
@@ -34,13 +46,17 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     size_t packet_len = PACKET_HEADER_LEN + (size_t)payload_len;
     size_t wire_len = packet_len + POLY_TAG_LEN;
     unsigned char *plain = (unsigned char *)malloc(packet_len ? packet_len : 1U);
-    unsigned char *wire = (unsigned char *)malloc(wire_len ? wire_len : 1U);
-    unsigned char *bad = (unsigned char *)malloc(wire_len ? wire_len : 1U);
-    unsigned char *before = (unsigned char *)malloc(wire_len ? wire_len : 1U);
+    unsigned char *wire = (unsigned char *)malloc(wire_len);
+    unsigned char *cipher_copy = (unsigned char *)malloc(wire_len);
+    unsigned char *cipher_guard = (unsigned char *)malloc(wire_len);
+    unsigned char *bad = (unsigned char *)malloc(wire_len);
+    unsigned char *bad_guard = (unsigned char *)malloc(wire_len);
+    unsigned char *body = (unsigned char *)malloc(payload_len ? payload_len : 1U);
     u_int seqnr = seed * 17U + payload_len;
     int rc = -1;
 
-    if(!plain || !wire || !bad || !before) {
+    if(!plain || !wire || !cipher_copy || !cipher_guard ||
+       !bad || !bad_guard || !body) {
         fprintf(stderr, "allocation failed for payload %u\n", payload_len);
         goto out;
     }
@@ -50,37 +66,79 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     memcpy(wire, plain, packet_len);
 
     if(chachapoly_crypt(NULL, encrypt_ctx, seqnr, wire, wire,
-                        payload_len, PACKET_HEADER_LEN, 1) != 0) {
+                        payload_len, PACKET_HEADER_LEN, PACKET_HEADER_LEN, 1) != 0) {
         fprintf(stderr, "serial encryption failed for payload %u\n", payload_len);
         goto out;
     }
+    memcpy(cipher_copy, wire, wire_len);
+    memcpy(cipher_guard, wire, wire_len);
 
+    /* Existing in-place API remains byte-for-byte compatible. */
     if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, wire, wire,
-                        payload_len, PACKET_HEADER_LEN, 0) != 0) {
-        fprintf(stderr, "parallel decryption failed for payload %u with %u workers\n", payload_len, workers);
+                        payload_len, PACKET_HEADER_LEN, PACKET_HEADER_LEN, 0) != 0) {
+        fprintf(stderr, "in-place decryption failed for payload %u with %u workers\n",
+                payload_len, workers);
         goto out;
     }
     if(memcmp(wire, plain, packet_len) != 0) {
-        fprintf(stderr, "plaintext mismatch for payload %u with %u workers\n", payload_len, workers);
+        fprintf(stderr, "in-place plaintext mismatch for payload %u with %u workers\n",
+                payload_len, workers);
         goto out;
     }
 
-    memcpy(bad, wire, packet_len);
-    /* Re-encrypt so the failure test starts with authenticated ciphertext. */
-    if(chachapoly_crypt(NULL, encrypt_ctx, seqnr, bad, bad,
-                        payload_len, PACKET_HEADER_LEN, 1) != 0) {
-        fprintf(stderr, "second serial encryption failed for payload %u\n", payload_len);
+    /* r55 output has no four-byte AAD prefix; the authenticated source stays intact. */
+    memset(body, OUTPUT_SENTINEL, payload_len ? payload_len : 1U);
+    if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, body, cipher_copy,
+                        payload_len, PACKET_HEADER_LEN, 0U, 0) != 0) {
+        fprintf(stderr, "out-of-place body decrypt failed for payload %u with %u workers\n",
+                payload_len, workers);
         goto out;
     }
-    bad[packet_len + POLY_TAG_LEN - 1U] ^= 0x80U;
-    memcpy(before, bad, wire_len);
+    if(payload_len && memcmp(body, plain + PACKET_HEADER_LEN, payload_len) != 0) {
+        fprintf(stderr, "out-of-place body mismatch for payload %u with %u workers\n",
+                payload_len, workers);
+        goto out;
+    }
+    if(memcmp(cipher_copy, cipher_guard, wire_len) != 0) {
+        fprintf(stderr, "ciphertext source changed on successful out-of-place decrypt (%u)\n",
+                payload_len);
+        goto out;
+    }
+
+    /* A corrupt tag must leave both ciphertext and destination untouched. */
+    memcpy(bad, cipher_guard, wire_len);
+    bad[wire_len - 1U] ^= 0x80U;
+    memcpy(bad_guard, bad, wire_len);
+    memset(body, OUTPUT_SENTINEL, payload_len ? payload_len : 1U);
+    if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, body, bad,
+                        payload_len, PACKET_HEADER_LEN, 0U, 0) == 0) {
+        fprintf(stderr, "out-of-place tampered tag accepted for payload %u\n",
+                payload_len);
+        goto out;
+    }
+    if(payload_len && !all_bytes_are(body, payload_len, OUTPUT_SENTINEL)) {
+        fprintf(stderr, "destination changed before tag rejection for payload %u\n",
+                payload_len);
+        goto out;
+    }
+    if(memcmp(bad, bad_guard, wire_len) != 0) {
+        fprintf(stderr, "ciphertext changed on rejected out-of-place decrypt (%u)\n",
+                payload_len);
+        goto out;
+    }
+
+    /* Retain the in-place tamper regression as an independent compatibility gate. */
+    memcpy(bad, cipher_guard, wire_len);
+    bad[wire_len - 1U] ^= 0x80U;
+    memcpy(bad_guard, bad, wire_len);
     if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, bad, bad,
-                        payload_len, PACKET_HEADER_LEN, 0) == 0) {
-        fprintf(stderr, "tampered tag accepted for payload %u\n", payload_len);
+                        payload_len, PACKET_HEADER_LEN, PACKET_HEADER_LEN, 0) == 0) {
+        fprintf(stderr, "in-place tampered tag accepted for payload %u\n", payload_len);
         goto out;
     }
-    if(memcmp(bad, before, wire_len) != 0) {
-        fprintf(stderr, "packet changed before tag rejection for payload %u\n", payload_len);
+    if(memcmp(bad, bad_guard, wire_len) != 0) {
+        fprintf(stderr, "in-place packet changed before tag rejection for payload %u\n",
+                payload_len);
         goto out;
     }
 
@@ -88,8 +146,11 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
 out:
     free(plain);
     free(wire);
+    free(cipher_copy);
+    free(cipher_guard);
     free(bad);
-    free(before);
+    free(bad_guard);
+    free(body);
     return rc;
 }
 
@@ -151,6 +212,6 @@ main(void)
     for(i = 0; i < 4U; i++)
         chachapoly_cleanup(&decrypt_ctx[i]);
     chachapoly_cleanup(&encrypt_ctx);
-    puts("PASS: ChaCha20-Poly1305 serial/parallel equivalence, tails and tag rejection");
+    puts("PASS: ChaCha20-Poly1305 auth-first in-place/out-of-place decrypt, source integrity, tails and tag rejection");
     return 0;
 }
