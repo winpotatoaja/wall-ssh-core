@@ -9,7 +9,7 @@
 static inline int
 passwall_chacha_parse_workers(const char *text, int *workers)
 {
-    if(!text || !workers)
+    if(!text || !workers || text[0] == '\0')
         return -1;
     if(strcmp(text, "auto") == 0) {
         *workers = PASSWALL_CHACHA_WORKERS_AUTO;
