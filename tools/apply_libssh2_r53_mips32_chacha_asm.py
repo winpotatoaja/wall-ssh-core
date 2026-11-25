@@ -96,7 +96,6 @@ def patch(root: Path, project_root: Path) -> None:
         'set(_sources ${CSOURCES} ${HHEADERS})\n\n'
         '# r53: use the audited MIPS32r2 ChaCha core only on 32-bit MIPS targets.\n'
         'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips")\n'
-        '  list(APPEND _sources "${CMAKE_CURRENT_SOURCE_DIR}/chacha-core.S")\n'
         '  set(_chacha_mips_asm "${CMAKE_CURRENT_SOURCE_DIR}/chacha-core.S")\n'
         '  list(APPEND _sources "${_chacha_mips_asm}")\n'
         '  set_source_files_properties("${_chacha_mips_asm}" PROPERTIES\n'
