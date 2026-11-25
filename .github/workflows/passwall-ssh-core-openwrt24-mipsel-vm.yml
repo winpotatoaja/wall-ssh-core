@@ -156,7 +156,7 @@ jobs:
           gcc -std=gnu11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -pthread -ffunction-sections -fdata-sections -DHAVE_CONFIG_H -DLIBSSH2_OPENSSL -DLIBSSH2_HAVE_ZLIB -I"$LIBSSH2_CONFIG_DIR" -I"$LIBSSH2_SRC/src" -I"$LIBSSH2_SRC/include" "$GITHUB_WORKSPACE/tests/chachapoly_parallel_test.c" "$LIBSSH2_SRC/src/cipher-chachapoly.c" "$LIBSSH2_SRC/src/chacha.c" "$LIBSSH2_SRC/src/poly1305.c" "$LIBSSH2_SRC/src/misc.c" -Wl,--gc-sections -o /tmp/chachapoly-parallel-test
           /tmp/chachapoly-parallel-test | tee "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
           test -s "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
-          grep -Fq 'PASS: ChaCha20-Poly1305 auth-first in-place/out-of-place decrypt, source integrity, tails and tag rejection' "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
+          grep -Fq 'PASS: r56 auth-first in-place/body-only/normalized decrypt, padding-length output, worker tails and tag rejection' "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-test.log"
           echo "PASS: authenticated ChaCha20 parallel regression completed before OpenWrt source cleanup."
           MIPS_CC="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -path '*/bin/*-openwrt-linux-musl-gcc' -print -quit)"
           STAGING="$(find "$GITHUB_WORKSPACE/sdk/staging_dir" -maxdepth 1 -type d -name 'target-*' -print -quit)"
