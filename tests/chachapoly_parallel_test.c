@@ -220,6 +220,90 @@ out:
     return rc;
 }
 
+
+static int
+test_r57_profile(struct chachapoly_ctx *encrypt_ctx,
+                 struct chachapoly_ctx *decrypt_ctx,
+                 unsigned int workers, u_int payload_len, unsigned int seed)
+{
+    size_t packet_len = PACKET_HEADER_LEN + (size_t)payload_len;
+    size_t wire_len = packet_len + POLY_TAG_LEN;
+    unsigned char *plain = (unsigned char *)malloc(packet_len);
+    unsigned char *wire = (unsigned char *)malloc(wire_len);
+    unsigned char *body = (unsigned char *)malloc(payload_len);
+    unsigned char padding_length = OUTPUT_SENTINEL;
+    unsigned int i;
+    int rc = -1;
+    LIBSSH2_SESSION diag_session;
+
+    if(!plain || !wire || !body) {
+        fprintf(stderr, "r57 profile allocation failed\n");
+        goto out;
+    }
+
+    memset(&diag_session, 0, sizeof(diag_session));
+    diag_session.passwall_diag.enabled = 1;
+    for(i = 0U; i < packet_len; i++)
+        plain[i] = (unsigned char)pattern_byte(seed, i);
+    plain[PACKET_HEADER_LEN] = 16U;
+    memcpy(wire, plain, packet_len);
+
+    if(chachapoly_crypt(NULL, encrypt_ctx, seed + payload_len,
+                        wire, wire, payload_len,
+                        PACKET_HEADER_LEN, PACKET_HEADER_LEN,
+                        0U, NULL, 1) != 0) {
+        fprintf(stderr, "r57 profile encryption failed\n");
+        goto out;
+    }
+
+    if(chachapoly_crypt(&diag_session, decrypt_ctx, seed + payload_len,
+                        body, wire, payload_len,
+                        PACKET_HEADER_LEN, 0U, 1U,
+                        &padding_length, 0) != 0) {
+        fprintf(stderr, "r57 profiled normalized decrypt failed (workers=%u)\n",
+                workers);
+        goto out;
+    }
+
+    if(padding_length != plain[PACKET_HEADER_LEN] ||
+       memcmp(body, plain + PACKET_HEADER_LEN + 1U, payload_len - 1U) != 0) {
+        fprintf(stderr, "r57 profiled normalized plaintext mismatch\n");
+        goto out;
+    }
+
+    if(diag_session.passwall_diag.chacha_poly1305_ns == 0ULL ||
+       diag_session.passwall_diag.chacha_poly1305_wall_ns == 0ULL ||
+       diag_session.passwall_diag.chacha20_decrypt_wall_ns == 0ULL ||
+       diag_session.passwall_diag.chacha20_worker_cpu_ns == 0ULL ||
+       diag_session.passwall_diag.chacha20_worker_critical_ns == 0ULL ||
+       diag_session.passwall_diag.chacha20_profile_packets != 1ULL ||
+       diag_session.passwall_diag.chacha_poly1305_offloaded_packets != 1ULL ||
+       diag_session.passwall_diag.chacha20_worker_cpu_ns <
+           diag_session.passwall_diag.chacha20_worker_critical_ns) {
+        fprintf(stderr, "r57 phase timing counters missing or inconsistent "
+                "(workers=%u)\n", workers);
+        goto out;
+    }
+
+    printf("R57_PROFILE payload=%u workers=%u poly_worker_ns=%llu "
+           "poly_wall_ns=%llu chacha_wall_ns=%llu worker_cpu_ns=%llu "
+           "worker_critical_ns=%llu coordinator_other_ns=%llu\n",
+           payload_len, workers,
+           diag_session.passwall_diag.chacha_poly1305_ns,
+           diag_session.passwall_diag.chacha_poly1305_wall_ns,
+           diag_session.passwall_diag.chacha20_decrypt_wall_ns,
+           diag_session.passwall_diag.chacha20_worker_cpu_ns,
+           diag_session.passwall_diag.chacha20_worker_critical_ns,
+           diag_session.passwall_diag.chacha20_parallel_other_ns);
+    rc = 0;
+
+out:
+    free(plain);
+    free(wire);
+    free(body);
+    return rc;
+}
+
 int
 main(void)
 {
@@ -275,9 +359,23 @@ main(void)
         }
     }
 
+    for(i = 1U; i < 4U; i++) {
+        static const u_int profile_lengths[] = { 4096U, 16384U, MAX_PAYLOAD };
+        for(j = 0U; j < sizeof(profile_lengths) / sizeof(profile_lengths[0]); j++) {
+            if(test_r57_profile(&encrypt_ctx, &decrypt_ctx[i],
+                                worker_counts[i], profile_lengths[j],
+                                0x570000U + (unsigned int)(i * 32U + j)) != 0) {
+                for(j = 0; j < 4U; j++)
+                    chachapoly_cleanup(&decrypt_ctx[j]);
+                chachapoly_cleanup(&encrypt_ctx);
+                return 1;
+            }
+        }
+    }
+
     for(i = 0; i < 4U; i++)
         chachapoly_cleanup(&decrypt_ctx[i]);
     chachapoly_cleanup(&encrypt_ctx);
-    puts("PASS: r56 auth-first in-place/body-only/normalized decrypt, padding-length output, worker tails and tag rejection");
+    puts("PASS: r57 phase timing captures Poly1305, ChaCha worker and coordination intervals");
     return 0;
 }
