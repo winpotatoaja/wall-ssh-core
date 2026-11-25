@@ -485,6 +485,38 @@ jobs:
             ls -la "$EMU_DIR/qemu" 2>&1 || true
             false
           fi
+          # Router Emulator v4.1 x86_64 was built against a newer glibc
+          # than the Ubuntu 24.04 Actions host. Keep build/fixtures on 24.04,
+          # but run only QEMU inside a matching Ubuntu 26.04 container.
+          command -v docker
+          docker info >/dev/null
+          docker pull ubuntu:26.04
+          GLIBC_RUNTIME="$(docker run --rm ubuntu:26.04 getconf GNU_LIBC_VERSION)"
+          echo "QEMU runtime container: $GLIBC_RUNTIME"
+          python3 - "$GLIBC_RUNTIME" <<'PY'
+          import re
+          import sys
+
+          match = re.fullmatch(r"glibc (\\d+)\\.(\\d+)", sys.argv[1])
+          if not match or tuple(map(int, match.groups())) < (2, 42):
+              raise SystemExit(f"Ubuntu 26.04 container has insufficient glibc: {sys.argv[1]}")
+          print("PASS: QEMU runtime container provides glibc >= 2.42")
+          PY
+          QEMU_MIPSEL_REAL="$EMU_DIR/qemu/qemu-system-mipsel.real"
+          mv "$QEMU_MIPSEL" "$QEMU_MIPSEL_REAL"
+          cat > "$QEMU_MIPSEL" <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec docker run --rm --network host \\
+            --user "$(id -u):$(id -g)" \\
+            --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \\
+            --workdir "$GITHUB_WORKSPACE" \\
+            --env HOME=/tmp \\
+            ubuntu:26.04 \\
+            "$QEMU_MIPSEL_REAL" "\\$@"
+          EOF
+          chmod 0755 "$QEMU_MIPSEL"
+          echo "Running only the MT7621 QEMU process in the Ubuntu 26.04 runtime container."
           "$QEMU_MIPSEL" --version
           if "$QEMU_MIPSEL" -M help > /tmp/mips-qemu-machines.txt 2>/tmp/mips-qemu-machines.err; then
             echo "QEMU machine help succeeded."
