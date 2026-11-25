@@ -296,34 +296,41 @@ jobs:
             root@127.0.0.1:/tmp/mips-test/
           scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
             "$GITHUB_WORKSPACE/package-r62/diag-timer" root@127.0.0.1:/tmp/mips-test/diag-timer
-          echo "label repeat rc" > "$GITHUB_WORKSPACE/benchmark-status.txt"
+          cat > "$RUNNER_TEMP/run-variant.sh" <<'RUN_VARIANT'
+          #!/bin/sh
+          set -u
+          LABEL="$1"
+          REPEAT="$2"
+          DEST="qemu-speedtest-$LABEL-rep$REPEAT"
+          rm -rf /tmp/mips-test/qemu-speedtest
+          opkg --force-reinstall --force-downgrade install "/tmp/mips-test/package-$LABEL/libssh2-1_1.11.1-r1_mipsel_24kc.ipk" || exit $?
+          opkg --force-reinstall --force-downgrade install "/tmp/mips-test/package-$LABEL/passwall-ssh-core_1.0.0-\${LABEL}_mipsel_24kc.ipk" || exit $?
+          grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 || exit $?
+          chmod 0700 /tmp/mips-test/diag-timer || exit $?
+          sh /tmp/mips-test/qemu_speedtest_r53.sh
+          RC=$?
+          if [ -d /tmp/mips-test/qemu-speedtest ]; then
+            mv /tmp/mips-test/qemu-speedtest "/tmp/mips-test/$DEST"
+          else
+            echo ERROR: benchmark-result-directory-not-created-for-$LABEL-repeat-$REPEAT
+            if [ "$RC" -eq 0 ]; then RC=1; fi
+          fi
+          exit "$RC"
+          RUN_VARIANT
+          scp -O -i "$SSH_KEY" -P 8022 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            "$RUNNER_TEMP/run-variant.sh" root@127.0.0.1:/tmp/mips-test/run-variant.sh
 
+          echo "label repeat rc" > "$GITHUB_WORKSPACE/benchmark-status.txt"
           run_variant() {
             LABEL="$1"; REPEAT="$2"
-            DEST="qemu-speedtest-$LABEL-rep$REPEAT"
-            REMOTE="set -u
-              rm -rf /tmp/mips-test/qemu-speedtest
-              opkg --force-reinstall --force-downgrade install /tmp/mips-test/package-${LABEL}/libssh2-1_1.11.1-r1_mipsel_24kc.ipk || exit \$?
-              opkg --force-reinstall --force-downgrade install /tmp/mips-test/package-${LABEL}/passwall-ssh-core_1.0.0-${LABEL}_mipsel_24kc.ipk || exit \$?
-              grep -aFq 'libssh2_session_diag_timing_snapshot' /usr/lib/libssh2.so.1 || exit \$?
-              chmod 0700 /tmp/mips-test/diag-timer || exit \$?
-              sh /tmp/mips-test/qemu_speedtest_r53.sh
-              RC=\$?
-              if [ -d /tmp/mips-test/qemu-speedtest ]; then
-                mv /tmp/mips-test/qemu-speedtest /tmp/mips-test/$DEST
-              else
-                echo "ERROR: benchmark result directory was not created for $LABEL repeat $REPEAT"
-                if [ \$RC -eq 0 ]; then RC=1; fi
-              fi
-              exit \$RC"
             RC=0
-            if ssh "${SSH_OPTS[@]}" root@127.0.0.1 "$REMOTE"; then RC=0; else RC=$?; fi
+            if ssh "\${SSH_OPTS[@]}" root@127.0.0.1 "sh /tmp/mips-test/run-variant.sh '$LABEL' '$REPEAT'"; then RC=0; else RC=$?; fi
             echo "$LABEL $REPEAT $RC" | tee -a "$GITHUB_WORKSPACE/benchmark-status.txt"
             return 0
           }
 
           # ABBA ordering: R59, R62, R62, R59. Each run uses the same endpoint,
-          # one direct + one SOCKS5 100 MB transfer and a 50-second cap per transfer.
+          # one direct + one SOCKS5 100 MB download and a 50-second cap per transfer.
           run_variant r59 1
           run_variant r62 1
           run_variant r62 2
