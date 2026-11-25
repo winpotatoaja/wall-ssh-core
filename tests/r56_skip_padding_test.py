@@ -21,8 +21,9 @@ def main(root: Path) -> None:
 
     require(
         "CHACHA_TASK_DECRYPT_SKIP_FIRST" in chacha and
-        "pool->destination_offsets[worker]" in chacha,
-        "worker pool has a dedicated first-block task and independent output offsets",
+        "pool->destination_offsets[worker]" in chacha and
+        "pool->destination_offsets[lane] = pool->offsets[lane];" in chacha,
+        "worker pool has a dedicated first-block task and initializes legacy lane output offsets",
     )
     require(
         "chacha_encrypt_bytes(&local_state, zero_block, first_keystream" in chacha and
