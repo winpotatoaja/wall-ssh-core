@@ -1,4 +1,5 @@
 name: Passwall SSH core - OpenWrt 24.10.7 mipsel_24kc
+# r59 PERF verifier: total Poly1305 includes serial fallback; phase wall time is parallel-only.
 on:
   push:
     branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration, phase2/tls-engine-integration-rxfix, phase3/io-worker-pool-foundation, benchmark/r39-internet-speedtest, experiment/r51-mips32-crypto, experiment/r52-safe-topology-lifecycle, experiment/r53-mips32-crypto-path, experiment/r54-mips32-poly1305-asm, experiment/r55-outofplace-chacha-decrypt, experiment/r56-skip-padding-memmove, experiment/r57-chachapoly-profile, experiment/r58-chacha-perf-log-split, experiment/r59-inline-owner-poly1305]
