@@ -56,6 +56,7 @@ jobs:
           gcc -std=gnu11 -O2 -Wall -Wextra -Werror -I. tests/io_worker_completion_tracker_test.c io_worker_completion_tracker.c io_worker_pool.c -pthread -o /tmp/io-worker-completion-tracker-test
           timeout 10s /tmp/io-worker-completion-tracker-test | tee test-results/io-worker-completion-tracker-test-native.log
           timeout 10s /tmp/client-event-token-test | tee test-results/client-event-token-test-native.log
+      - name: Download OpenWrt 24.10.7 SDK
         shell: bash
         run: |
           set -euo pipefail
@@ -376,7 +377,7 @@ jobs:
             core.info("Queued Datapacket-only r52 benchmark using SDK run " + context.runId + " and source " + context.sha);
   vm:
     if: ${{ contains(github.event.head_commit.message, '[mips-stage=vm]') }}
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
