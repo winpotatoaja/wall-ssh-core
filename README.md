@@ -14,7 +14,7 @@ Uji regresi diperluas untuk payload 0, 1, 63, 64, 65, 4095, 4096, 4097, 8191, 81
 
 **Otomasi validasi:** commit bertanda `[mips-stage=sdk]` menjalankan SDK lebih dahulu. QEMU job bergantung pada job SDK dan otomatis mengambil artifact dari run yang sama hanya bila SDK sukses; ketika SDK gagal, QEMU dilewati. Pemicu QEMU manual lama tetap tersedia. Tes bandwidth Internet 100 MB tidak ikut dijalankan otomatis.
 
-**Status:** SDK #45574750057 gagal pada anchor posisi tag enkripsi dan SDK #45579024151 gagal pada anchor decrypt. Perbaikan kedua ternyata masih terlalu bergantung pada indentasi teks meskipun sudah mengikuti pemisahan argumen r47; SDK #813 membuktikan anchor tetap tidak ditemukan. Patcher kini mengenali pemanggilan session-aware `chachapoly_crypt()` dengan regex berbasis struktur argumen, bukan whitespace, lalu menambahkan output AAD=4 pada jalur in-place lama. Verifier mengecek semantik call-site dan framing, bukan indentasinya. Belum ada hasil SDK/QEMU r55 maupun klaim speedup.
+**Status:** SDK #45574750057 gagal pada anchor posisi tag enkripsi, SDK #45579024151 pada anchor decrypt, dan SDK #813 kembali gagal karena anchor decrypt masih terikat whitespace. Patcher kini memakai regex Python dengan escape yang sudah diperiksa untuk mengenali struktur argumen call session-aware `chachapoly_crypt()`, lalu menambahkan output AAD=4 untuk jalur in-place lama. Regex diuji terhadap bentuk call-site hasil patch r47; verifier memeriksa semantik call-site dan framing, bukan indentasi. Retry SDK berikutnya baru dipicu setelah koreksi escape regex ini. Belum ada hasil SDK/QEMU r55 maupun klaim speedup.
 
 ## r54 — eksperimen Poly1305 MIPS32r2/o32 assembly (SDK dan QEMU lulus)
 
