@@ -54,7 +54,7 @@ def main(root: Path) -> None:
         "serial fallback authenticates source before writing AAD or payload",
     )
     require(
-        "poly1305_auth(dest + dest_aadlen + len, dest, dest_aadlen + len," in cipher,
+        "poly1305_auth(dest + dest_aadlen + len, dest,\\n                      dest_aadlen + len, poly_key);" in cipher,
         "encryption tag follows the configured output AAD layout",
     )
 
