@@ -10,6 +10,8 @@ R58 memindahkan semua field statistik ChaCha20-Poly1305 dari record panjang `[PE
 
 Tujuannya murni observabilitas: log r57 dari QEMU #848 menunjukkan baris `[PERF]` terpotong sekitar 2.076 karakter sehingga field terakhir hilang dari job log. R58 juga menambahkan source verifier yang memastikan seluruh field dipindahkan ke `[PERF-CHACHA]` dan ukuran record di bawah batas konservatif. QEMU memeriksa bahwa Poly1305 wall time, decrypt wall time, worker CPU/critical time, dan profile packet count muncul dengan nilai nonzero saat transfer TCP standar.
 
+**Perbaikan workflow setelah run #849:** SDK berhasil membangun dan mengunggah artifact r58 (`15022651141`), tetapi job VM masih meminta nama artifact r57. Tiga referensi versi di job VM—artifact download, nama file IPK dan versi pasca-install—diselaraskan ke r58. Tidak ada perubahan sumber crypto pada perbaikan workflow ini.
+
 Tidak ada perubahan pada cipher, pembagian payload, worker count, format paket, atau urutan authenticate-before-decrypt. Tidak ada benchmark bandwidth Internet otomatis dan tidak ada klaim peningkatan throughput. SDK berjalan lebih dahulu; QEMU MT7621 otomatis memakai artifact dari run yang sama hanya bila SDK sukses. Validasi r58 masih menunggu.
 
 ## r57 — phase-level ChaCha20-Poly1305 profiling

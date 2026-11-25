@@ -448,7 +448,7 @@ jobs:
       - name: Download the MIPS IPK and test helper
         uses: actions/download-artifact@v4
         with:
-          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r57-ipk
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r58-ipk
           run-id: ${{ env.SDK_RUN_ID }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -470,8 +470,8 @@ jobs:
           file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test test-results/mips32-chacha-asm-test test-results/poly1305-mips-asm-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          test -s test-results/passwall-ssh-core_1.0.0-r57_mipsel_24kc.ipk
-          grep -Fq 'Version: 1.0.0-r57' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r57_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
+          test -s test-results/passwall-ssh-core_1.0.0-r58_mipsel_24kc.ipk
+          grep -Fq 'Version: 1.0.0-r58' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r58_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
           LIBSSH2_IPK="$(find test-results -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
           test -n "$LIBSSH2_IPK"
           LIBSSH2_CONTROL="$(tar -xOzf "$LIBSSH2_IPK" ./control.tar.gz | tar -xzO ./control)"
@@ -1070,7 +1070,7 @@ jobs:
             fail "SDK-built patched libssh2 1.11.1 was not installed or is missing a required libssh2 runtime API"
           fi
 
-          echo "========== INSTALL R54 MIPS IPK (OFFLINE) =========="
+          echo "========== INSTALL R58 MIPS IPK (OFFLINE) =========="
           if [ "$STATUS" -eq 0 ]; then
             opkg install /tmp/mips-test/passwall-ssh-core*.ipk
             OPKG_RC=$?
@@ -1079,7 +1079,7 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r57'; then
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r58'; then
             pass "opkg installed passwall-ssh-core r58 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
