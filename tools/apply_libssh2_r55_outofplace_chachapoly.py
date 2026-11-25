@@ -268,6 +268,7 @@ _libssh2_chachapoly_decrypt_body(LIBSSH2_SESSION *session,
     )
 
     marker.write_text(
+        ".passwall-r55-out-of-place-chachapoly-patched\n"
         "libssh2 1.11.1 Passwall r55 authenticated out-of-place ChaCha20-Poly1305 body decrypt\n"
     )
     print(
