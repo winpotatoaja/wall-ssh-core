@@ -14,7 +14,7 @@ Regresi native diperluas untuk membandingkan output biasa r55 dan output normali
 
 **Otomasi validasi:** commit bertanda `[mips-stage=sdk]` menjalankan SDK lebih dahulu; QEMU job otomatis memakai artifact dari run yang sama hanya bila SDK sukses. Tes bandwidth Internet tidak dijalankan otomatis.
 
-**Status:** SDK #825 (`45591985150`) gagal sebelum kompilasi karena anchor lane r56 tidak cocok dengan implementasi worker-only r48; anchor `destination_offsets[lane]` sudah diperbaiki. Retry #829 (`45594086862`) melewati seluruh verifier R43–R55, tetapi gagal di patcher `crypt.c`: r56 mencari bentuk pemanggilan decrypt lama, sedangkan r55 sudah menulis ulang pemanggilan tersebut menjadi `chachapoly_crypt(session, ..., 4, 4, ctx->encrypt)`. Anchor r56 kini disesuaikan dengan bentuk aktual hasil patch R55, lalu menambahkan argumen `0U, NULL` agar jalur in-place lama tetap memakai AAD empat byte. Belum ada kompilasi MIPS, IPK, atau QEMU yang berhasil. Belum ada klaim speedup; benchmark A/B fisik tetap diperlukan.
+**Status:** SDK #825 gagal pada anchor lane; #829 gagal pada anchor pemanggilan decrypt `crypt.c`. Keduanya sudah dikoreksi. SDK #833 (`45595039182`) kemudian berhasil menerapkan seluruh patch R43–R56, melewati source verifier, dan test R56 melaporkan `PASS`. Workflow berhenti setelah test tersebut karena `grep` regresi native masih mencari kalimat sukses lama R55, bukan pesan sukses baru R56. Jadi belum terjadi kompilasi libssh2 MIPS, pembuatan IPK, atau QEMU. Pemeriksaan workflow sudah diperbarui agar mencari pesan R56 yang benar; retry berikutnya akan melanjutkan SDK dan QEMU hanya bila SDK lulus. Belum ada klaim speedup; benchmark A/B fisik tetap diperlukan.
 
 ## r55 — authenticated out-of-place ChaCha20-Poly1305 decrypt
 
