@@ -40,7 +40,7 @@ def verify_source(root: Path) -> int:
             and "#define poly1305_emit poly1305_emit_mips" in asm_text
         ),
         "generated assembly contains MIPS32 multiply-accumulate path": (
-            ".globl poly1305_blocks" in asm_text
+            ".globl\\tpoly1305_blocks" in asm_text
             and "multu" in asm_text
             and "maddu" in asm_text
         ),
