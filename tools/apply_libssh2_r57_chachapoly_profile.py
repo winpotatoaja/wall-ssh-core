@@ -400,8 +400,22 @@ def patch(root: Path) -> None:
     )
 
     priv = root / "src/libssh2_priv.h"
-    # The session counters and snapshot share LIBSSH2_DIAG_TIMING.
-    # Extend that one declaration; there is no separate passwall_diag struct.
+    # The session owns an inline passwall_diag structure, while callers
+    # receive a separate LIBSSH2_DIAG_TIMING snapshot. Extend both layouts.
+    replace_once(
+        priv,
+        "        unsigned long long chacha20_parallel_packets;\n"
+        "        unsigned long long decrypt_path_ns;",
+        "        unsigned long long chacha20_parallel_packets;\n"
+        "        unsigned long long chacha_poly1305_wall_ns;\n"
+        "        unsigned long long chacha20_decrypt_wall_ns;\n"
+        "        unsigned long long chacha20_worker_cpu_ns;\n"
+        "        unsigned long long chacha20_worker_critical_ns;\n"
+        "        unsigned long long chacha20_parallel_other_ns;\n"
+        "        unsigned long long chacha20_profile_packets;\n"
+        "        unsigned long long decrypt_path_ns;",
+        "extend per-session ChaCha profile counters",
+    )
     replace_once(
         priv,
         "    unsigned long long chacha20_parallel_packets;\n"
@@ -416,6 +430,20 @@ def patch(root: Path) -> None:
         "} LIBSSH2_DIAG_TIMING;",
         "extend public diagnostic snapshot layout",
     )
+
+    private_after = priv.read_text()
+    for field in (
+        "chacha_poly1305_wall_ns",
+        "chacha20_decrypt_wall_ns",
+        "chacha20_worker_cpu_ns",
+        "chacha20_worker_critical_ns",
+        "chacha20_parallel_other_ns",
+        "chacha20_profile_packets",
+    ):
+        if private_after.count("unsigned long long " + field + ";") != 2:
+            raise RuntimeError(
+                f"libssh2_priv.h: expected {field} in session and snapshot layouts"
+            )
 
     session_c = root / "src/session.c"
     replace_once(

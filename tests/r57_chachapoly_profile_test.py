@@ -73,6 +73,19 @@ def main() -> int:
     parallel = extract(chacha, "int\nchacha_decrypt_poly_worker_only(")
     crypt = extract(cipher, "int\nchachapoly_crypt(")
 
+    session_diag_start = private.find("/* Passwall r43 diagnostics.")
+    session_diag_end = private.find("} passwall_diag;", session_diag_start)
+    snapshot_start = private.find("typedef struct {", session_diag_end)
+    snapshot_end = private.find("} LIBSSH2_DIAG_TIMING;", snapshot_start)
+    r57_fields = (
+        "chacha_poly1305_wall_ns",
+        "chacha20_decrypt_wall_ns",
+        "chacha20_worker_cpu_ns",
+        "chacha20_worker_critical_ns",
+        "chacha20_parallel_other_ns",
+        "chacha20_profile_packets",
+    )
+
     checks = [
         check(".passwall-r57-chachapoly-profile-patched" in
               (root / ".passwall-r57-chachapoly-profile-patched").read_text(),
@@ -96,11 +109,14 @@ def main() -> int:
               "&decrypt_worker_ns" in crypt and
               "chacha20_parallel_other_ns" in crypt,
               "cipher entry point exports and records all profile phases"),
-        check("chacha_poly1305_wall_ns" in private and
-              "chacha20_worker_cpu_ns" in private and
-              "chacha20_worker_critical_ns" in private and
-              "chacha20_parallel_other_ns" in private,
-              "private session and snapshot structures expose r57 fields"),
+        check(session_diag_start >= 0 and session_diag_end > session_diag_start and
+              snapshot_start >= 0 and snapshot_end > snapshot_start and
+              all(("unsigned long long " + field + ";") in
+                  private[session_diag_start:session_diag_end] and
+                  ("unsigned long long " + field + ";") in
+                  private[snapshot_start:snapshot_end]
+                  for field in r57_fields),
+              "session counters and public timing snapshot both expose every r57 field"),
         check("timing->chacha20_profile_packets" in session and
               "session->passwall_diag.chacha20_profile_packets = 0;" in session,
               "snapshot copies and resets all per-interval profile counters"),
