@@ -40,7 +40,7 @@ def main(root: Path) -> None:
     )
 
     require(
-        "u_int aadlen, u_int dest_aadlen, int do_encrypt" in cipher and
+        "u_int aadlen,\n                 u_int dest_aadlen, int do_encrypt" in cipher and
         "u_int aadlen, u_int dest_aadlen, int do_encrypt" in cipher_h,
         "ChaCha20-Poly1305 API distinguishes authenticated AAD from emitted AAD",
     )
