@@ -136,6 +136,16 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
             goto out;
         }
     }
+    if(payload_len > 0U && body_without_pad[payload_len - 1U] != OUTPUT_SENTINEL) {
+        fprintf(stderr, "r56 normalized output wrote past payload_len - 1 for payload %u\n",
+                payload_len);
+        goto out;
+    }
+    if(memcmp(cipher_copy, cipher_guard, wire_len) != 0) {
+        fprintf(stderr, "r56 normalized decrypt modified its ciphertext source (%u)\n",
+                payload_len);
+        goto out;
+    }
 
     /* A corrupt tag must leave both ciphertext and destination untouched. */
     memcpy(bad, cipher_guard, wire_len);
@@ -173,6 +183,11 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
        !all_bytes_are(body_without_pad, payload_len ? payload_len : 1U,
                       OUTPUT_SENTINEL)) {
         fprintf(stderr, "r56 wrote normalized output before authentication for payload %u\n",
+                payload_len);
+        goto out;
+    }
+    if(memcmp(bad, bad_guard, wire_len) != 0) {
+        fprintf(stderr, "r56 failed-auth path modified ciphertext for payload %u\n",
                 payload_len);
         goto out;
     }
