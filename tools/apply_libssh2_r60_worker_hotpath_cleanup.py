@@ -229,19 +229,13 @@ def patch(root: Path) -> None:
         WORKER_MAIN,
     )
 
-    # R52 stopped-pool cleanup only nulls this now-unused pointer; the scratch
-    # allocation itself is removed here, eliminating that allocation/leak too.
-    source = replace_once(
-        source,
-        "    pool->poly_input = (u8 *)malloc(CHACHA_PARALLEL_MAX_PACKET);\n"
-        "    if(!pool->poly_input) {\n"
-        "        free(pool);\n"
-        "        errno = ENOMEM;\n"
-        "        return NULL;\n"
-        "    }\n",
-        "",
-        "remove unused Poly1305 snapshot allocation",
-    )
+    # R51 already removed the owned Poly1305 snapshot allocation and teardown.
+    # R60 only removes the borrowed-pointer field and stale metadata resets that
+    # remained after r59 moved authentication directly onto the Owner.
+    if "malloc(CHACHA_PARALLEL_MAX_PACKET)" in source:
+        raise RuntimeError(
+            "unexpected Poly1305 snapshot allocation: R51 should have removed it"
+        )
 
     # Remove obsolete state resets from the R52 stop path and R59 Owner helper.
     for line, label in (
