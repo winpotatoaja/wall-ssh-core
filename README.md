@@ -14,7 +14,7 @@ Uji regresi diperluas untuk payload 0, 1, 63, 64, 65, 4095, 4096, 4097, 8191, 81
 
 **Otomasi validasi:** commit bertanda `[mips-stage=sdk]` menjalankan SDK lebih dahulu. QEMU job bergantung pada job SDK dan otomatis mengambil artifact dari run yang sama hanya bila SDK sukses; ketika SDK gagal, QEMU dilewati. Pemicu QEMU manual lama tetap tersedia. Tes bandwidth Internet 100 MB tidak ikut dijalankan otomatis.
 
-**Status:** perubahan r55 dan workflow sudah disiapkan; SDK/QEMU r55 belum dijalankan. R55 mengurangi satu packet copy di jalur inbound ChaCha, tetapi belum ada klaim throughput/latency membaik. Hasil yang menentukan tetap benchmark A/B pada router MT7621 fisik. Penghapusan `memmove` satu-byte untuk padding, perubahan worker synchronization/topology, packet queue, dan threshold dispatch sengaja tidak dicampur ke r55.
+**Status:** percobaan SDK pertama #45574750057 berhenti pada patcher sebelum kompilasi libssh2 dimulai. Penyebabnya hanya ketidakcocokan pola teks: r55 mengharapkan pemanggilan `poly1305_auth()` dalam dua baris, sedangkan sumber hasil patch r49 memiliki pemanggilan satu baris. Anchor sudah diperbaiki agar cocok dengan sumber dan source verifier kini memeriksa ulang output tag enkripsi. Build r55 berikutnya akan mengulang SDK dan hanya melanjutkan QEMU bila SDK berhasil. Belum ada hasil SDK/QEMU r55 maupun klaim speedup.
 
 ## r54 — eksperimen Poly1305 MIPS32r2/o32 assembly (SDK dan QEMU lulus)
 
