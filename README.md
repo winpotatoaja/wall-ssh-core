@@ -14,7 +14,7 @@ Regresi native diperluas untuk membandingkan output biasa r55 dan output normali
 
 **Otomasi validasi:** commit bertanda `[mips-stage=sdk]` menjalankan SDK lebih dahulu; QEMU job otomatis memakai artifact dari run yang sama hanya bila SDK sukses. Tes bandwidth Internet tidak dijalankan otomatis.
 
-**Status:** patcher, regresi native, source verifier, serta wiring SDK→QEMU telah disiapkan. Hasil SDK/QEMU r56 belum tersedia. Belum ada klaim speedup; benchmark A/B pada router MT7621 fisik tetap diperlukan.
+**Status:** SDK #825 (`45591985150`) gagal sebelum kompilasi: patcher mencari offset array `lane - 1U`, padahal implementasi worker-only r48 yang masih aktif menggunakan `lane`. Penyebabnya adalah asumsi patcher r56 mengacu pada fungsi r47, meski r48 telah mengganti distribusi lane. Anchor diperbaiki agar menginisialisasi `destination_offsets[lane]` sesuai fungsi r48; source verifier juga memeriksa inisialisasi offset jalur legacy tersebut. Retry SDK berikutnya akan otomatis menjalankan QEMU hanya jika SDK lulus. Belum ada klaim speedup; benchmark A/B pada router MT7621 fisik tetap diperlukan.
 
 ## r55 — authenticated out-of-place ChaCha20-Poly1305 decrypt
 
