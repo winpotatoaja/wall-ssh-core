@@ -45,6 +45,29 @@ Regresi crypto menjalankan worker `0/1/2/3` untuk kelima threshold `4/8/16/24/32
 
 Default tetap auto topology + 4 KiB. Panggilan libssh2 lain yang tidak menggunakan setter baru tetap mendapat fallback threshold 4 KiB. Default belum diubah berdasarkan perkiraan throughput; keputusan akhir menunggu pengukuran MT7621A fisik. QEMU hanya memvalidasi kebenaran implementasi, bukan kecepatan perangkat.
 
+
+
+## R59 vs R62 — Datapacket 100 MB A/B on MT7621 QEMU
+
+Actions benchmark #7 (`45682174237`) ran two paired repeats in ABBA order (R59, R62, R62, R59) on the same OpenWrt 24.10.7 MT7621 emulator. Both source-matched core/libssh2 package pairs were verified before use. All eight 100,000,000-byte transfers returned HTTP 200 within the 50-second cap; each direct/SOCKS5 pair had equal byte counts. This benchmark streamed to `/dev/null` and did **not** calculate payload SHA-256, so it confirms transfer completion and byte-count equality, not cryptographic file identity.
+
+| Result | R59 | R62 |
+|---|---:|---:|
+| Direct repeats | 19.26 / 19.13 MiB/s | 19.81 / 18.16 MiB/s |
+| Direct median | 19.20 MiB/s | 18.99 MiB/s |
+| SOCKS5 repeats | 11.00 / 11.14 MiB/s | 10.91 / 11.06 MiB/s |
+| SOCKS5 median | **11.07 MiB/s** | **10.99 MiB/s** |
+| SOCKS5 / direct | 57.67% | 57.86% |
+
+R62 SOCKS5 median is **0.77% lower** than R59 using unrounded medians (10.985 vs 11.070 MiB/s). This difference is smaller than the run-to-run endpoint variation; it does not demonstrate a meaningful regression or improvement. Direct throughput also varied more during R62 (19.81 vs 18.16 MiB/s), indicating runner/endpoint noise.
+
+Per-thread samples were collected at 250 ms during SOCKS5 downloads. SSH Owner averaged 46.76% CPU in R59 and 48.32% in R62. R59's three ChaCha workers averaged 15.27%, 15.26%, and 14.88%; R62's averaged 14.34%, 14.19%, and 14.39%. Each worker was nonzero in about 72–73% of samples, showing comparable and reasonably balanced activity in this emulator. WAN RX, parsed from `wan(default)_rx`, had median/p95 15.83/17.50 MiB/s in R59 and 15.47/16.85 MiB/s in R62. The only sub-0.05 MiB/s samples were the first two startup windows of each run; no mid-transfer zero-rate windows appeared in these samples.
+
+**Interpretation:** R60–R62 have passed build/integration correctness, but this QEMU bandwidth comparison finds no measurable throughput gain over R59. The emulator's vCPU scheduling, runner Internet path and two-repeat sample size prevent conclusions about physical MT7621A speed. The next meaningful comparison is on the actual router with the same WAN path, and with content hashing enabled. Do not start another crypto optimization solely from this QEMU delta.
+
+The benchmark's main download/analysis phase passed and uploaded artifact `15055202465`. The overall Actions #7 workflow was marked failed only in its final cleanup step: `pkill -x qemu-system-mipsel` could return nonzero after the emulator process had already stopped. The cleanup is now made idempotent; this does not change measured source or benchmark data.
+
+
 ## r61 — per-channel S2C receive-window backpressure
 
 Branch: `experiment/r61-queue-backpressure`, dibuat dari R60 yang telah lulus SDK dan MT7621 QEMU. Package release menjadi `1.0.0-r61`.

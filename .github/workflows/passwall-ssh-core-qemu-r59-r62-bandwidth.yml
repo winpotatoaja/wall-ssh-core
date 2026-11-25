@@ -354,8 +354,8 @@ jobs:
           cp benchmark-status.txt bandwidth-results/benchmark-status.txt 2>/dev/null
           if [ -n "${EMU_DIR:-}" ]; then
             cp "$EMU_DIR/work/mips-emulator.log" bandwidth-results/mips-emulator.log 2>/dev/null
-            if [ -f "$GITHUB_WORKSPACE/mips-emulator.pid" ]; then kill -- "-$(cat "$GITHUB_WORKSPACE/mips-emulator.pid")" 2>/dev/null; fi
-            pkill -x qemu-system-mipsel 2>/dev/null
+            if [ -f "$GITHUB_WORKSPACE/mips-emulator.pid" ]; then kill -- "-$(cat "$GITHUB_WORKSPACE/mips-emulator.pid")" 2>/dev/null || true; fi
+            pkill -x qemu-system-mipsel 2>/dev/null || true
           fi
 
       - name: Analyze R59 vs R62 throughput and CPU

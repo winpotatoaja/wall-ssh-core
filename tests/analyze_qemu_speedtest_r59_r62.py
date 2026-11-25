@@ -6,7 +6,7 @@ from pathlib import Path
 
 DL = re.compile(r"^(\S+) mode=(direct|socks5) bytes=(\d+).*?curl_seconds=([0-9.]+) curl_avg_MiBps=([0-9.]+) http_code=(\d+)")
 THREAD = re.compile(r"tid=(\d+)/([^:,]+):([0-9.]+)%")
-RX = re.compile(r"\S+_rx=([0-9.]+)MiB/s")
+RX = re.compile(r"wan\(default\)_rx=([0-9.]+)MiB/s")
 
 def pct(v, q):
     if not v: return None
@@ -33,7 +33,7 @@ def load(path):
             me=re.search(r"\belapsed=([0-9.]+)s",line)
             mp=re.search(r"\bproc_cpu=([0-9.]+)%",line)
             threads={name:float(v) for _,name,v in THREAD.findall(line)}
-            mrx=RX.search(line.split("net_default=",1)[-1])
+            mrx=RX.search(line)
             d["samples"].append({"elapsed":float(me.group(1)) if me else None,
                                   "proc":float(mp.group(1)) if mp else None,
                                   "threads":threads,"rx":float(mrx.group(1)) if mrx else None})
@@ -85,7 +85,9 @@ def main():
         print("usage: analyze_qemu_speedtest_r59_r62.py R59_1 R62_1 R62_2 R59_2 OUTPUT_DIR"); return 2
     r59=agg("R59",[load(sys.argv[1]),load(sys.argv[4])])
     r62=agg("R62",[load(sys.argv[2]),load(sys.argv[3])])
-    delta=round((r62["socks5_median"]/r59["socks5_median"]-1)*100,2) if r59["socks5_median"] and r62["socks5_median"] else None
+    r59_socks_raw=[x["speed"] for x in r59["downloads"] if x["mode"]=="socks5" and x["http"]==200 and x["bytes"]>=95000000]
+    r62_socks_raw=[x["speed"] for x in r62["downloads"] if x["mode"]=="socks5" and x["http"]==200 and x["bytes"]>=95000000]
+    delta=round((statistics.median(r62_socks_raw)/statistics.median(r59_socks_raw)-1)*100,2) if r59_socks_raw and r62_socks_raw else None
     data={"environment":"MT7621 QEMU / OpenWrt 24.10.7 / Datapacket Singapore 100 MB / 50 s cap / two paired repeats per version",
           "R59":r59,"R62":r62,"R62_vs_R59_SOCKS5_median_pct":delta}
     out=Path(sys.argv[5]);out.mkdir(parents=True,exist_ok=True)
