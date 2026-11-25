@@ -1622,16 +1622,7 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             "libssh2_packet_queue_peak_packets=%llu "
             "libssh2_packet_queue_peak_bytes=%llu "
             "libssh2_packet_queue_enqueued_packets=%llu "
-            "libssh2_packet_queue_enqueued_bytes=%llu "
-            "libssh2_chacha_workers_requested=%u libssh2_chacha_workers_active=%u "
-            "libssh2_chacha_poly1305_us=%llu libssh2_chacha_poly1305_offloaded_packets=%llu libssh2_chacha20_key_us=%llu "
-            "libssh2_chacha20_header_us=%llu libssh2_chacha20_payload_us=%llu "
-            "libssh2_chacha20_serial_us=%llu libssh2_chacha20_serial_bytes=%llu "
-            "libssh2_chacha20_serial_packets=%llu libssh2_chacha20_parallel_us=%llu "
-            "libssh2_chacha20_parallel_bytes=%llu libssh2_chacha20_parallel_packets=%llu "
-            "libssh2_chacha_poly1305_wall_us=%llu libssh2_chacha20_decrypt_wall_us=%llu "
-            "libssh2_chacha20_worker_cpu_us=%llu libssh2_chacha20_worker_critical_us=%llu "
-            "libssh2_chacha20_parallel_other_us=%llu libssh2_chacha20_profile_packets=%llu",
+            "libssh2_packet_queue_enqueued_bytes=%llu",
             span_ms, g_client_count, relay_clients,
             (unsigned long long)g_perf_stats.epoll_calls,
             (unsigned long long)g_perf_stats.epoll_wait_ms,
@@ -1693,7 +1684,20 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             (unsigned long long)libssh2_diag.packet_queue_packets_peak,
             (unsigned long long)libssh2_diag.packet_queue_bytes_peak,
             (unsigned long long)libssh2_diag.packet_queue_enqueued_packets,
-            (unsigned long long)libssh2_diag.packet_queue_enqueued_bytes,
+            (unsigned long long)libssh2_diag.packet_queue_enqueued_bytes);
+
+    log_raw("[PERF-CHACHA] span_ms=%lld "
+            "libssh2_chacha_workers_requested=%u libssh2_chacha_workers_active=%u "
+            "libssh2_chacha_poly1305_us=%llu libssh2_chacha_poly1305_offloaded_packets=%llu "
+            "libssh2_chacha20_key_us=%llu libssh2_chacha20_header_us=%llu "
+            "libssh2_chacha20_payload_us=%llu libssh2_chacha20_serial_us=%llu "
+            "libssh2_chacha20_serial_bytes=%llu libssh2_chacha20_serial_packets=%llu "
+            "libssh2_chacha20_parallel_us=%llu libssh2_chacha20_parallel_bytes=%llu "
+            "libssh2_chacha20_parallel_packets=%llu "
+            "libssh2_chacha_poly1305_wall_us=%llu libssh2_chacha20_decrypt_wall_us=%llu "
+            "libssh2_chacha20_worker_cpu_us=%llu libssh2_chacha20_worker_critical_us=%llu "
+            "libssh2_chacha20_parallel_other_us=%llu libssh2_chacha20_profile_packets=%llu",
+            span_ms,
             libssh2_diag.chacha_workers_requested,
             libssh2_diag.chacha_workers_active,
             (unsigned long long)(libssh2_diag.chacha_poly1305_ns / 1000U),

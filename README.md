@@ -2,6 +2,16 @@
 
 Terakhir diperbarui: 2026-11-25
 
+## r58 — split ChaCha phase telemetry into a dedicated PERF record
+
+Branch eksperimen terpisah: `experiment/r58-chacha-perf-log-split`, dibuat dari r57 setelah SDK dan QEMU standar #848 sukses. Core IPK dinaikkan menjadi `1.0.0-r58`.
+
+R58 memindahkan semua field statistik ChaCha20-Poly1305 dari record panjang `[PERF]` ke record pendek `[PERF-CHACHA]`. Nama semua key `libssh2_chacha_*` dipertahankan agar parser yang mencari nama field tetap kompatibel. Record baru memuat jumlah worker, waktu Poly1305, key/header/payload, jalur serial/paralel, wall time fase, aggregate worker CPU, critical-worker time, parallel remainder, dan jumlah paket profil.
+
+Tujuannya murni observabilitas: log r57 dari QEMU #848 menunjukkan baris `[PERF]` terpotong sekitar 2.076 karakter sehingga field terakhir hilang dari job log. R58 juga menambahkan source verifier yang memastikan seluruh field dipindahkan ke `[PERF-CHACHA]` dan ukuran record di bawah batas konservatif. QEMU memeriksa bahwa Poly1305 wall time, decrypt wall time, worker CPU/critical time, dan profile packet count muncul dengan nilai nonzero saat transfer TCP standar.
+
+Tidak ada perubahan pada cipher, pembagian payload, worker count, format paket, atau urutan authenticate-before-decrypt. Tidak ada benchmark bandwidth Internet otomatis dan tidak ada klaim peningkatan throughput. SDK berjalan lebih dahulu; QEMU MT7621 otomatis memakai artifact dari run yang sama hanya bila SDK sukses. Validasi r58 masih menunggu.
+
 ## r57 — phase-level ChaCha20-Poly1305 profiling
 
 Branch eksperimen terpisah: \`experiment/r57-chachapoly-profile\`, dibuat dari r56 yang telah dinyatakan selesai. Package release dinaikkan menjadi \`1.0.0-r57\`.
@@ -20,7 +30,7 @@ Waktu worker diukur hanya jika diagnostik aktif. Ketika diagnostik tidak aktif, 
 
 **Cara membaca hasil:** bandingkan \`poly_worker_us\` dengan \`poly_wall_us\` untuk melihat biaya worker/wakeup pada fase autentikasi; bandingkan \`worker_cpu_us\`, \`worker_critical_us\`, dan \`chacha_decrypt_wall_us\` untuk melihat overlap serta ketimpangan beban worker. Jangan menjumlahkan worker CPU sebagai wall time. \`parallel_other_us\` berisi sisa setup, pembentukan task, pemeriksaan tag, dan overhead koordinator di dalam interval parallel.
 
-**Validasi:** SDK #842 berhenti pada anchor elapsed-time berulang; #846 kemudian berhenti karena patcher mencoba mengubah deklarasi \`passwall_diag\` memakai anchor yang salah. Setelah anchor tersebut dibuang, retry #847 berhasil menjalankan seluruh patcher dan pemeriksaan sumber r57, tetapi kompilasi native/MIPS menemukan bahwa enam counter baru hanya ada pada snapshot \`LIBSSH2_DIAG_TIMING\`, belum pada struktur inline \`session->passwall_diag\`. Patcher sekarang memperluas kedua deklarasi secara terpisah dan memverifikasi setiap field muncul tepat dua kali pada header. Verifier sumber juga memeriksa kedua blok secara eksplisit agar kesalahan ini tertangkap sebelum kompilasi. Belum ada IPK atau QEMU. Retry berikutnya menjalankan SDK; QEMU otomatis berjalan hanya bila SDK sukses. Benchmark bandwidth Internet tidak dijalankan otomatis. Data native host hanya menguji instrumentasi, bukan performa MT7621.
+**Validasi:** run #848 (`45612564917`) berhasil pada SDK dan QEMU MT7621; guest melaporkan `MIPS TEST STATUS: 0`. Regresi profiling native r57 juga lulus. Saat memeriksa log QEMU, record `[PERF]` terpotong di sekitar 2.076 karakter, sehingga field r57 yang berada di ujung record tidak seluruhnya terlihat pada GitHub Actions. R58 memindahkan semua statistik ChaCha ke record `[PERF-CHACHA]` terpisah dan menambahkan pemeriksaan runtime agar field fase nonzero terbaca. Benchmark bandwidth Internet tidak dijalankan; tidak ada klaim speedup dari pengujian standar QEMU.
 
 ## r56 — authenticated normalized ChaCha output (skip padding memmove)
 
