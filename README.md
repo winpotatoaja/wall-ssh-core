@@ -1,6 +1,20 @@
 # Passwall SSH Core — Progres Pengerjaan Tahap 1–5
 
-Terakhir diperbarui: 2026-11-24
+Terakhir diperbarui: 2026-11-25
+
+## r53 — eksperimen ChaCha20 MIPS32r2 assembly (validasi pending)
+
+Branch eksperimen terpisah: `experiment/r53-mips32-crypto-path`, dibuat dari baseline hardening r52. Core IPK menggunakan release `1.0.0-r53`; artefak r51/r52 tidak disentuh.
+
+Tahap ini menguji satu perubahan algoritma/codegen: backend ChaCha20 assembly MIPS32r2 khusus 32-bit MIPS revision 2–5. Sumber assembly memakai lisensi MIT yang tersedia pada deklarasi dual-license `GPL-2.0 OR MIT`. Build CMake hanya memasukkan translation unit assembly pada target MIPS dan memaksanya ke `-mno-mips16 -mips32r2`. Pada arsitektur lain, MIPS64, atau MIPS ISA yang tidak cocok, implementasi C tetap digunakan.
+
+Assembly hanya menerima rentang blok lengkap 64-byte. Sisa byte di akhir paket tetap ditangani implementasi C yang sudah ada. Bila penambahan block counter akan membungkus word counter 32-bit, pemanggilan assembly dilewati dan seluruh operasi kembali ke jalur C. Ini menjaga word counter tinggi dan tail handling tetap mengikuti kode libssh2 yang ada. Autentikasi Poly1305 sebelum dekripsi dari r51 dan hardening lifecycle/topology r52 tetap dipertahankan.
+
+Regression MIPS baru membandingkan hasil assembly terhadap reference ChaCha20 dan known-answer vector RFC 8439; menguji 0/64/128/192 byte, multi-block, in-place/out-of-place, seluruh kombinasi alignment 0–3, dan update counter. SDK juga mengarsipkan disassembly simbol assembly untuk memastikan encoding native 32-bit dan instruksi MIPS32r2. Tes source, cross-build, KAT pada QEMU dan uji integrasi harus lulus sebelum perubahan dianggap valid.
+
+**Status saat catatan ini ditulis: implementasi dan CI workflow telah disiapkan; SDK/QEMU r53 belum dinyatakan lulus. Tidak ada klaim kenaikan throughput.** Benchmark internet 100 MB tetap opt-in dan tidak dijalankan dalam tahap ini. Pengukuran performa final tetap memerlukan A/B pada router MT7621 fisik.
+
+Tahap ini sengaja belum mengubah Poly1305, jumlah/affinity worker, threshold dispatch, mutex/condition-variable model, packet queue/read-ahead, framing/copy `transport.c`, atau pipeline SSH. EVP ChaCha20-Poly1305 juga tidak dipakai karena format SSH OpenSSH tidak sama dengan RFC 8439 AEAD EVP. Perubahan lain diuji terpisah setelah backend ChaCha r53 lolos.
 
 ## r52 — hardening worker lifecycle dan topology fallback
 
