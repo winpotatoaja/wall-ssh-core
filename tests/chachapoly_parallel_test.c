@@ -1,7 +1,7 @@
 /*
- * Passwall r55: ChaCha20-Poly1305 authentication and out-of-place decrypt.
- * Verifies serial/in-place compatibility, body-only output, unchanged
- * ciphertext input, worker-count equivalence, block tails and tag rejection.
+ * Passwall r56: authenticated normalized ChaCha20-Poly1305 output.
+ * Verifies in-place compatibility, body-only output, padding-byte omission,
+ * unchanged ciphertext input, worker-count equivalence, tails and tag rejection.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,11 +52,13 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     unsigned char *bad = (unsigned char *)malloc(wire_len);
     unsigned char *bad_guard = (unsigned char *)malloc(wire_len);
     unsigned char *body = (unsigned char *)malloc(payload_len ? payload_len : 1U);
+    unsigned char *body_without_pad = (unsigned char *)malloc(payload_len ? payload_len : 1U);
+    unsigned char padding_length = OUTPUT_SENTINEL;
     u_int seqnr = seed * 17U + payload_len;
     int rc = -1;
 
     if(!plain || !wire || !cipher_copy || !cipher_guard ||
-       !bad || !bad_guard || !body) {
+       !bad || !bad_guard || !body || !body_without_pad) {
         fprintf(stderr, "allocation failed for payload %u\n", payload_len);
         goto out;
     }
@@ -66,7 +68,7 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     memcpy(wire, plain, packet_len);
 
     if(chachapoly_crypt(NULL, encrypt_ctx, seqnr, wire, wire,
-                        payload_len, PACKET_HEADER_LEN, PACKET_HEADER_LEN, 1) != 0) {
+                        payload_len, PACKET_HEADER_LEN, PACKET_HEADER_LEN, 0U, NULL, 1) != 0) {
         fprintf(stderr, "serial encryption failed for payload %u\n", payload_len);
         goto out;
     }
@@ -75,7 +77,7 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
 
     /* Existing in-place API remains byte-for-byte compatible. */
     if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, wire, wire,
-                        payload_len, PACKET_HEADER_LEN, PACKET_HEADER_LEN, 0) != 0) {
+                        payload_len, PACKET_HEADER_LEN, PACKET_HEADER_LEN, 0U, NULL, 0) != 0) {
         fprintf(stderr, "in-place decryption failed for payload %u with %u workers\n",
                 payload_len, workers);
         goto out;
@@ -89,7 +91,7 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     /* r55 output has no four-byte AAD prefix; the authenticated source stays intact. */
     memset(body, OUTPUT_SENTINEL, payload_len ? payload_len : 1U);
     if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, body, cipher_copy,
-                        payload_len, PACKET_HEADER_LEN, 0U, 0) != 0) {
+                        payload_len, PACKET_HEADER_LEN, 0U, 0U, NULL, 0) != 0) {
         fprintf(stderr, "out-of-place body decrypt failed for payload %u with %u workers\n",
                 payload_len, workers);
         goto out;
@@ -103,6 +105,36 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
         fprintf(stderr, "ciphertext source changed on successful out-of-place decrypt (%u)\n",
                 payload_len);
         goto out;
+    }
+
+    /* r56 emits packet bytes after padding_length directly at output offset 0. */
+    memset(body_without_pad, OUTPUT_SENTINEL, payload_len ? payload_len : 1U);
+    padding_length = OUTPUT_SENTINEL;
+    if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, body_without_pad, cipher_copy,
+                        payload_len, PACKET_HEADER_LEN, 0U, 1U,
+                        &padding_length, 0) == 0) {
+        if(payload_len == 0U) {
+            fprintf(stderr, "padding-byte omission accepted an empty packet body\n");
+            goto out;
+        }
+    }
+    else if(payload_len == 0U) {
+        /* A zero-byte packet has no padding-length byte to omit. */
+        if(padding_length != OUTPUT_SENTINEL ||
+           !all_bytes_are(body_without_pad, 1U, OUTPUT_SENTINEL)) {
+            fprintf(stderr, "empty padding-byte omission changed its outputs\n");
+            goto out;
+        }
+    }
+    if(payload_len > 0U) {
+        if(padding_length != plain[PACKET_HEADER_LEN] ||
+           (payload_len > 1U &&
+            memcmp(body_without_pad, plain + PACKET_HEADER_LEN + 1U,
+                   payload_len - 1U) != 0)) {
+            fprintf(stderr, "r56 normalized output mismatch for payload %u with %u workers\n",
+                    payload_len, workers);
+            goto out;
+        }
     }
 
     /* A corrupt tag must leave both ciphertext and destination untouched. */
@@ -123,6 +155,24 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     }
     if(memcmp(bad, bad_guard, wire_len) != 0) {
         fprintf(stderr, "ciphertext changed on rejected out-of-place decrypt (%u)\n",
+                payload_len);
+        goto out;
+    }
+
+    /* Failed authentication must not expose either normalized bytes or pad length. */
+    memset(body_without_pad, OUTPUT_SENTINEL, payload_len ? payload_len : 1U);
+    padding_length = OUTPUT_SENTINEL;
+    if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, body_without_pad, bad,
+                        payload_len, PACKET_HEADER_LEN, 0U, 1U,
+                        &padding_length, 0) == 0) {
+        fprintf(stderr, "r56 normalized output accepted a bad tag for payload %u\n",
+                payload_len);
+        goto out;
+    }
+    if(padding_length != OUTPUT_SENTINEL ||
+       !all_bytes_are(body_without_pad, payload_len ? payload_len : 1U,
+                      OUTPUT_SENTINEL)) {
+        fprintf(stderr, "r56 wrote normalized output before authentication for payload %u\n",
                 payload_len);
         goto out;
     }
@@ -151,6 +201,7 @@ out:
     free(bad);
     free(bad_guard);
     free(body);
+    free(body_without_pad);
     return rc;
 }
 
@@ -212,6 +263,6 @@ main(void)
     for(i = 0; i < 4U; i++)
         chachapoly_cleanup(&decrypt_ctx[i]);
     chachapoly_cleanup(&encrypt_ctx);
-    puts("PASS: ChaCha20-Poly1305 auth-first in-place/out-of-place decrypt, source integrity, tails and tag rejection");
+    puts("PASS: r56 auth-first in-place/body-only/normalized decrypt, padding-length output, worker tails and tag rejection");
     return 0;
 }
