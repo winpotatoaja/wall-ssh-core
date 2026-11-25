@@ -36,6 +36,7 @@
 #include "client_lifetime.h"
 #include "io_worker_pool.h"
 #include "io_worker_completion_tracker.h"
+#include "chacha_runtime_config.h"
 
 #define DEFAULT_LOG_PATH       "/tmp/etc/passwall-ssh.log"
 #define AUTH_FAILED_FILE       "/tmp/etc/passwall-ssh.auth_failed"
@@ -218,18 +219,9 @@ static uint32_t io_worker_count_for_cpu_count(long cpu_count) {
 }
 
 static unsigned int chacha_worker_count_for_physical_core_count(long core_count) {
-    /*
-     * r51 authenticates with Poly1305 first, then reuses all pool workers for ChaCha20 decryption.
-     * MT7621A has two physical cores but four Linux CPUs (two VPEs per core),
-     * so this decision must use the sysfs physical-core topology rather than
-     * the number of schedulable VPEs.
-     *
-     * The pool is capped at four persistent workers; r51 runs Poly1305 first and then all workers decrypt.
-     * A single-core device retains the serial Owner path.
-     */
+    /* Auto mode: serial on one core, otherwise at most three decrypt workers. */
     if (core_count <= 1L) return 0U;
-    if (core_count == 2L) return 3U;
-    return 4U;
+    return 3U;
 }
 
 static long g_detected_cpu_count = 1;
@@ -880,6 +872,8 @@ typedef struct {
     int  max_clients;
     int  log_backpressure;
     int  log_perf;
+    int  chacha_workers;       /* -1 = auto, 0..3 */
+    unsigned int chacha_threshold_kib; /* 4, 8, 16, 24, 32 */
 } app_cfg_t;
 
 static void trim_ws(char *s) {
@@ -993,6 +987,18 @@ static int load_env(const char *path, app_cfg_t *cfg) {
         } else if (!strcmp(k,"MAX_CLIENTS")) {
             if(parse_int_range(v,1,MAX_CLIENTS_LIMIT,&n)==0) cfg->max_clients=n;
             else log_yellow("MAX_CLIENTS harus 1..%d",MAX_CLIENTS_LIMIT);
+        } else if (!strcmp(k,"CHACHA_WORKERS")) {
+            if(passwall_chacha_parse_workers(v, &cfg->chacha_workers) < 0) {
+                log_red("CHACHA_WORKERS harus auto, 0, 1, 2, atau 3");
+                fclose(f);
+                return -1;
+            }
+        } else if (!strcmp(k,"CHACHA_THRESHOLD_KIB")) {
+            if(passwall_chacha_parse_threshold_kib(v, &cfg->chacha_threshold_kib) < 0) {
+                log_red("CHACHA_THRESHOLD_KIB harus 4, 8, 16, 24, atau 32 KiB");
+                fclose(f);
+                return -1;
+            }
         } else if (!strcmp(k,"LOG_BACKPRESSURE")) {
             if(parse_int_range(v,0,1,&n)==0) cfg->log_backpressure=n;
             else log_yellow("LOG_BACKPRESSURE harus 0 atau 1; diagnostik dinonaktifkan");
@@ -1689,6 +1695,7 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
 
     log_raw("[PERF-CHACHA] span_ms=%lld "
             "libssh2_chacha_workers_requested=%u libssh2_chacha_workers_active=%u "
+            "libssh2_chacha_threshold_bytes=%u "
             "libssh2_chacha_poly1305_us=%llu libssh2_chacha_poly1305_offloaded_packets=%llu "
             "libssh2_chacha20_key_us=%llu libssh2_chacha20_header_us=%llu "
             "libssh2_chacha20_payload_us=%llu libssh2_chacha20_serial_us=%llu "
@@ -1701,6 +1708,7 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             span_ms,
             libssh2_diag.chacha_workers_requested,
             libssh2_diag.chacha_workers_active,
+            libssh2_diag.chacha_threshold_bytes,
             (unsigned long long)(libssh2_diag.chacha_poly1305_ns / 1000U),
             (unsigned long long)libssh2_diag.chacha_poly1305_offloaded_packets,
             (unsigned long long)(libssh2_diag.chacha20_key_ns / 1000U),
@@ -4860,7 +4868,9 @@ static int core_worker_run(int argc, char **argv) {
         .hostkey_fp = "",
         .max_clients = DEFAULT_MAX_CLIENTS,
         .log_backpressure = 0,
-        .log_perf = 0
+        .log_perf = 0,
+        .chacha_workers = PASSWALL_CHACHA_WORKERS_AUTO,
+        .chacha_threshold_kib = PASSWALL_CHACHA_DEFAULT_THRESHOLD_KIB
     };
     const char *env_file = NULL;
     const char *payload_file = NULL;
@@ -4868,7 +4878,7 @@ static int core_worker_run(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            printf("Usage: %s [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-verify-tls 0|1] [-tls-diag 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log-backpressure 0|1] [-log-perf 0|1] [-log FILE|-]\n", argv[0]);
+            printf("Usage: %s [-env FILE] [-payload-file FILE] [-socks 127.0.0.1:1080] [-chacha-workers auto|0|1|2|3] [-chacha-threshold-kib 4|8|16|24|32] [-verify-tls 0|1] [-tls-diag 0|1] [-allow-remote-socks 0|1] [-http-200-tunnel 0|1] [-idle-timeout SEC] [-hostkey SHA256:...] [-max-clients 1..256] [-log-backpressure 0|1] [-log-perf 0|1] [-log FILE|-]\n", argv[0]);
             return 0;
         } else if (strcmp(argv[i], "-env") == 0 && i + 1 < argc) {
             env_file = argv[++i];
@@ -4883,6 +4893,18 @@ static int core_worker_run(int argc, char **argv) {
         if (strcmp(argv[i], "-env") == 0 && i + 1 < argc) { i++; }
         else if (strcmp(argv[i], "-log") == 0 && i + 1 < argc) { i++; }
         else if (strcmp(argv[i], "-workers") == 0 && i + 1 < argc) { i++; }
+        else if (strcmp(argv[i], "-chacha-workers") == 0 && i + 1 < argc) {
+            if(passwall_chacha_parse_workers(argv[++i], &cfg.chacha_workers) < 0) {
+                log_red("-chacha-workers harus auto, 0, 1, 2, atau 3");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "-chacha-threshold-kib") == 0 && i + 1 < argc) {
+            if(passwall_chacha_parse_threshold_kib(argv[++i], &cfg.chacha_threshold_kib) < 0) {
+                log_red("-chacha-threshold-kib harus 4, 8, 16, 24, atau 32");
+                return 1;
+            }
+        }
         else if (strcmp(argv[i], "-payload-file") == 0 && i + 1 < argc) payload_file = argv[++i];
         else if (strcmp(argv[i], "-payload") == 0 && i + 1 < argc) payload_str = argv[++i];
         else if (strcmp(argv[i], "-transport") == 0 && i + 1 < argc) snprintf(cfg.transport, sizeof(cfg.transport), "%s", argv[++i]);
@@ -5231,15 +5253,19 @@ static int core_worker_run(int argc, char **argv) {
         goto fail_cleanup;
     }
     unsigned int chacha_workers =
-        chacha_worker_count_for_physical_core_count(
-            g_detected_physical_core_count);
+        cfg.chacha_workers == PASSWALL_CHACHA_WORKERS_AUTO
+        ? chacha_worker_count_for_physical_core_count(g_detected_physical_core_count)
+        : (unsigned int)cfg.chacha_workers;
+    unsigned int chacha_threshold_bytes = cfg.chacha_threshold_kib * 1024U;
     libssh2_session_set_chacha_workers(session, chacha_workers);
-    log_blue("[ChaCha] r51 S2C payload: detected_cpus=%ld detected_cores=%ld owner_payload_lanes=%u crypto_workers=%u poly1305_workers=%u chacha_payload_workers=%u active_worker_lanes=%u threshold=4096 bytes",
-             g_detected_cpu_count, g_detected_physical_core_count,
-             chacha_workers ? 0U : 1U, chacha_workers,
-             chacha_workers >= 2U ? 1U : 0U,
-             chacha_workers >= 2U ? chacha_workers : 0U,
-             chacha_workers ? chacha_workers : 1U);
+    if(libssh2_session_set_chacha_threshold(session, chacha_threshold_bytes) != 0) {
+        log_red("CHACHA_THRESHOLD_KIB tidak valid after byte conversion");
+        goto fail_cleanup;
+    }
+    log_blue("[CHACHA-CONFIG] mode=%s requested_workers=%u threshold_kib=%u threshold_bytes=%u detected_cores=%ld",
+             cfg.chacha_workers == PASSWALL_CHACHA_WORKERS_AUTO ? "auto" : "manual",
+             chacha_workers, cfg.chacha_threshold_kib, chacha_threshold_bytes,
+             g_detected_physical_core_count);
 #if LIBSSH2_VERSION_NUM >= 0x010b01
     /* libssh2 1.11.1+ has the typed callback API. */
     libssh2_session_callback_set2(session, LIBSSH2_CALLBACK_RECV, (libssh2_cb_generic *)ssh_recv_cb);
@@ -5288,6 +5314,23 @@ static int core_worker_run(int argc, char **argv) {
                 write_marker(KEX_FAILED_FILE, emsg ? emsg : "kex failed");
             }
             goto fail_cleanup;
+        }
+    }
+
+    {
+        LIBSSH2_DIAG_TIMING chacha_runtime_diag;
+        memset(&chacha_runtime_diag, 0, sizeof(chacha_runtime_diag));
+        if(libssh2_session_diag_timing_snapshot(session,
+                                                &chacha_runtime_diag, 0) == 0) {
+            log_blue("[CHACHA-CONFIG-ACTIVE] requested_workers=%u active_workers=%u threshold_bytes=%u",
+                     chacha_runtime_diag.chacha_workers_requested,
+                     chacha_runtime_diag.chacha_workers_active,
+                     chacha_runtime_diag.chacha_threshold_bytes);
+            if(chacha_runtime_diag.chacha_workers_requested !=
+               chacha_runtime_diag.chacha_workers_active)
+                log_yellow("[CHACHA-CONFIG] worker pool fallback: requested=%u active=%u",
+                           chacha_runtime_diag.chacha_workers_requested,
+                           chacha_runtime_diag.chacha_workers_active);
         }
     }
 

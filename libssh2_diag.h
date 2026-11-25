@@ -21,6 +21,7 @@ typedef struct {
     unsigned long long packet_queue_enqueued_bytes;
     unsigned int chacha_workers_requested;
     unsigned int chacha_workers_active;
+    unsigned int chacha_threshold_bytes;
     unsigned long long chacha_poly1305_ns;
     unsigned long long chacha_poly1305_offloaded_packets;
     unsigned long long chacha20_key_ns;
@@ -43,6 +44,10 @@ typedef struct {
 LIBSSH2_API void
 libssh2_session_set_chacha_workers(LIBSSH2_SESSION *session,
                                    unsigned int workers);
+
+LIBSSH2_API int
+libssh2_session_set_chacha_threshold(LIBSSH2_SESSION *session,
+                                     unsigned int threshold_bytes);
 
 LIBSSH2_API void
 libssh2_session_diag_timing_enable(LIBSSH2_SESSION *session, int enabled);
