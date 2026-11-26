@@ -1,8 +1,47 @@
-# Passwall SSH Core — Progres Pengerjaan Tahap 1–5
+# Passwall SSH Core — Progres Pengerjaan R63–R66
 
 Terakhir diperbarui: 2026-11-26
 
-## Program kerja optimasi r60–r62
+## Roadmap optimasi R63–R66
+
+Target rangkaian ini adalah SSH Core yang aman, stabil, dan cepat pada berbagai arsitektur OpenWrt. R62 dipertahankan sebagai baseline yang sudah lulus SDK + MT7621 QEMU dan telah diuji pada router fisik. Setiap milestone dikerjakan pada branch tersendiri dan perubahan performa harus dibandingkan dengan baseline yang sama.
+
+| Milestone | Status | Fokus, batas perubahan, dan kriteria selesai |
+|---|---|---|
+| **R63 — crypto/transport hardening** | **Sedang dikerjakan** | Tutup jalur fallback ChaCha yang melewati threshold runtime; pastikan kegagalan autentikasi/dekripsi/framing mengakhiri sesi SSH upstream yang sudah tidak tepercaya, bukan hanya satu channel; rapikan kegagalan worker agar Owner tidak menunggu selamanya dan tidak ada plaintext parsial yang tertinggal; gunakan secure wipe yang tidak dapat dihapus compiler; perketat guard ISA assembly MIPS32. Tambahkan regresi batas threshold, tag rusak, kegagalan worker/shutdown, dan pemeriksaan ISA. Tidak mengubah algoritma AES, ukuran ring/window, atau kebijakan jumlah worker untuk mengejar throughput. |
+| **R64 — portable bulk AES-CTR** | Direncanakan | Optimasi jalur AES-CTR yang benar-benar dipakai pada server uji. Kurangi pemanggilan EVP per blok 16 byte dan salinan buffer yang tidak perlu dengan bulk processing yang aman, mempertahankan state/counter, urutan paket, ETM/non-ETM, EAGAIN, dan rekey. Gunakan OpenSSL EVP agar implementasi yang sama dapat memanfaatkan akselerasi CPU yang tersedia dan fallback software pada arsitektur lain. Mulai dari AES-128-CTR; AES-192/256-CTR hanya disertakan setelah tes khususnya lulus. |
+| **R65 — HMAC context optimization** | Direncanakan | Kurangi fetch/alokasi/inisialisasi konteks HMAC per paket. Rancang cache/reuse/duplication konteks yang benar untuk OpenSSL 3 serta fallback yang kompatibel dengan backend dan versi crypto yang benar-benar didukung. Konteks per sesi tidak boleh dibagi secara tidak aman antar-thread. Ukur kontribusi HMAC secara terpisah dari R64. |
+| **R66 — I/O, queue, dan backpressure** | Direncanakan | Setelah jalur crypto lebih efisien, evaluasi now_ms() per callback, drain eventfd yang tidak perlu, pengiriman ulang setelah EAGAIN, ring wrap/writev, partial channel read, S2C ring vs receive window, dan head-of-line blocking multi-channel. Setiap perubahan diuji satu faktor per eksperimen; jangan menaikkan buffer hanya berdasarkan dugaan cache pressure. |
+
+### Aturan pengerjaan dan validasi R63–R66
+
+1. **Satu faktor utama per milestone/eksperimen.** Jangan mencampur optimasi AES, HMAC, ring buffer, dan penjadwalan worker dalam satu perubahan.
+2. Setiap perubahan yang diuji harus di-commit/push pada branch milestone terkait. README dan CHANGELOG harus mencatat tujuan, file yang berubah, hasil tes, nomor Actions, dan keterbatasan hasil.
+3. Jangan menyatakan suatu optimasi berhasil hanya karena build sukses. Kriteria minimal: regresi native lulus, SDK OpenWrt MIPS menghasilkan IPK dengan nama/version milestone yang benar, lalu MT7621 QEMU menjalankan regresi runtime dan integritas data.
+4. **GitHub Actions harus menjalankan SDK lalu VM secara otomatis dalam satu workflow run.** Job VM harus bergantung pada needs: sdk dan berjalan hanya setelah SDK sukses; VM mengambil artifact SDK dari run/commit yang sama. Jangan memulai VM manual atau memakai artifact lama untuk memvalidasi source baru.
+5. Setelah commit pemicu SDK di-push, lanjutkan pekerjaan source/dokumentasi tanpa polling atau menunggu Actions. Status akhir SDK/VM dicatat setelah tersedia; jangan menunda milestone lokal hanya untuk menunggu runner.
+6. VM/QEMU dipakai untuk validasi build, protokol, concurrency, transfer, shutdown, dan checksum. **QEMU bukan tolok ukur throughput router fisik.** Benchmark bandwidth fisik MT7621A dilakukan terpisah dan hasilnya tidak dicampur dengan angka QEMU.
+7. Matriks portabilitas yang dituju: MIPS little-endian (termasuk MT7621 mipsel_24kc), ARMv7, ARM64, dan x86_64. Build satu target tidak otomatis membuktikan target lain. Guard assembly harus mengikuti ABI dan ISA yang benar; jalur C/OpenSSL tetap tersedia sebagai fallback.
+8. Jaga invariant keamanan: untuk ChaCha20-Poly1305, autentikasi paket dan verifikasi tag constant-time harus selesai sebelum plaintext atau metadata padding ditulis. Jangan melakukan fallback serial pada buffer yang sudah mungkin ditulis sebagian oleh worker.
+9. Jangan mengganti cipher untuk menyiasati server yang tidak mendukungnya. Catat cipher/MAC yang benar-benar dinegosiasikan. Benchmark cipher hanya sah jika server dan klien benar-benar menggunakan cipher yang sedang diuji.
+10. Pertahankan R62 sebagai baseline; setiap perbandingan fisik memakai server, jalur WAN, jumlah koneksi, file, durasi, dan pemeriksaan SHA-256 yang sama. Catat throughput median/p10/p95, stall/jitter, checksum, serta CPU per TID/thread jika tersedia.
+
+### Progress tracker
+
+| Pekerjaan | Status | Bukti/hasil |
+|---|---|---|
+| Buat branch R63 dari head R62 | Selesai | experiment/r63-hardening |
+| Tambahkan roadmap R63–R66 ke README | Selesai | Commit dokumentasi awal R63 |
+| Implementasi dan regresi R63 | Dalam pengerjaan | Belum dinyatakan lulus |
+| SDK MIPS R63 | Menunggu perubahan kode R63 | Wajib menghasilkan IPK 1.0.0-r63 |
+| MT7621 QEMU R63 | Otomatis setelah SDK sukses | Wajib memakai artifact SDK pada workflow run yang sama |
+| R64 bulk AES-CTR | Belum dimulai | Mulai setelah R63 lulus |
+| R65 HMAC context | Belum dimulai | Mulai setelah R64 lulus |
+| R66 I/O/backpressure | Belum dimulai | Mulai setelah R65 lulus |
+
+## Riwayat milestone r60–r62
+
+### Ringkasan r60–r62 sebelum audit eksternal
 
 Target akhir rangkaian ini adalah **r62 sebagai kandidat uji bandwidth MT7621A fisik**. R60–r62 dikerjakan berurutan pada branch terpisah. Setiap milestone wajib melewati regresi native, SDK OpenWrt mipsel_24kc, dan QEMU MT7621 sebelum pekerjaan berikutnya dimulai. Benchmark bandwidth Internet tidak dimasukkan ke workflow SDK/QEMU dan baru dilakukan setelah r62 lulus.
 
