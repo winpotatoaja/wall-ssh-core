@@ -240,7 +240,7 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
            (unsigned long long)(3U - expected_offload)) {
         fprintf(stderr, "R63 threshold bypass: workers=%u threshold=%u payload=%u "
                 "serial_packets=%llu parallel_packets=%llu expected_serial=%u "
-                "expected_parallel=%u\\n",
+                "expected_parallel=%u\n",
                 workers, threshold_bytes, payload_len,
                 diag_session.passwall_diag.chacha20_serial_packets,
                 diag_session.passwall_diag.chacha20_parallel_packets,
