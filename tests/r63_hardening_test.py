@@ -75,6 +75,9 @@ def main() -> int:
     worker_fn = extract(chacha, "static void *\nchacha_parallel_worker_main(void *opaque)")
     owner_fn = extract(chacha, "int\nchacha_decrypt_poly_worker_only(")
 
+    cleanup_start = crypt_fn.rfind("\nout:\n")
+    cleanup_fn = crypt_fn[cleanup_start:] if cleanup_start >= 0 else ""
+
     checks = [
         check((root / ".passwall-r62-runtime-ab-controls-patched").is_file() and
               (root / ".passwall-r63-crypto-transport-hardening-patched").is_file(),
@@ -89,8 +92,6 @@ def main() -> int:
         check(crypt_fn.count("memset(poly_key, 0, sizeof(poly_key));") == 1 and
               "chachapoly_secure_wipe(poly_key" in crypt_fn,
               "poly_key zero-initialization is preserved and only final cleanup uses secure wipe"),
-        cleanup_start = crypt_fn.rfind("\\nout:\\n")
-        cleanup_fn = crypt_fn[cleanup_start:] if cleanup_start >= 0 else ""
         check(cleanup_start >= 0 and
               cleanup_fn.count("chachapoly_secure_wipe(") == 3 and
               "memset(expected_tag" not in cleanup_fn and
