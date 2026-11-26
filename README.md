@@ -4,13 +4,13 @@ Terakhir diperbarui: 2026-11-26
 
 ## Roadmap optimasi R63–R66
 
-**R63A–F implementation update (2026-11-26):** corrected empty-payload counter expectations and added bad-tag no-dispatch assertions; expanded volatile wipes to all five ChaCha packet-stack secrets plus the context key schedule; bounded the **single R59 decrypt-worker barrier** with `CLOCK_MONOTONIC` when supported and a clock-matched fallback (Poly1305 authentication runs inline on the Owner); made worker stop/error state atomic and join failures fail-stop; tightened MIPS32 ABI guard checks; and extended SSH fatal-error handling in tracked `ssh-core.c`. Run #893 exposed the optional `LIBSSH2_ERROR_MAC_FAILURE` header mismatch and #894 exposed a stale R63 assumption of two worker waits after R59 had reduced the design to one decrypt dispatch. Both compatibility assumptions are corrected in source tooling/tests; fresh native/SDK/QEMU validation remains pending. No performance improvement is claimed.
+**R63 CLOSED — PASS (2026-11-26):** R63 hardening includes empty-payload and bad-tag no-dispatch regressions; volatile wipes for ChaCha packet-stack secrets and context; one bounded R59 decrypt-worker barrier; atomic worker stop/error state; fail-stop handling for worker join failure; 32-bit MIPS assembly ABI guard; and session-fatal handling for SSH integrity/framing/protocol errors. Actions #895 on commit `54bb4a52828e95721a1596625b10eb69b426e295` passed native regression, OpenWrt 24.10.7 `mipsel_24kc` SDK/IPK build, and MT7621 QEMU in the same workflow run. This establishes the R63 baseline; it is not a throughput-gain claim.
 
 Target rangkaian ini adalah SSH Core yang aman, stabil, dan cepat pada berbagai arsitektur OpenWrt. R62 dipertahankan sebagai baseline yang sudah lulus SDK + MT7621 QEMU dan telah diuji pada router fisik. Setiap milestone dikerjakan pada branch tersendiri dan perubahan performa harus dibandingkan dengan baseline yang sama.
 
 | Milestone | Status | Fokus, batas perubahan, dan kriteria selesai |
 |---|---|---|
-| **R63 — crypto/transport hardening** | **Sedang dikerjakan** | Tutup jalur fallback ChaCha yang melewati threshold runtime; pastikan kegagalan autentikasi/dekripsi/framing mengakhiri sesi SSH upstream yang sudah tidak tepercaya, bukan hanya satu channel; rapikan kegagalan worker agar Owner tidak menunggu selamanya dan tidak ada plaintext parsial yang tertinggal; gunakan secure wipe yang tidak dapat dihapus compiler; perketat guard ISA assembly MIPS32. Tambahkan regresi batas threshold, tag rusak, kegagalan worker/shutdown, dan pemeriksaan ISA. Tidak mengubah algoritma AES, ukuran ring/window, atau kebijakan jumlah worker untuk mengejar throughput. |
+| **R63 — crypto/transport hardening** | **Selesai — Actions #895 SDK + QEMU PASS** | Tutup jalur fallback ChaCha yang melewati threshold runtime; pastikan kegagalan autentikasi/dekripsi/framing mengakhiri sesi SSH upstream yang sudah tidak tepercaya, bukan hanya satu channel; rapikan kegagalan worker agar Owner tidak menunggu selamanya dan tidak ada plaintext parsial yang tertinggal; gunakan secure wipe yang tidak dapat dihapus compiler; perketat guard ISA assembly MIPS32. Tambahkan regresi batas threshold, tag rusak, kegagalan worker/shutdown, dan pemeriksaan ISA. Tidak mengubah algoritma AES, ukuran ring/window, atau kebijakan jumlah worker untuk mengejar throughput. |
 | **R64 — portable bulk AES-CTR** | Direncanakan | Optimasi jalur AES-CTR yang benar-benar dipakai pada server uji. Kurangi pemanggilan EVP per blok 16 byte dan salinan buffer yang tidak perlu dengan bulk processing yang aman, mempertahankan state/counter, urutan paket, ETM/non-ETM, EAGAIN, dan rekey. Gunakan OpenSSL EVP agar implementasi yang sama dapat memanfaatkan akselerasi CPU yang tersedia dan fallback software pada arsitektur lain. Mulai dari AES-128-CTR; AES-192/256-CTR hanya disertakan setelah tes khususnya lulus. |
 | **R65 — HMAC context optimization** | Direncanakan | Kurangi fetch/alokasi/inisialisasi konteks HMAC per paket. Rancang cache/reuse/duplication konteks yang benar untuk OpenSSL 3 serta fallback yang kompatibel dengan backend dan versi crypto yang benar-benar didukung. Konteks per sesi tidak boleh dibagi secara tidak aman antar-thread. Ukur kontribusi HMAC secara terpisah dari R64. |
 | **R66 — I/O, queue, dan backpressure** | Direncanakan | Setelah jalur crypto lebih efisien, evaluasi now_ms() per callback, drain eventfd yang tidak perlu, pengiriman ulang setelah EAGAIN, ring wrap/writev, partial channel read, S2C ring vs receive window, dan head-of-line blocking multi-channel. Setiap perubahan diuji satu faktor per eksperimen; jangan menaikkan buffer hanya berdasarkan dugaan cache pressure. |
@@ -33,11 +33,12 @@ Target rangkaian ini adalah SSH Core yang aman, stabil, dan cepat pada berbagai 
 | Pekerjaan | Status | Bukti/hasil |
 |---|---|---|
 | Buat branch R63 dari head R62 | Selesai | experiment/r63-hardening |
+| Validasi final R63 | **PASS** | Actions #895 — native + mipsel_24kc SDK/IPK + MT7621 QEMU; commit `54bb4a52` |
 | Tambahkan roadmap R63–R66 ke README | Selesai | Commit dokumentasi awal R63 |
-| Implementasi dan regresi R63 | R63A–F source/validator updated | #893 header mismatch fixed; #894 failed on stale two-wait assumption after R59 single dispatch; patcher/validator corrected, fresh validation pending |
-| SDK MIPS R63 | #884/#885 anchor, #887 assertion, #888 validator syntax, #893 native header mismatch, and #894 stale worker-wait expectation fixed; next SDK validation pending | Wajib menghasilkan IPK 1.0.0-r63 |
-| MT7621 QEMU R63 | Otomatis setelah SDK sukses | VM memakai artifact dari workflow run SDK yang sama |
-| R64 bulk AES-CTR | Belum dimulai | Mulai setelah R63 lulus |
+| Implementasi dan regresi R63 | **Selesai — PASS** | Actions #895 commit `54bb4a52`; native/source/SDK/QEMU all passed |
+| SDK MIPS R63 | **PASS — #895** | IPK 1.0.0-r63 built from commit `54bb4a52` |
+| MT7621 QEMU R63 | **PASS — #895** | VM consumed the matching SDK artifact in the same workflow run |
+| R64 bulk AES-CTR | **Design review** | Branch `experiment/r64-portable-aes-ctr`; independent Gemini review requested before implementation |
 | R65 HMAC context | Belum dimulai | Mulai setelah R64 lulus |
 | R66 I/O/backpressure | Belum dimulai | Mulai setelah R65 lulus |
 
