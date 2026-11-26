@@ -125,7 +125,7 @@ chachapoly_secure_wipe(void *buffer, size_t length)
     # Restrict secret erasure replacements to the function's final cleanup
     # block. Earlier memset calls initialize state and must remain ordinary
     # zero-initialization. This also avoids ambiguous whole-function anchors.
-    cleanup_label = "\\nout:\\n"
+    cleanup_label = "\nout:\n"
     cleanup_start = fn.rfind(cleanup_label)
     if cleanup_start < 0:
         raise RuntimeError("ChaCha cleanup label not found")
