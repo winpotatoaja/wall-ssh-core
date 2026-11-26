@@ -3627,6 +3627,16 @@ static int is_libssh2_socket_fatal(int err) {
             err == LIBSSH2_ERROR_SOCKET_DISCONNECT);
 }
 
+/* R63: fatal SSH integrity/protocol errors invalidate the upstream session. */
+static int is_libssh2_protocol_fatal(int err) {
+    int fatal = (err == LIBSSH2_ERROR_DECRYPT ||
+                 err == LIBSSH2_ERROR_MAC_FAILURE ||
+                 err == LIBSSH2_ERROR_OUT_OF_BOUNDARY ||
+                 err == LIBSSH2_ERROR_PROTO);
+    if(fatal) g_skip_libssh2_cleanup = 1;
+    return fatal;
+}
+
 static void note_upstream_rx_progress(upstream_ctx_t *u, uint64_t rx_before,
                                       int *did_ssh_read) {
     if (u && u->rx_seq != rx_before && did_ssh_read)
@@ -3898,6 +3908,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             *agg_dirs_out |= libssh2_session_block_directions(session);
             return 0;
         }
+        if (is_libssh2_protocol_fatal(rc)) return -1;
         if (u->hup_seen) {
             clear_pending_operation();
             return 1;
@@ -3954,6 +3965,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         } else {
             c->abort_on_pending = 0;
         }
+        if (is_libssh2_protocol_fatal(err)) return -1;
         return (is_libssh2_socket_fatal(err) && !u->hup_seen) ? -1 : 1;
     }
 
@@ -4050,6 +4062,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         c->write_waiting_window = 0;
         c->write_wait_rx_seq = 0;
         clear_pending_operation();
+        if (is_libssh2_protocol_fatal((int)w)) return -1;
         if (u->hup_seen || u->rx_terminal || u->tx_terminal) {
             if (c->c2s.used) rb_clear(&c->c2s);
             c->need_send_eof = 0;
@@ -4079,6 +4092,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             return 0;
         }
         clear_pending_operation();
+        if (is_libssh2_protocol_fatal(rc)) return -1;
         if (u->hup_seen || u->rx_terminal || u->tx_terminal) {
             c->need_send_eof = 0;
             c->abort_on_pending = 0;
@@ -4169,6 +4183,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
         }
 
         clear_pending_operation();
+        if (is_libssh2_protocol_fatal((int)r)) return -1;
         if (!discard_output && u->hup_seen &&
             is_libssh2_socket_fatal((int)r)) {
             (void)settle_terminal_channel_read(c, u);
@@ -4195,6 +4210,7 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
             *agg_dirs_out |= libssh2_session_block_directions(session);
             return 0;
         }
+        if (is_libssh2_protocol_fatal(rc)) return -1;
         c->channel = NULL;
         clear_pending_operation();
         remove_client(epfd, c);
@@ -4266,6 +4282,13 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         did_ssh_read = 1;
                         record_eagain(session, u, c, PENDING_OPEN, &agg_dirs, &stop_loop);
                     } else {
+                        if (is_libssh2_protocol_fatal(err)) {
+                            g_opening_client = NULL;
+                            *agg_dirs_out = agg_dirs;
+                            note_upstream_rx_progress(u, rx_before, &did_ssh_read);
+                            *did_ssh_read_out = did_ssh_read;
+                            return -1;
+                        }
                         g_opening_client = NULL;
                         if (!c->abort_on_open && !c->abort_on_pending && !c->close_after_ctrl && c->fd >= 0) {
                             send_socks_err_and_close(epfd, c, 0x05);
@@ -4410,6 +4433,12 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                         c->write_pending_len = 0;
                         c->write_waiting_window = 0;
                         c->write_wait_rx_seq = 0;
+                        if (is_libssh2_protocol_fatal((int)w)) {
+                            *agg_dirs_out = agg_dirs;
+                            note_upstream_rx_progress(u, rx_before, &did_ssh_read);
+                            *did_ssh_read_out = did_ssh_read;
+                            return -1;
+                        }
                         if (u->hup_seen || u->rx_terminal || u->tx_terminal) {
                             if (c->c2s.used) rb_clear(&c->c2s);
                             c->need_send_eof = 0;
@@ -4448,6 +4477,12 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     record_eagain(session, u, c, PENDING_SEND_EOF, &agg_dirs, &stop_loop);
                     if (stop_loop) break;
                 } else {
+                    if (is_libssh2_protocol_fatal(rc)) {
+                        *agg_dirs_out = agg_dirs;
+                        note_upstream_rx_progress(u, rx_before, &did_ssh_read);
+                        *did_ssh_read_out = did_ssh_read;
+                        return -1;
+                    }
                     if (u->hup_seen || u->rx_terminal || u->tx_terminal) {
                         c->need_send_eof = 0;
                         c->abort_on_pending = 0;
@@ -4542,6 +4577,12 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                             if (stop_loop) break;
                         }
                     } else {
+                        if (is_libssh2_protocol_fatal((int)r)) {
+                            *agg_dirs_out = agg_dirs;
+                            note_upstream_rx_progress(u, rx_before, &did_ssh_read);
+                            *did_ssh_read_out = did_ssh_read;
+                            return -1;
+                        }
                         if (u->hup_seen && !u->rx_terminal &&
                             is_libssh2_socket_fatal((int)r)) {
                             /* A failed WINDOW_ADJUST send does not prove that
@@ -4611,6 +4652,12 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                 record_eagain(session, u, c, PENDING_FREE, &agg_dirs, &stop_loop);
                 if (stop_loop) break;
             } else {
+                if (is_libssh2_protocol_fatal(rc)) {
+                    *agg_dirs_out = agg_dirs;
+                    note_upstream_rx_progress(u, rx_before, &did_ssh_read);
+                    *did_ssh_read_out = did_ssh_read;
+                    return -1;
+                }
                 if (rc < 0) log_yellow("libssh2_channel_free cleanup returned %d", rc);
                 c->channel = NULL;
                 remove_client(epfd, c);
