@@ -32,9 +32,9 @@ Target rangkaian ini adalah SSH Core yang aman, stabil, dan cepat pada berbagai 
 |---|---|---|
 | Buat branch R63 dari head R62 | Selesai | experiment/r63-hardening |
 | Tambahkan roadmap R63–R66 ke README | Selesai | Commit dokumentasi awal R63 |
-| Implementasi dan regresi R63 | Dalam pengerjaan | Belum dinyatakan lulus |
-| SDK MIPS R63 | Menunggu perubahan kode R63 | Wajib menghasilkan IPK 1.0.0-r63 |
-| MT7621 QEMU R63 | Otomatis setelah SDK sukses | Wajib memakai artifact SDK pada workflow run yang sama |
+| Implementasi dan regresi R63 | Source dan tes ditambahkan | Menunggu native/SDK/VM validation |
+| SDK MIPS R63 | Menunggu Actions | Wajib menghasilkan IPK 1.0.0-r63 |
+| MT7621 QEMU R63 | Otomatis setelah SDK sukses | VM memakai artifact dari workflow run SDK yang sama |
 | R64 bulk AES-CTR | Belum dimulai | Mulai setelah R63 lulus |
 | R65 HMAC context | Belum dimulai | Mulai setelah R64 lulus |
 | R66 I/O/backpressure | Belum dimulai | Mulai setelah R65 lulus |
