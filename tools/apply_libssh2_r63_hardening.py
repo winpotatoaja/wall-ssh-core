@@ -301,7 +301,8 @@ chacha_parallel_report_worker_error(chacha_parallel_pool_t *pool, int error)
 def patch_poly1305_wipe(root: Path) -> None:
     path = root / "src/poly1305.c"
     source = path.read_text()
-    helper = r''' 
+    helper = r'''
+#if LIBSSH2_HAVE_MIPS32R2_POLY1305_ASM
 /* R63: keep Poly1305 key-derived state erasure in optimized builds. */
 static void
 poly1305_secure_wipe(void *buffer, size_t length)
@@ -312,11 +313,13 @@ poly1305_secure_wipe(void *buffer, size_t length)
         length--;
     }
 }
+#endif
+
 '''
     source = replace_once(
-        source, '#include "poly1305.h"\n',
-        '#include "poly1305.h"\n' + helper + "\n",
-        "add non-elidable Poly1305 secret wipe"
+        source, "void\npoly1305_auth(",
+        helper + "void\npoly1305_auth(",
+        "add MIPS-only non-elidable Poly1305 secret wipe"
     )
     sig = "void\npoly1305_auth("
     start, end = function_bounds(source, sig)
