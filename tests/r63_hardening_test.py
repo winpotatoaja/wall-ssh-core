@@ -83,11 +83,14 @@ def main() -> int:
               "legacy fixed-4-KiB parallel fallback is removed from chachapoly_crypt"),
         check("volatile unsigned char *p" in cipher and
               "chachapoly_secure_wipe(expected_tag" in crypt_fn and
+              "chachapoly_secure_wipe(seqbuf" in crypt_fn and
               "chachapoly_secure_wipe(poly_key" in crypt_fn,
               "ChaCha stack secrets use non-elidable wiping"),
         check(crypt_fn.count("memset(poly_key, 0, sizeof(poly_key));") == 1 and
               "chachapoly_secure_wipe(poly_key" in crypt_fn,
               "poly_key zero-initialization is preserved and only final cleanup uses secure wipe"),
+        check("first_keystream" not in crypt_fn and "zero_block" not in crypt_fn,
+              "R63 cleanup only targets stack secrets present in libssh2 1.11.1"),
         check("#if LIBSSH2_HAVE_MIPS32R2_POLY1305_ASM" in poly1305 and
               "poly1305_secure_wipe(&state" in poly1305_fn and
               "poly1305_secure_wipe(pad" in poly1305_fn and
