@@ -85,6 +85,9 @@ def main() -> int:
               "chachapoly_secure_wipe(expected_tag" in crypt_fn and
               "chachapoly_secure_wipe(poly_key" in crypt_fn,
               "ChaCha stack secrets use non-elidable wiping"),
+        check(crypt_fn.count("memset(poly_key, 0, sizeof(poly_key));") == 1 and
+              "chachapoly_secure_wipe(poly_key" in crypt_fn,
+              "poly_key zero-initialization is preserved and only final cleanup uses secure wipe"),
         check("#if LIBSSH2_HAVE_MIPS32R2_POLY1305_ASM" in poly1305 and
               "poly1305_secure_wipe(&state" in poly1305_fn and
               "poly1305_secure_wipe(pad" in poly1305_fn and

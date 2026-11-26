@@ -127,14 +127,25 @@ chachapoly_secure_wipe(void *buffer, size_t length)
          "    chachapoly_secure_wipe(expected_tag, sizeof(expected_tag));"),
         ("    memset(seqbuf, 0, sizeof(seqbuf));",
          "    chachapoly_secure_wipe(seqbuf, sizeof(seqbuf));"),
-        ("    memset(poly_key, 0, sizeof(poly_key));",
-         "    chachapoly_secure_wipe(poly_key, sizeof(poly_key));"),
         ("    memset(first_keystream, 0, sizeof(first_keystream));",
          "    chachapoly_secure_wipe(first_keystream, sizeof(first_keystream));"),
         ("    memset(zero_block, 0, sizeof(zero_block));",
          "    chachapoly_secure_wipe(zero_block, sizeof(zero_block));"),
     ):
         fn = replace_once(fn, old, new, "replace stack-secret memset")
+
+    # poly_key is intentionally zero-initialized before key derivation and
+    # wiped again at function exit. Replace only the final cleanup occurrence.
+    poly_key_reset = "    memset(poly_key, 0, sizeof(poly_key));"
+    poly_key_count = fn.count(poly_key_reset)
+    if poly_key_count != 2:
+        raise RuntimeError(
+            "poly_key initialization/cleanup pair: expected 2 anchors, "
+            f"found {poly_key_count}"
+        )
+    poly_key_pos = fn.rfind(poly_key_reset)
+    poly_key_wipe = "    chachapoly_secure_wipe(poly_key, sizeof(poly_key));"
+    fn = fn[:poly_key_pos] + poly_key_wipe + fn[poly_key_pos + len(poly_key_reset):]
 
     path.write_text(source[:start] + fn + source[end:])
 
