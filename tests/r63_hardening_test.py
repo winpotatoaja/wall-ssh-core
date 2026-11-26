@@ -113,9 +113,10 @@ def main() -> int:
               "MIPS Poly1305 accumulator, pad and tail scratch use guarded non-elidable wiping"),
         check(worker_fn.count("chacha_parallel_report_worker_error(pool, lock_rc)") == 2,
               "worker startup and completion mutex failures are reported"),
-        check("chacha_parallel_report_worker_error(pool, lock_rc)" in worker_fn and
+        check("static void chacha_parallel_report_worker_error(chacha_parallel_pool_t *pool, int error);" in chacha and
+              "chacha_parallel_report_worker_error(pool, lock_rc)" in worker_fn and
               worker_fn.count("chacha_parallel_report_worker_error(pool, lock_rc)") == 2,
-              "worker startup and completion mutex failures are reported"),
+              "worker notifier is declared before worker_main and reports both mutex failures"),
         check("chacha_parallel_wait_for_workers(pool, workers)" in owner_fn and
               owner_fn.count("chacha_parallel_wait_for_workers(pool, workers)") == 2 and
               "pthread_cond_wait(&pool->work_done" not in owner_fn,

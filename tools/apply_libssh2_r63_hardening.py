@@ -293,6 +293,16 @@ chacha_parallel_wait_for_workers(chacha_parallel_pool_t *pool,
             "add a clock-matched bounded worker wait helper"
         )
 
+    worker_prototype = (
+        "static void chacha_parallel_report_worker_error("
+        "chacha_parallel_pool_t *pool, int error);\n\n"
+    )
+    source = replace_once(
+        source,
+        "static void *\nchacha_parallel_worker_main(void *opaque)",
+        worker_prototype + "static void *\nchacha_parallel_worker_main(void *opaque)",
+        "declare worker error notifier before worker_main"
+    )
     sig = "static void *\nchacha_parallel_worker_main(void *opaque)"
     a, b = function_bounds(source, sig)
     worker = source[a:b]
