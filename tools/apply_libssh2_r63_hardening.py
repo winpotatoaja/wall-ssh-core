@@ -305,15 +305,15 @@ def patch_mips_asm_guard(root: Path) -> None:
         'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips")\n'
         '  enable_language(ASM)\n'
         '  set(_chacha_mips_asm "\x24{CMAKE_CURRENT_SOURCE_DIR}/chacha-core.S")\n'
-        '  list(APPEND _sources "\${_chacha_mips_asm}")\n'
-        '  set_source_files_properties("\${_chacha_mips_asm}" PROPERTIES\n'
+        '  list(APPEND _sources "\x24{_chacha_mips_asm}")\n'
+        '  set_source_files_properties("\x24{_chacha_mips_asm}" PROPERTIES\n'
         '    COMPILE_OPTIONS "-mno-mips16;-mips32r2")\n'
         'endif()',
         'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips" AND CMAKE_SIZEOF_VOID_P EQUAL 4)\n'
         '  enable_language(ASM)\n'
         '  set(_chacha_mips_asm "\x24{CMAKE_CURRENT_SOURCE_DIR}/chacha-core.S")\n'
-        '  list(APPEND _sources "\${_chacha_mips_asm}")\n'
-        '  set_source_files_properties("\${_chacha_mips_asm}" PROPERTIES\n'
+        '  list(APPEND _sources "\x24{_chacha_mips_asm}")\n'
+        '  set_source_files_properties("\x24{_chacha_mips_asm}" PROPERTIES\n'
         '    COMPILE_OPTIONS "-mno-mips16;-mips32r2")\n'
         'endif()',
         "restrict the o32 ChaCha assembly source to 32-bit MIPS targets"
