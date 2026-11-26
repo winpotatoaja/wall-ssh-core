@@ -51,6 +51,24 @@ def verify_opcode_decoder() -> bool:
     return True
 
 
+def verify_cmake_guard_selftest() -> bool:
+    guarded = 'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips" AND CMAKE_SIZEOF_VOID_P EQUAL 4)'
+    legacy = 'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips")'
+    cases = (
+        ("R63 MIPS32 ABI guard", guarded, True),
+        ("pre-R63 MIPS guard", legacy, True),
+        ("MIPS64 must not use unqualified guard", legacy + "\nset(CMAKE_SIZEOF_VOID_P 8)", False),
+    )
+    ok = True
+    for name, snippet, expected in cases:
+        has_guard = guarded in snippet
+        legacy_safe = legacy in snippet and "CMAKE_SIZEOF_VOID_P 8" not in snippet
+        passed = (has_guard or legacy_safe) == expected
+        print(("PASS: " if passed else "FAIL: ") + name)
+        ok = ok and passed
+    return ok
+
+
 def verify_source(root: Path) -> int:
     cmake = root / "src/CMakeLists.txt"
     chacha = root / "src/chacha.c"
@@ -60,10 +78,15 @@ def verify_source(root: Path) -> int:
     chacha_text = chacha.read_text() if chacha.is_file() else ""
     asm_text = asm.read_text() if asm.is_file() else ""
 
+    r63_marker = (root / ".passwall-r63-crypto-transport-hardening-patched").is_file()
+    expected_guard = (
+        'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips" AND CMAKE_SIZEOF_VOID_P EQUAL 4)'
+        if r63_marker else 'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips")'
+    )
     checks = {
         "r53 MIPS32r2 assembly patch marker exists": marker.is_file(),
-        "CMake includes assembly only for MIPS targets": (
-            'if(CMAKE_SYSTEM_PROCESSOR MATCHES "mips")' in cmake_text
+        "CMake assembly selection has the ABI-appropriate MIPS guard": (
+            expected_guard in cmake_text
             and "enable_language(ASM)" in cmake_text
             and 'set(_chacha_mips_asm "${CMAKE_CURRENT_SOURCE_DIR}/chacha-core.S")' in cmake_text
             and 'list(APPEND _sources "${_chacha_mips_asm}")' in cmake_text
@@ -97,6 +120,8 @@ def verify_source(root: Path) -> int:
             failed.append(name)
     if not verify_opcode_decoder():
         failed.append("MIPS32r2 ROTR/ADDU opcode decoder self-test")
+    if not verify_cmake_guard_selftest():
+        failed.append("MIPS CMake ABI guard self-test")
     if failed:
         return 1
     print("PASS: r53 MIPS32r2 ChaCha source configuration")

@@ -57,12 +57,16 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     unsigned char padding_length = OUTPUT_SENTINEL;
     u_int seqnr = seed * 17U + payload_len;
     LIBSSH2_SESSION diag_session;
+    LIBSSH2_SESSION bad_diag_session;
+    unsigned int successful_decrypt_calls = payload_len == 0U ? 2U : 3U;
     unsigned int expected_offload =
         workers > 0U && payload_len >= threshold_bytes ? 3U : 0U;
     int rc = -1;
 
     memset(&diag_session, 0, sizeof(diag_session));
+    memset(&bad_diag_session, 0, sizeof(bad_diag_session));
     diag_session.passwall_diag.enabled = 1;
+    bad_diag_session.passwall_diag.enabled = 1;
 
     if(!plain || !wire || !cipher_copy || !cipher_guard ||
        !bad || !bad_guard || !body || !body_without_pad) {
@@ -159,7 +163,7 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     bad[wire_len - 1U] ^= 0x80U;
     memcpy(bad_guard, bad, wire_len);
     memset(body, OUTPUT_SENTINEL, payload_len ? payload_len : 1U);
-    if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, body, bad,
+    if(chachapoly_crypt(&bad_diag_session, decrypt_ctx, seqnr, body, bad,
                         payload_len, PACKET_HEADER_LEN, 0U, 0U, NULL, 0) == 0) {
         fprintf(stderr, "out-of-place tampered tag accepted for payload %u\n",
                 payload_len);
@@ -179,7 +183,7 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     /* Failed authentication must not expose either normalized bytes or pad length. */
     memset(body_without_pad, OUTPUT_SENTINEL, payload_len ? payload_len : 1U);
     padding_length = OUTPUT_SENTINEL;
-    if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, body_without_pad, bad,
+    if(chachapoly_crypt(&bad_diag_session, decrypt_ctx, seqnr, body_without_pad, bad,
                         payload_len, PACKET_HEADER_LEN, 0U, 1U,
                         &padding_length, 0) == 0) {
         fprintf(stderr, "r56 normalized output accepted a bad tag for payload %u\n",
@@ -203,7 +207,7 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
     memcpy(bad, cipher_guard, wire_len);
     bad[wire_len - 1U] ^= 0x80U;
     memcpy(bad_guard, bad, wire_len);
-    if(chachapoly_crypt(NULL, decrypt_ctx, seqnr, bad, bad,
+    if(chachapoly_crypt(&bad_diag_session, decrypt_ctx, seqnr, bad, bad,
                         payload_len, PACKET_HEADER_LEN, PACKET_HEADER_LEN, 0U, NULL, 0) == 0) {
         fprintf(stderr, "in-place tampered tag accepted for payload %u\n", payload_len);
         goto out;
@@ -234,17 +238,30 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
 
     /* R63: every successful packet must be either worker-dispatched or serial.
      * This catches the old fixed-4-KiB helper bypassing the configured threshold. */
+    if(bad_diag_session.passwall_diag.chacha_poly1305_offloaded_packets != 0ULL ||
+       bad_diag_session.passwall_diag.chacha20_parallel_packets != 0ULL ||
+       bad_diag_session.passwall_diag.chacha20_serial_packets != 0ULL) {
+        fprintf(stderr, "R63 bad-tag path dispatched or counted crypto work "
+                "workers=%u threshold=%u payload=%u serial=%llu parallel=%llu offloaded=%llu\n",
+                workers, threshold_bytes, payload_len,
+                bad_diag_session.passwall_diag.chacha20_serial_packets,
+                bad_diag_session.passwall_diag.chacha20_parallel_packets,
+                bad_diag_session.passwall_diag.chacha_poly1305_offloaded_packets);
+        goto out;
+    }
+
     if(diag_session.passwall_diag.chacha20_parallel_packets !=
            (unsigned long long)expected_offload ||
        diag_session.passwall_diag.chacha20_serial_packets !=
-           (unsigned long long)(3U - expected_offload)) {
+           (unsigned long long)(successful_decrypt_calls - expected_offload)) {
         fprintf(stderr, "R63 threshold bypass: workers=%u threshold=%u payload=%u "
                 "serial_packets=%llu parallel_packets=%llu expected_serial=%u "
-                "expected_parallel=%u\n",
+                "expected_parallel=%u successful_calls=%u\n",
                 workers, threshold_bytes, payload_len,
                 diag_session.passwall_diag.chacha20_serial_packets,
                 diag_session.passwall_diag.chacha20_parallel_packets,
-                3U - expected_offload, expected_offload);
+                successful_decrypt_calls - expected_offload, expected_offload,
+                successful_decrypt_calls);
         goto out;
     }
     if(threshold_bytes != 4096U)

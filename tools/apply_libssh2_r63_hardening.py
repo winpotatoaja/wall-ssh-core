@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """R63: harden ChaCha worker dispatch/lifecycle, secret wiping and transport errors."""
 from pathlib import Path
+import re
 import sys
 
 
@@ -130,7 +131,7 @@ chachapoly_secure_wipe(void *buffer, size_t length)
     if cleanup_start < 0:
         raise RuntimeError("ChaCha cleanup label not found")
     cleanup = fn[cleanup_start:]
-    for name in ("expected_tag", "seqbuf", "poly_key"):
+    for name in ("expected_tag", "seqbuf", "poly_key", "first_keystream", "zero_block"):
         old = f"    memset({name}, 0, sizeof({name}));"
         new = f"    chachapoly_secure_wipe({name}, sizeof({name}));"
         count = cleanup.count(old)
@@ -141,20 +142,113 @@ chachapoly_secure_wipe(void *buffer, size_t length)
         cleanup = cleanup.replace(old, new, 1)
     fn = fn[:cleanup_start] + cleanup
 
-    path.write_text(source[:start] + fn + source[end:])
+    source = source[:start] + fn + source[end:]
+
+    cleanup_sig = "void\nchachapoly_cleanup("
+    cleanup_start, cleanup_end = function_bounds(source, cleanup_sig)
+    cleanup_fn = source[cleanup_start:cleanup_end]
+    cleanup_fn = replace_once(
+        cleanup_fn,
+        "    memset(ctx, 0, sizeof(*ctx));",
+        "    chachapoly_secure_wipe(ctx, sizeof(*ctx));",
+        "securely wipe the ChaCha context/key schedule at cleanup"
+    )
+    source = source[:cleanup_start] + cleanup_fn + source[cleanup_end:]
+    path.write_text(source)
 
 
 def patch_worker_failure(root: Path) -> None:
     path = root / "src/chacha.c"
     source = path.read_text()
-    if "#include <time.h>" not in source:
-        source = replace_once(source, "#include <pthread.h>\n",
-                              "#include <pthread.h>\n#include <time.h>\n",
-                              "include timed-wait clock declarations")
+
+    if not source.startswith("#ifndef _GNU_SOURCE"):
+        source = replace_once(
+            source, '#include "chacha.h"\n',
+            '#ifndef _GNU_SOURCE\n#define _GNU_SOURCE\n#endif\n\n#include "chacha.h"\n',
+            "enable GNU/POSIX clock declarations"
+        )
+    for header in ("stdlib.h", "time.h"):
+        include = f"#include <{header}>\n"
+        if include not in source:
+            source = replace_once(source, "#include <pthread.h>\n",
+                                  "#include <pthread.h>\n" + include,
+                                  "include " + header)
+
+    source = replace_once(
+        source, "    int work_done_initialized;\n",
+        "    int work_done_initialized;\n    int work_done_monotonic;\n",
+        "track the work_done condition-variable clock"
+    )
+    source = replace_once(
+        source,
+        "    rc = pthread_cond_init(&pool->work_done, NULL);\n"
+        "    if(rc != 0) {\n"
+        "        errno = rc;\n"
+        "        goto fail;\n"
+        "    }\n"
+        "    pool->work_done_initialized = 1;",
+        "    {\n"
+        "        pthread_condattr_t work_done_attr;\n"
+        "        int attr_ready = 0;\n"
+        "        int use_monotonic = 0;\n"
+        "        rc = pthread_condattr_init(&work_done_attr);\n"
+        "        if(rc == 0) {\n"
+        "            attr_ready = 1;\n"
+        "#if defined(CLOCK_MONOTONIC)\n"
+        "            if(pthread_condattr_setclock(&work_done_attr, CLOCK_MONOTONIC) == 0)\n"
+        "                use_monotonic = 1;\n"
+        "#endif\n"
+        "        }\n"
+        "        rc = pthread_cond_init(&pool->work_done,\n"
+        "                              attr_ready ? &work_done_attr : NULL);\n"
+        "        if(attr_ready)\n"
+        "            (void)pthread_condattr_destroy(&work_done_attr);\n"
+        "        if(rc != 0) {\n"
+        "            errno = rc;\n"
+        "            goto fail;\n"
+        "        }\n"
+        "        pool->work_done_initialized = 1;\n"
+        "        pool->work_done_monotonic = use_monotonic;\n"
+        "    }",
+        "initialize work_done with CLOCK_MONOTONIC when available"
+    )
+
+    # A failed join must not return to the caller while workers can reference
+    # caller-owned packet storage. Abort is the deliberate fail-stop policy.
+    stop_sig = "static int\nchacha_parallel_pool_stop(chacha_parallel_pool_t *pool)"
+    a, b = function_bounds(source, stop_sig)
+    stop_fn = source[a:b]
+    stop_fn = replace_once(
+        stop_fn,
+        "    if(first_error != 0) {\n"
+        "        errno = first_error;\n"
+        "        return first_error;\n"
+        "    }",
+        "    if(first_error != 0) {\n"
+        "        errno = first_error;\n"
+        "        abort();\n"
+        "    }",
+        "fail-stop if a crypto worker cannot be joined"
+    )
+    source = source[:a] + stop_fn + source[b:]
+
+    finalize_sig = "static int\nchacha_parallel_pool_finalize(chacha_parallel_pool_t *pool)"
+    a, b = function_bounds(source, finalize_sig)
+    finalize_fn = source[a:b]
+    finalize_fn = replace_once(
+        finalize_fn,
+        "    rc = chacha_parallel_pool_stop(pool);\n"
+        "    if(rc != 0)\n"
+        "        return rc;",
+        "    rc = chacha_parallel_pool_stop(pool);\n"
+        "    if(rc != 0)\n"
+        "        abort();",
+        "fail-stop before releasing pool storage if workers remain"
+    )
+    source = source[:a] + finalize_fn + source[b:]
 
     helper = r'''
-/* Called when a worker cannot reacquire the pool mutex. The atomic error flag
- * plus a timed Owner wait closes the condvar signal/check race. */
+/* Publish failure even when a worker cannot reacquire the pool mutex. */
 static void
 chacha_parallel_report_worker_error(chacha_parallel_pool_t *pool, int error)
 {
@@ -164,12 +258,39 @@ chacha_parallel_report_worker_error(chacha_parallel_pool_t *pool, int error)
     (void)pthread_cond_broadcast(&pool->work_ready);
 }
 
+/* Called with pool->mutex held. A single deadline bounds spurious wakeups. */
+static int
+chacha_parallel_wait_for_workers(chacha_parallel_pool_t *pool,
+                                 unsigned int workers)
+{
+    struct timespec deadline;
+#if defined(CLOCK_MONOTONIC)
+    clockid_t clock_id = pool->work_done_monotonic ?
+                         CLOCK_MONOTONIC : CLOCK_REALTIME;
+#else
+    clockid_t clock_id = CLOCK_REALTIME;
+#endif
+    int rc;
+
+    if(clock_gettime(clock_id, &deadline) != 0)
+        return errno ? errno : EIO;
+    deadline.tv_sec += 10;
+    while(pool->completed < workers &&
+          __atomic_load_n(&pool->stopping, __ATOMIC_ACQUIRE) == 0U &&
+          __atomic_load_n(&pool->worker_error, __ATOMIC_ACQUIRE) == 0U) {
+        rc = pthread_cond_timedwait(&pool->work_done, &pool->mutex, &deadline);
+        if(rc != 0)
+            return rc;
+    }
+    return 0;
+}
+
 '''
-    if "chacha_parallel_report_worker_error(" not in source:
+    if "chacha_parallel_wait_for_workers(" not in source:
         source = replace_once(
-            source, "static void *\nchacha_parallel_worker_main(void *opaque)",
-            helper + "static void *\nchacha_parallel_worker_main(void *opaque)",
-            "add worker failure notifier"
+            source, "int\nchacha_decrypt_poly_worker_only(",
+            helper + "int\nchacha_decrypt_poly_worker_only(",
+            "add a clock-matched bounded worker wait helper"
         )
 
     sig = "static void *\nchacha_parallel_worker_main(void *opaque)"
@@ -201,10 +322,6 @@ chacha_parallel_report_worker_error(chacha_parallel_pool_t *pool, int error)
         "        }",
         "report worker completion mutex failure"
     )
-    worker = worker.replace(
-        "pool->worker_error = (unsigned int)wait_rc;",
-        "__atomic_store_n(&pool->worker_error, (unsigned int)wait_rc, __ATOMIC_RELEASE);"
-    )
     source = source[:a] + worker + source[b:]
 
     sig = "int\nchacha_decrypt_poly_worker_only("
@@ -219,19 +336,22 @@ chacha_parallel_report_worker_error(chacha_parallel_pool_t *pool, int error)
         "        return -1;\n"
         "    }",
         "    if(pthread_mutex_lock(&pool->mutex) != 0) {\n"
-        "        chacha_parallel_wipe(destination + dest_aadlen, bytes);\n"
+        "        if(chacha_parallel_pool_stop(pool) != 0) abort();\n"
+        "        chacha_parallel_wipe(destination + dest_aadlen,\n"
+        "                             skip_first ? bytes - 1U : bytes);\n"
         "        if(padding_length_out) *padding_length_out = 0U;\n"
         "        return -1;\n"
         "    }\n"
-        "    if(pool->stopping ||\n"
+        "    if(__atomic_load_n(&pool->stopping, __ATOMIC_ACQUIRE) != 0U ||\n"
         "       __atomic_load_n(&pool->worker_error, __ATOMIC_ACQUIRE) != 0U) {\n"
         "        (void)pthread_mutex_unlock(&pool->mutex);\n"
-        "        (void)chacha_parallel_pool_stop(pool);\n"
-        "        chacha_parallel_wipe(destination + dest_aadlen, bytes);\n"
+        "        if(chacha_parallel_pool_stop(pool) != 0) abort();\n"
+        "        chacha_parallel_wipe(destination + dest_aadlen,\n"
+        "                             skip_first ? bytes - 1U : bytes);\n"
         "        if(padding_length_out) *padding_length_out = 0U;\n"
         "        return -1;\n"
         "    }",
-        "fail closed when pool is already unhealthy"
+        "join unhealthy pool before returning to packet owner"
     )
 
     old_wait = (
@@ -250,58 +370,59 @@ chacha_parallel_report_worker_error(chacha_parallel_pool_t *pool, int error)
         "        return -1;\n"
         "    }"
     )
-    new_wait = r'''    while(pool->completed < workers && !pool->stopping &&
-          __atomic_load_n(&pool->worker_error, __ATOMIC_ACQUIRE) == 0U) {
-        struct timespec deadline;
-        int wait_rc;
-        if(clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
-            wait_rc = errno ? errno : EIO;
-        }
-        else {
-            /* A 10 s bound is far above normal 32 KiB crypto latency. */
-            deadline.tv_sec += 10;
-            wait_rc = pthread_cond_timedwait(&pool->work_done, &pool->mutex,
-                                             &deadline);
-        }
-        if(wait_rc != 0) {
-            __atomic_store_n(&pool->worker_error, (unsigned int)wait_rc,
-                             __ATOMIC_RELEASE);
-            pool->stopping = 1U;
-            (void)pthread_cond_broadcast(&pool->work_ready);
-            (void)pthread_cond_broadcast(&pool->work_done);
-            break;
-        }
-    }
-
-    if(pool->stopping ||
-       __atomic_load_n(&pool->worker_error, __ATOMIC_ACQUIRE) != 0U ||
-       pool->completed != workers) {
-        (void)pthread_mutex_unlock(&pool->mutex);
-        (void)chacha_parallel_pool_stop(pool);
-        /* Join completes before a possibly partial plaintext is erased. */
-        chacha_parallel_wipe(destination + dest_aadlen, bytes);
-        if(padding_length_out) *padding_length_out = 0U;
-        return -1;
-    }'''
-    fn = replace_once(fn, old_wait, new_wait,
-                      "bound Owner wait and wipe incomplete worker output")
+    new_wait = (
+        "    {\n"
+        "        int wait_rc = chacha_parallel_wait_for_workers(pool, workers);\n"
+        "        if(wait_rc != 0) {\n"
+        "            __atomic_store_n(&pool->worker_error, (unsigned int)wait_rc, __ATOMIC_RELEASE);\n"
+        "            __atomic_store_n(&pool->stopping, 1U, __ATOMIC_RELEASE);\n"
+        "            (void)pthread_cond_broadcast(&pool->work_ready);\n"
+        "            (void)pthread_cond_broadcast(&pool->work_done);\n"
+        "        }\n"
+        "    }\n\n"
+        "    if(__atomic_load_n(&pool->stopping, __ATOMIC_ACQUIRE) != 0U ||\n"
+        "       __atomic_load_n(&pool->worker_error, __ATOMIC_ACQUIRE) != 0U ||\n"
+        "       pool->completed != workers) {\n"
+        "        (void)pthread_mutex_unlock(&pool->mutex);\n"
+        "        if(chacha_parallel_pool_stop(pool) != 0) abort();\n"
+        "        chacha_parallel_wipe(destination + dest_aadlen,\n"
+        "                             skip_first ? bytes - 1U : bytes);\n"
+        "        if(padding_length_out) *padding_length_out = 0U;\n"
+        "        return -1;\n"
+        "    }"
+    )
+    if fn.count(old_wait) != 2:
+        raise RuntimeError("expected two unbounded worker waits to replace, found " +
+                           str(fn.count(old_wait)))
+    fn = fn.replace(old_wait, new_wait, 2)
     source = source[:a] + fn + source[b:]
 
     source = source.replace(
-        "pool->worker_error = (unsigned int)rc;",
-        "__atomic_store_n(&pool->worker_error, (unsigned int)rc, __ATOMIC_RELEASE);"
+        "(void)__sync_lock_test_and_set(&pool->stopping, 1U);",
+        "__atomic_store_n(&pool->stopping, 1U, __ATOMIC_RELEASE);"
     )
-    source = source.replace(
-        "if(pool->stopping || pool->worker_error)",
-        "if(pool->stopping || __atomic_load_n(&pool->worker_error, __ATOMIC_ACQUIRE) != 0U)"
+    source = re.sub(
+        r"pool->stopping\s*=\s*([^;]+);",
+        r"__atomic_store_n(&pool->stopping, \1, __ATOMIC_RELEASE);",
+        source
     )
-    source = source.replace(
-        "if(pool->stopping || pool->worker_error ||",
-        "if(pool->stopping || __atomic_load_n(&pool->worker_error, __ATOMIC_ACQUIRE) != 0U ||"
+    source = re.sub(
+        r"pool->worker_error\s*=\s*([^;]+);",
+        r"__atomic_store_n(&pool->worker_error, \1, __ATOMIC_RELEASE);",
+        source
     )
+    source = re.sub(
+        r"(?<![&\w])pool->stopping\b",
+        "__atomic_load_n(&pool->stopping, __ATOMIC_ACQUIRE)",
+        source
+    )
+    source = re.sub(
+        r"(?<![&\w])pool->worker_error\b",
+        "__atomic_load_n(&pool->worker_error, __ATOMIC_ACQUIRE)",
+        source
+    )
+
     path.write_text(source)
-
-
 
 def patch_poly1305_wipe(root: Path) -> None:
     path = root / "src/poly1305.c"
@@ -373,6 +494,19 @@ def patch_mips_asm_guard(root: Path) -> None:
 def patch_core_error_policy(project_root: Path) -> None:
     path = project_root / "ssh-core.c"
     source = path.read_text()
+    marker = "/* R63: fatal SSH integrity/protocol errors invalidate the upstream session. */"
+    if marker in source:
+        required = (
+            "LIBSSH2_ERROR_DECRYPT", "LIBSSH2_ERROR_MAC_FAILURE",
+            "LIBSSH2_ERROR_OUT_OF_BOUNDARY", "LIBSSH2_ERROR_PROTO",
+            "if (op == PENDING_KEEPALIVE)", "if (op == PENDING_FREE)",
+            "c->state == ST_CLOSING"
+        )
+        missing = [item for item in required if item not in source]
+        if missing:
+            raise RuntimeError("partial R63 SSH policy already present: " + ", ".join(missing))
+        return
+
     source = replace_once(
         source,
         "static int is_libssh2_socket_fatal(int err) {\n"
@@ -385,19 +519,38 @@ def patch_core_error_policy(project_root: Path) -> None:
         "            err == LIBSSH2_ERROR_SOCKET_SEND ||\n"
         "            err == LIBSSH2_ERROR_SOCKET_DISCONNECT);\n"
         "}\n\n"
-        "/* Integrity, decryption and framing errors invalidate the SSH session. */\n"
+        + marker + "\n"
         "static int is_libssh2_protocol_fatal(int err) {\n"
-        "    return (err == LIBSSH2_ERROR_DECRYPT ||\n"
-        "            err == LIBSSH2_ERROR_MAC_FAILURE ||\n"
-        "            err == LIBSSH2_ERROR_OUT_OF_BOUNDARY);\n"
+        "    int fatal = (err == LIBSSH2_ERROR_DECRYPT ||\n"
+        "                 err == LIBSSH2_ERROR_MAC_FAILURE ||\n"
+        "                 err == LIBSSH2_ERROR_OUT_OF_BOUNDARY ||\n"
+        "                 err == LIBSSH2_ERROR_PROTO);\n"
+        "    if(fatal) g_skip_libssh2_cleanup = 1;\n"
+        "    return fatal;\n"
         "}\n",
-        "add fatal SSH integrity/protocol error classification"
+        "add fatal SSH integrity/decrypt/framing/protocol classification"
+    )
+
+    source = replace_once(
+        source,
+        "        if (u->hup_seen) {\n"
+        "            clear_pending_operation();\n"
+        "            return 1;\n"
+        "        }\n"
+        '        log_red("SSH keepalive retry failed: %d", rc);',
+        "        if (is_libssh2_protocol_fatal(rc)) return -1;\n"
+        "        if (u->hup_seen) {\n"
+        "            clear_pending_operation();\n"
+        "            return 1;\n"
+        "        }\n"
+        '        log_red("SSH keepalive retry failed: %d", rc);',
+        "make pending keepalive protocol errors session-fatal"
     )
     source = replace_once(
         source,
         "return (is_libssh2_socket_fatal(err) && !u->hup_seen) ? -1 : 1;",
-        "return (is_libssh2_protocol_fatal(err) ||\n"
-        "                (is_libssh2_socket_fatal(err) && !u->hup_seen)) ? -1 : 1;",
+        "if (is_libssh2_protocol_fatal(err)) return -1;\n"
+        "        return (is_libssh2_socket_fatal(err) && !u->hup_seen) ? -1 : 1;",
         "propagate pending channel-open protocol failures"
     )
     source = replace_once(
@@ -437,10 +590,18 @@ def patch_core_error_policy(project_root: Path) -> None:
     )
     source = replace_once(
         source,
-        "        return is_libssh2_socket_fatal((int)r) ? -1 : 1;",
-        "        return (is_libssh2_protocol_fatal((int)r) ||\n"
-        "                is_libssh2_socket_fatal((int)r)) ? -1 : 1;",
-        "propagate pending read protocol failures"
+        "        c->channel = NULL;\n"
+        "        clear_pending_operation();\n"
+        "        remove_client(epfd, c);\n"
+        "        return 1;\n"
+        "    }\n\n    clear_pending_operation();",
+        "        if (is_libssh2_protocol_fatal(rc)) return -1;\n"
+        "        c->channel = NULL;\n"
+        "        clear_pending_operation();\n"
+        "        remove_client(epfd, c);\n"
+        "        return 1;\n"
+        "    }\n\n    clear_pending_operation();",
+        "make pending channel-free protocol errors session-fatal"
     )
     source = replace_once(
         source,
@@ -449,6 +610,7 @@ def patch_core_error_policy(project_root: Path) -> None:
         "                        if (!c->abort_on_open && !c->abort_on_pending && !c->close_after_ctrl && c->fd >= 0) {",
         "                    } else {\n"
         "                        if (is_libssh2_protocol_fatal(err)) {\n"
+        "                            g_opening_client = NULL;\n"
         "                            *agg_dirs_out = agg_dirs;\n"
         "                            note_upstream_rx_progress(u, rx_before, &did_ssh_read);\n"
         "                            *did_ssh_read_out = did_ssh_read;\n"
@@ -504,8 +666,21 @@ def patch_core_error_policy(project_root: Path) -> None:
         "                            is_libssh2_socket_fatal((int)r)) {",
         "make channel-read integrity errors session-fatal"
     )
+    source = replace_once(
+        source,
+        "            } else {\n"
+        "                if (rc < 0) log_yellow(\"libssh2_channel_free cleanup returned %d\", rc);",
+        "            } else {\n"
+        "                if (is_libssh2_protocol_fatal(rc)) {\n"
+        "                    *agg_dirs_out = agg_dirs;\n"
+        "                    note_upstream_rx_progress(u, rx_before, &did_ssh_read);\n"
+        "                    *did_ssh_read_out = did_ssh_read;\n"
+        "                    return -1;\n"
+        "                }\n"
+        "                if (rc < 0) log_yellow(\"libssh2_channel_free cleanup returned %d\", rc);",
+        "make ST_CLOSING channel-free protocol errors session-fatal"
+    )
     path.write_text(source)
-
 
 def patch(root: Path, project_root: Path) -> None:
     if not (root / ".passwall-r62-runtime-ab-controls-patched").is_file():
