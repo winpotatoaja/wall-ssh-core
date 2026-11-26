@@ -117,10 +117,11 @@ def main() -> int:
               "chacha_parallel_report_worker_error(pool, lock_rc)" in worker_fn and
               worker_fn.count("chacha_parallel_report_worker_error(pool, lock_rc)") == 2,
               "worker notifier is declared before worker_main and reports both mutex failures"),
-        check("chacha_parallel_wait_for_workers(pool, workers)" in owner_fn and
-              owner_fn.count("chacha_parallel_wait_for_workers(pool, workers)") == 2 and
-              "pthread_cond_wait(&pool->work_done" not in owner_fn,
-              "both Poly1305 and decrypt phases use bounded worker waits"),
+        check(owner_fn.count("pool->generation++") == 1 and
+              owner_fn.count("chacha_parallel_wait_for_workers(pool, workers)") == 1 and
+              "pthread_cond_wait(&pool->work_done" not in owner_fn and
+              "poly1305_auth(pool->poly_tag, source, poly_len, pool->poly_key);" in owner_fn,
+              "R59 single decrypt dispatch uses one bounded wait after Owner Poly1305 authentication"),
         check("pthread_condattr_setclock(&work_done_attr, CLOCK_MONOTONIC)" in chacha and
               "work_done_monotonic" in chacha and
               "clock_gettime(clock_id, &deadline)" in chacha,

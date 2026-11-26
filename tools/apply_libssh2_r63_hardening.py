@@ -401,10 +401,23 @@ chacha_parallel_wait_for_workers(chacha_parallel_pool_t *pool,
         "        return -1;\n"
         "    }"
     )
-    if fn.count(old_wait) != 2:
-        raise RuntimeError("expected two unbounded worker waits to replace, found " +
-                           str(fn.count(old_wait)))
-    fn = fn.replace(old_wait, new_wait, 2)
+    # R59 moved Poly1305 authentication onto the Owner and deliberately left
+    # one worker generation/barrier: the authenticated ChaCha decrypt phase.
+    # R63 must harden that single barrier, not assume the pre-R59 two-phase
+    # Poly1305/decrypt worker model.
+    dispatch_count = fn.count("pool->generation++")
+    if dispatch_count != 1:
+        raise RuntimeError(
+            "R63 requires the R59 single decrypt dispatch; found " +
+            str(dispatch_count)
+        )
+    wait_count = fn.count(old_wait)
+    if wait_count != 1:
+        raise RuntimeError(
+            "expected one R59 decrypt worker wait to replace, found " +
+            str(wait_count)
+        )
+    fn = fn.replace(old_wait, new_wait, 1)
     source = source[:a] + fn + source[b:]
 
     source = source.replace(

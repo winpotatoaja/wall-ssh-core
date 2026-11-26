@@ -4,7 +4,7 @@ Terakhir diperbarui: 2026-11-26
 
 ## Roadmap optimasi R63–R66
 
-**R63A–F implementation update (2026-11-26):** corrected the empty-payload counter expectation and added bad-tag no-dispatch assertions; expanded volatile wipes to all five ChaCha packet-stack secrets plus the context key schedule; bounded both worker phases with a condition variable using `CLOCK_MONOTONIC` when supported and a clock-matched fallback; made worker stop/error state atomic and join failures fail-stop; tightened MIPS32 ABI guard checks; and extended SSH fatal-error handling directly in tracked `ssh-core.c` for pending keepalive/free and `ST_CLOSING`. Run #893 gagal pada native compile karena Ubuntu 24.04 menyediakan libssh2 header 1.11.0 tanpa `LIBSSH2_ERROR_MAC_FAILURE`, sedangkan SDK menyiapkan libssh2 1.11.1. Classifier kini dibuat conditional agar kompatibel dengan kedua header; SDK belum dimulai dan QEMU dilewati. Fresh native/SDK/QEMU validation tetap pending; no performance improvement is claimed.
+**R63A–F implementation update (2026-11-26):** corrected empty-payload counter expectations and added bad-tag no-dispatch assertions; expanded volatile wipes to all five ChaCha packet-stack secrets plus the context key schedule; bounded the **single R59 decrypt-worker barrier** with `CLOCK_MONOTONIC` when supported and a clock-matched fallback (Poly1305 authentication runs inline on the Owner); made worker stop/error state atomic and join failures fail-stop; tightened MIPS32 ABI guard checks; and extended SSH fatal-error handling in tracked `ssh-core.c`. Run #893 exposed the optional `LIBSSH2_ERROR_MAC_FAILURE` header mismatch and #894 exposed a stale R63 assumption of two worker waits after R59 had reduced the design to one decrypt dispatch. Both compatibility assumptions are corrected in source tooling/tests; fresh native/SDK/QEMU validation remains pending. No performance improvement is claimed.
 
 Target rangkaian ini adalah SSH Core yang aman, stabil, dan cepat pada berbagai arsitektur OpenWrt. R62 dipertahankan sebagai baseline yang sudah lulus SDK + MT7621 QEMU dan telah diuji pada router fisik. Setiap milestone dikerjakan pada branch tersendiri dan perubahan performa harus dibandingkan dengan baseline yang sama.
 
@@ -34,8 +34,8 @@ Target rangkaian ini adalah SSH Core yang aman, stabil, dan cepat pada berbagai 
 |---|---|---|
 | Buat branch R63 dari head R62 | Selesai | experiment/r63-hardening |
 | Tambahkan roadmap R63–R66 ke README | Selesai | Commit dokumentasi awal R63 |
-| Implementasi dan regresi R63 | R63A–F source/validator updated | #893 native compile failed on libssh2 1.11.0 header mismatch; guarded MAC_FAILURE fix pushed, rerun pending |
-| SDK MIPS R63 | #884/#885 gagal pada anchor patcher; #887 pada assertion tes; #888 pada SyntaxError validator. Patcher dan validator sudah dikoreksi; SDK fresh masih menunggu validasi | Wajib menghasilkan IPK 1.0.0-r63 |
+| Implementasi dan regresi R63 | R63A–F source/validator updated | #893 header mismatch fixed; #894 failed on stale two-wait assumption after R59 single dispatch; patcher/validator corrected, fresh validation pending |
+| SDK MIPS R63 | #884/#885 anchor, #887 assertion, #888 validator syntax, #893 native header mismatch, and #894 stale worker-wait expectation fixed; next SDK validation pending | Wajib menghasilkan IPK 1.0.0-r63 |
 | MT7621 QEMU R63 | Otomatis setelah SDK sukses | VM memakai artifact dari workflow run SDK yang sama |
 | R64 bulk AES-CTR | Belum dimulai | Mulai setelah R63 lulus |
 | R65 HMAC context | Belum dimulai | Mulai setelah R64 lulus |
