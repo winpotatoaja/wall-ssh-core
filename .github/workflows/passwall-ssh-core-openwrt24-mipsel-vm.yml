@@ -2,14 +2,14 @@ name: Passwall SSH core - OpenWrt 24.10.7 mipsel_24kc
 # r61 S2C backpressure: bound direct-tcpip receive credit to twice the 256 KiB client ring; keep SSH control flow unchanged.
 on:
   push:
-    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration, phase2/tls-engine-integration-rxfix, phase3/io-worker-pool-foundation, benchmark/r39-internet-speedtest, experiment/r51-mips32-crypto, experiment/r52-safe-topology-lifecycle, experiment/r53-mips32-crypto-path, experiment/r54-mips32-poly1305-asm, experiment/r55-outofplace-chacha-decrypt, experiment/r56-skip-padding-memmove, experiment/r57-chachapoly-profile, experiment/r58-chacha-perf-log-split, experiment/r59-inline-owner-poly1305, experiment/r60-worker-hotpath-cleanup, experiment/r61-queue-backpressure, experiment/r62-runtime-ab-controls, experiment/r63-hardening]
+    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration, phase2/tls-engine-integration-rxfix, phase3/io-worker-pool-foundation, benchmark/r39-internet-speedtest, experiment/r51-mips32-crypto, experiment/r52-safe-topology-lifecycle, experiment/r53-mips32-crypto-path, experiment/r54-mips32-poly1305-asm, experiment/r55-outofplace-chacha-decrypt, experiment/r56-skip-padding-memmove, experiment/r57-chachapoly-profile, experiment/r58-chacha-perf-log-split, experiment/r59-inline-owner-poly1305, experiment/r60-worker-hotpath-cleanup, experiment/r61-queue-backpressure, experiment/r62-runtime-ab-controls, experiment/r63-hardening, experiment/r64-portable-aes-ctr]
 permissions:
   contents: read
   actions: write
   statuses: write
 
 concurrency:
-  group: openwrt24-mipsel-r63-${{ github.ref }}
+  group: openwrt24-mipsel-r64-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   sdk:
@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_hotpath_test.py tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py
+          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_hotpath_test.py tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py
           mkdir -p test-results
           gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/chacha_runtime_config_test.c -o /tmp/r62-config-parser-test
           /tmp/r62-config-parser-test | tee test-results/r62-config-parser.log
@@ -46,6 +46,8 @@ jobs:
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror tests/aesgcm_inplace_test.c \
             -o /tmp/aesgcm-inplace-test -lcrypto
           /tmp/aesgcm-inplace-test | tee test-results/aesgcm-inplace-test-native.log
+          gcc -std=c11 -O2 -g -Wall -Wextra -Werror tests/r64_aes_ctr_bulk_test.c -o /tmp/r64-aes-ctr-bulk-test -lcrypto
+          /tmp/r64-aes-ctr-bulk-test | tee test-results/r64-aes-ctr-bulk-test-native.log
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror -pthread \
             tests/spsc_rb_test.c -o /tmp/spsc-rb-test
           timeout 90s /tmp/spsc-rb-test | tee test-results/spsc-rb-test-native.log
@@ -167,6 +169,9 @@ jobs:
           python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r63_hardening.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE"
           test -s "$LIBSSH2_SRC/.passwall-r63-crypto-transport-hardening-patched"
           python3 "$GITHUB_WORKSPACE/tests/r63_hardening_test.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE/ssh-core.c" "$GITHUB_WORKSPACE/tests/chachapoly_parallel_test.c" | tee "$GITHUB_WORKSPACE/test-results/r63-hardening-source.log"
+          python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r64.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE"
+          test -s "$LIBSSH2_SRC/.passwall-r64-portable-aes-ctr-patched"
+          python3 "$GITHUB_WORKSPACE/tests/r64_aes_ctr_source_test.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE" | tee "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-source.log"
           python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log"
           python3 "$GITHUB_WORKSPACE/tests/poly1305_mips_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/poly1305-mips-hotpath.log"
           # Configure first so the host-side crypto regression uses the exact
@@ -216,6 +221,13 @@ jobs:
           test -e "$STAGING/usr/lib/libssl.so"
           test -e "$STAGING/usr/lib/libcrypto.so"
           test -e "$STAGING/usr/lib/libssh2.so"
+          "$MIPS_CC" -std=c11 -O2 -Wall -Wextra -Werror -I"$STAGING/usr/include" \
+            "$GITHUB_WORKSPACE/tests/r64_aes_ctr_bulk_test.c" -L"$STAGING/usr/lib" -lcrypto \
+            -o "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test"
+          chmod 0755 "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test"
+          file "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test" | tee "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test-file.txt"
+          readelf -h "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test" | grep -q MIPS
+          (cd "$GITHUB_WORKSPACE/test-results" && sha256sum r64-aes-ctr-test > r64-aes-ctr.sha256)
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_enable'
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_snapshot'
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_set_chacha_workers'
@@ -245,8 +257,8 @@ jobs:
           test -s "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm"
           python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" --verify-disasm "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm" | tee -a "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log"
           python3 "$GITHUB_WORKSPACE/tests/poly1305_mips_hotpath_test.py" --verify-disasm "$GITHUB_WORKSPACE/test-results/libssh2-chacha-mips.disasm" | tee -a "$GITHUB_WORKSPACE/test-results/poly1305-mips-hotpath.log"
-# Core IPK release r63 hardens crypto/transport paths and retains R62 runtime controls.
-      - name: Build r63 MIPS IPK with R62 runtime controls and R63 hardening
+# Core IPK release r64 adds portable EVP AES-128-CTR bulk processing and transport security backports.
+      - name: Build r64 MIPS IPK with R63 hardening and R64 AES-CTR bulk
         shell: bash
         run: |
           set -euo pipefail
@@ -266,14 +278,14 @@ jobs:
             false
           fi
           echo "PASS: ssh-core.c contains no direct SSL object or I/O calls"
-          IPK="$(find bin/packages -type f -name 'passwall-ssh-core_1.0.0-r63_mipsel_24kc.ipk' | head -n 1)"
+          IPK="$(find bin/packages -type f -name 'passwall-ssh-core_1.0.0-r64_mipsel_24kc.ipk' | head -n 1)"
           LIBSSH2_IPK="$(find bin/packages -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' | head -n 1)"
           test -n "$IPK"
           IPK_CONTROL="$(tar -xOzf "$IPK" ./control.tar.gz | tar -xzO ./control)"
           printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Package: passwall-ssh-core'
-          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Version: 1.0.0-r63'
+          printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Version: 1.0.0-r64'
           printf '%s\n' "$IPK_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
-          echo "PASS: core IPK filename and embedded control metadata both identify 1.0.0-r63."
+          echo "PASS: core IPK filename and embedded control metadata both identify 1.0.0-r64."
           test -n "$LIBSSH2_IPK"
           mkdir -p "$GITHUB_WORKSPACE/test-results"
           cp "$IPK" "$LIBSSH2_IPK" "$GITHUB_WORKSPACE/test-results/"
@@ -354,7 +366,7 @@ jobs:
       - name: Upload MIPS IPK and helper
         uses: actions/upload-artifact@v4
         with:
-          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r63-ipk
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r64-ipk
           path: |
             test-results/passwall-ssh-core*.ipk
             test-results/libssh2-1_1.11.1-r1_mipsel_24kc.ipk
@@ -406,7 +418,14 @@ jobs:
             test-results/r62-config-parser.log
             test-results/r62-chacha-config-source.log
             test-results/r63-hardening-source.log
+            test-results/r64-aes-ctr-source.log
+            test-results/r64-aes-ctr-bulk-test-native.log
+            test-results/r64-aes-ctr-test
+            test-results/r64-aes-ctr-test-file.txt
+            test-results/r64-aes-ctr.sha256
             test-results/chachapoly-parallel-r63-mips-test
+            test-results/r64-aes-ctr-test
+            test-results/r64-aes-ctr-test-file.txt
             test-results/chachapoly-parallel-r63-mips.sha256
             test-results/chachapoly-parallel-r63-mips-file.txt
             test-results/chachapoly-auth-order.log
@@ -491,7 +510,7 @@ jobs:
       - name: Download the MIPS IPK and test helper
         uses: actions/download-artifact@v4
         with:
-          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r63-ipk
+          name: passwall-ssh-core-openwrt-24.10.7-mipsel-r64-ipk
           run-id: ${{ env.SDK_RUN_ID }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
@@ -504,17 +523,17 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c tools/mips32/chacha-core.S tests/mips32_chacha_asm_test.c tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_asm_test.c tests/poly1305_mips_hotpath_test.py tools/mips32/poly1305-mips.pl LICENSES/BSD-3-Clause.txt tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c tools/mips32/chacha-core.S tests/mips32_chacha_asm_test.c tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_asm_test.c tests/poly1305_mips_hotpath_test.py tools/mips32/poly1305-mips.pl LICENSES/BSD-3-Clause.txt tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tests/r64_aes_ctr_bulk_test.c; then
             echo "SDK artifact was built from different package or test sources."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tests/r64_aes_ctr_bulk_test.c
             false
           fi
-          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256 mips32-chacha-asm-test.sha256 poly1305-mips-asm-test.sha256 chachapoly-parallel-r63-mips.sha256)
-          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test test-results/mips32-chacha-asm-test test-results/poly1305-mips-asm-test test-results/chachapoly-parallel-r63-mips-test
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256 mips32-chacha-asm-test.sha256 poly1305-mips-asm-test.sha256 chachapoly-parallel-r63-mips.sha256 r64-aes-ctr.sha256)
+          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test test-results/mips32-chacha-asm-test test-results/poly1305-mips-asm-test test-results/chachapoly-parallel-r63-mips-test test-results/r64-aes-ctr-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
-          test -s test-results/passwall-ssh-core_1.0.0-r63_mipsel_24kc.ipk
-          grep -Fq 'Version: 1.0.0-r63' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r63_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
+          test -s test-results/passwall-ssh-core_1.0.0-r64_mipsel_24kc.ipk
+          grep -Fq 'Version: 1.0.0-r64' <(tar -xOzf test-results/passwall-ssh-core_1.0.0-r64_mipsel_24kc.ipk ./control.tar.gz | tar -xzO ./control)
           LIBSSH2_IPK="$(find test-results -maxdepth 1 -type f -name 'libssh2-1_1.11.1-r1_mipsel_24kc.ipk' -print -quit)"
           test -n "$LIBSSH2_IPK"
           LIBSSH2_CONTROL="$(tar -xOzf "$LIBSSH2_IPK" ./control.tar.gz | tar -xzO ./control)"
@@ -534,6 +553,7 @@ jobs:
           readelf -h test-results/mips32-chacha-asm-test | grep -q 'MIPS'
           readelf -h test-results/poly1305-mips-asm-test | grep -q 'MIPS'
           readelf -h test-results/chachapoly-parallel-r63-mips-test | grep -q 'MIPS'
+          readelf -h test-results/r64-aes-ctr-test | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
         shell: bash
@@ -914,8 +934,30 @@ jobs:
             -o MaxSessions=64 \
             -o LogLevel=VERBOSE >/tmp/mips-sshd.log 2>&1 &
           echo "$!" >/tmp/mips-sshd.pid
+          sudo /usr/sbin/sshd -D -e -f /dev/null \
+            -p 2223 -o PidFile=/tmp/mips-sshd-aes-non-etm.pid \
+            -o HostKey=/etc/ssh/ssh_host_ed25519_key -o ListenAddress=0.0.0.0 \
+            -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=no \
+            -o PubkeyAuthentication=no -o PermitRootLogin=no -o UsePAM=no \
+            -o StrictModes=no -o AllowUsers=sshcore-ci -o AllowTcpForwarding=yes \
+            -o PermitOpen=127.0.0.1:18080 -o MaxSessions=64 -o LogLevel=VERBOSE \
+            -o Ciphers=aes128-ctr -o MACs=hmac-sha2-256 \
+            -o RekeyLimit=1M \
+            >/tmp/mips-sshd-aes-non-etm.log 2>&1 &
+          echo "$!" >/tmp/mips-sshd-aes-non-etm.pid
+          sudo /usr/sbin/sshd -D -e -f /dev/null \
+            -p 2224 -o PidFile=/tmp/mips-sshd-aes-etm.pid \
+            -o HostKey=/etc/ssh/ssh_host_ed25519_key -o ListenAddress=0.0.0.0 \
+            -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=no \
+            -o PubkeyAuthentication=no -o PermitRootLogin=no -o UsePAM=no \
+            -o StrictModes=no -o AllowUsers=sshcore-ci -o AllowTcpForwarding=yes \
+            -o PermitOpen=127.0.0.1:18080 -o MaxSessions=64 -o LogLevel=VERBOSE \
+            -o Ciphers=aes128-ctr -o MACs=hmac-sha2-256-etm@openssh.com \
+            -o RekeyLimit=1M \
+            >/tmp/mips-sshd-aes-etm.log 2>&1 &
+          echo "$!" >/tmp/mips-sshd-aes-etm.pid
           for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:18080/health >/dev/null && timeout 2 bash -c '</dev/tcp/127.0.0.1/2222' 2>/dev/null; then
+            if curl -fsS http://127.0.0.1:18080/health >/dev/null && timeout 2 bash -c '</dev/tcp/127.0.0.1/2222' 2>/dev/null && timeout 2 bash -c '</dev/tcp/127.0.0.1/2223' 2>/dev/null && timeout 2 bash -c '</dev/tcp/127.0.0.1/2224' 2>/dev/null; then
               echo "Host HTTP and SSH fixtures are ready."
               break
             fi
@@ -1050,6 +1092,7 @@ jobs:
             "$GITHUB_WORKSPACE/test-results/mips32-chacha-asm-test" \
             "$GITHUB_WORKSPACE/test-results/poly1305-mips-asm-test" \
             "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r63-mips-test" \
+             "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
@@ -1074,6 +1117,21 @@ jobs:
           fi
           if ! opkg print-architecture | grep -q mipsel_24kc; then
             fail "guest opkg architecture is not mipsel_24kc"
+          fi
+
+          echo "========== VERIFY R64 OPENSSL EVP AES-CTR HELPER =========="
+          if [ -f "$LOG/r64-aes-ctr-test" ] && cp "$LOG/r64-aes-ctr-test" /usr/bin/r64-aes-ctr-test; then
+            chmod 0755 /usr/bin/r64-aes-ctr-test
+            R64_EVP_RC=0
+            /usr/bin/r64-aes-ctr-test >"$LOG/r64-aes-ctr-test.log" 2>&1 || R64_EVP_RC=$?
+            cat "$LOG/r64-aes-ctr-test.log"
+            if [ "$R64_EVP_RC" -eq 0 ]; then
+              pass "MIPS OpenSSL 3 AES-128-CTR bulk/loop/split/in-place differential passed"
+            else
+              fail "MIPS OpenSSL 3 AES-128-CTR differential failed (rc=$R64_EVP_RC)"
+            fi
+          else
+            fail "R64 AES-CTR EVP test helper missing"
           fi
 
           echo "========== VERIFY OFFLINE RUNTIME DEPENDENCIES =========="
@@ -1125,7 +1183,7 @@ jobs:
           fi
           if [ "$OPKG_RC" -ne 0 ]; then
             fail "opkg could not install the local MIPS package"
-          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r63'; then
+          elif [ -x "$BIN" ] && opkg status passwall-ssh-core | grep -q 'Version: 1.0.0-r64'; then
             pass "opkg installed passwall-ssh-core r63 on mipsel_24kc"
           else
             fail "installed package version or executable path mismatch"
@@ -1555,6 +1613,62 @@ jobs:
             kill -TERM "$APP_PID" 2>/dev/null || true
             wait "$APP_PID" 2>/dev/null || true
             APP_PID=
+          fi
+
+          if [ "$STATUS" -eq 0 ]; then
+            if grep -qF '[SSH-METHODS] cs_crypt=chacha20-poly1305@openssh.com' "$LOG/tcp-ssh-core.log" && \
+               grep -qF 'sc_crypt=chacha20-poly1305@openssh.com' "$LOG/tcp-ssh-core.log"; then
+              pass "production default still negotiates ChaCha20-Poly1305 in both directions"
+            else
+              fail "production default cipher negotiation changed from ChaCha20-Poly1305"
+            fi
+          fi
+
+          run_aes_ctr_case() {
+            AES_LABEL="$1"; AES_PORT="$2"; AES_SOCKS="$3"; AES_MAC="$4"
+            AES_ENV="$LOG/$AES_LABEL.env"; AES_LOG="$LOG/$AES_LABEL.log"
+            AES_STDOUT="$LOG/$AES_LABEL-stdout.log"; AES_DOWNLOAD="$LOG/$AES_LABEL-download.log"
+            sed -e "s|^HOST_PORT=.*$|HOST_PORT=$AES_PORT|" \
+                -e "s|^SOCKS_ADDR=.*$|SOCKS_ADDR=127.0.0.1:$AES_SOCKS|" \
+                "$LOG/tcp.env" > "$AES_ENV"
+            SSH_CIPHER_PROFILE=aes128-ctr "$BIN" -env "$AES_ENV" -log "$AES_LOG" \
+              -log-backpressure 1 -log-perf 1 >"$AES_STDOUT" 2>&1 &
+            AES_PID=$!
+            AES_READY=0; AES_I=0
+            while [ "$AES_I" -lt 90 ]; do
+              if grep -q "SOCKS5 Listening" "$AES_LOG" 2>/dev/null; then AES_READY=1; break; fi
+              if ! kill -0 "$AES_PID" 2>/dev/null; then break; fi
+              AES_I=$((AES_I + 1)); sleep 1
+            done
+            AES_RC=1
+            if [ "$AES_READY" -eq 1 ]; then
+              /usr/bin/socks-mt-download 1 1 "$AES_SOCKS" "$EXPECTED_BYTES" "$EXPECTED_SHA" \
+                >"$AES_DOWNLOAD" 2>&1
+              AES_RC=$?
+              # Ensure a PERF-CTR interval is emitted even on a fast emulated transfer.
+              sleep 2
+            fi
+            kill -TERM "$AES_PID" 2>/dev/null || true
+            wait "$AES_PID" 2>/dev/null || true
+            if [ "$AES_RC" -eq 0 ] && \
+               grep -qF "[SSH-METHODS] cs_crypt=aes128-ctr cs_mac=$AES_MAC sc_crypt=aes128-ctr sc_mac=$AES_MAC" "$AES_LOG" && \
+               grep -Eq 'ctr_rx_bulk_calls=[1-9][0-9]*' "$AES_LOG" && \
+               grep -Eq 'ctr_tx_bulk_calls=[1-9][0-9]*' "$AES_LOG" && \
+               ! grep -Eq 'ctr_rx_block_calls=[1-9][0-9]*' "$AES_LOG" && \
+               ! grep -Eq 'ctr_tx_block_calls=[1-9][0-9]*' "$AES_LOG"; then
+              pass "$AES_LABEL AES-128-CTR transfer checksum, both negotiated directions and bulk-only counters"
+            else
+              fail "$AES_LABEL AES-128-CTR runtime/negotiation/counter regression failed (rc=$AES_RC)"
+              cat "$AES_STDOUT" "$AES_LOG" "$AES_DOWNLOAD" 2>/dev/null || true
+            fi
+          }
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== AES-128-CTR NON-ETM TRANSPORT TEST =========="
+            run_aes_ctr_case tcp-aes128-ctr-non-etm 2223 1083 hmac-sha2-256
+          fi
+          if [ "$STATUS" -eq 0 ]; then
+            echo "========== AES-128-CTR ETM TRANSPORT TEST =========="
+            run_aes_ctr_case tcp-aes128-ctr-etm 2224 1084 hmac-sha2-256-etm@openssh.com
           fi
 
           if [ "$STATUS" -eq 0 ]; then
