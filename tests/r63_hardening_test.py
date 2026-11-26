@@ -89,8 +89,14 @@ def main() -> int:
         check(crypt_fn.count("memset(poly_key, 0, sizeof(poly_key));") == 1 and
               "chachapoly_secure_wipe(poly_key" in crypt_fn,
               "poly_key zero-initialization is preserved and only final cleanup uses secure wipe"),
-        check("first_keystream" not in crypt_fn and "zero_block" not in crypt_fn,
-              "R63 cleanup only targets stack secrets present in libssh2 1.11.1"),
+        cleanup_start = crypt_fn.rfind("\\nout:\\n")
+        cleanup_fn = crypt_fn[cleanup_start:] if cleanup_start >= 0 else ""
+        check(cleanup_start >= 0 and
+              cleanup_fn.count("chachapoly_secure_wipe(") == 3 and
+              "memset(expected_tag" not in cleanup_fn and
+              "memset(seqbuf" not in cleanup_fn and
+              "memset(poly_key" not in cleanup_fn,
+              "R63 out cleanup securely wipes exactly the three ChaCha stack secrets"),
         check("#if LIBSSH2_HAVE_MIPS32R2_POLY1305_ASM" in poly1305 and
               "poly1305_secure_wipe(&state" in poly1305_fn and
               "poly1305_secure_wipe(pad" in poly1305_fn and
