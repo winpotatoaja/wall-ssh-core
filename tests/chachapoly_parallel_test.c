@@ -231,8 +231,24 @@ test_case(struct chachapoly_ctx *encrypt_ctx,
                 workers, threshold_bytes, payload_len);
         goto out;
     }
+
+    /* R63: every successful packet must be either worker-dispatched or serial.
+     * This catches the old fixed-4-KiB helper bypassing the configured threshold. */
+    if(diag_session.passwall_diag.chacha20_parallel_packets !=
+           (unsigned long long)expected_offload ||
+       diag_session.passwall_diag.chacha20_serial_packets !=
+           (unsigned long long)(3U - expected_offload)) {
+        fprintf(stderr, "R63 threshold bypass: workers=%u threshold=%u payload=%u "
+                "serial_packets=%llu parallel_packets=%llu expected_serial=%u "
+                "expected_parallel=%u\\n",
+                workers, threshold_bytes, payload_len,
+                diag_session.passwall_diag.chacha20_serial_packets,
+                diag_session.passwall_diag.chacha20_parallel_packets,
+                3U - expected_offload, expected_offload);
+        goto out;
+    }
     if(threshold_bytes != 4096U)
-        printf("R62_AB workers=%u threshold_kib=%u payload=%u offloaded=%u\n",
+        printf("R63_AB workers=%u threshold_kib=%u payload=%u offloaded=%u\n",
                workers, threshold_bytes / 1024U, payload_len,
                expected_offload != 0U);
     rc = 0;
@@ -335,7 +351,7 @@ out:
 }
 
 static int
-test_r62_threshold_matrix(const unsigned char key[64],
+test_r63_threshold_matrix(const unsigned char key[64],
                           struct chachapoly_ctx *encrypt_ctx)
 {
     static const unsigned int worker_counts[] = { 0U, 1U, 2U, 3U };
@@ -351,14 +367,14 @@ test_r62_threshold_matrix(const unsigned char key[64],
         for(j = 0U; j < sizeof(worker_counts) / sizeof(worker_counts[0]); j++) {
             if(chachapoly_init(&decrypt_ctx[j], key, 64U,
                                worker_counts[j], thresholds[i]) != 0) {
-                fprintf(stderr, "R62 context init failed workers=%u threshold=%u\n",
+                fprintf(stderr, "R63 context init failed workers=%u threshold=%u\n",
                         worker_counts[j], thresholds[i]);
                 for(k = 0U; k < 4U; k++)
                     chachapoly_cleanup(&decrypt_ctx[k]);
                 return -1;
             }
             if(chachapoly_parallel_workers(&decrypt_ctx[j]) != worker_counts[j]) {
-                fprintf(stderr, "R62 pool worker mismatch requested=%u actual=%u\n",
+                fprintf(stderr, "R63 pool worker mismatch requested=%u actual=%u\n",
                         worker_counts[j],
                         chachapoly_parallel_workers(&decrypt_ctx[j]));
                 for(k = 0U; k < 4U; k++)
@@ -457,11 +473,11 @@ main(void)
 
     for(i = 0; i < 5U; i++)
         chachapoly_cleanup(&decrypt_ctx[i]);
-    if(test_r62_threshold_matrix(key, &encrypt_ctx) != 0) {
+    if(test_r63_threshold_matrix(key, &encrypt_ctx) != 0) {
         chachapoly_cleanup(&encrypt_ctx);
         return 1;
     }
     chachapoly_cleanup(&encrypt_ctx);
-    puts("PASS: r62 A/B matrix 0/1/2/3 workers and 4/8/16/24/32 KiB thresholds; r59 crypto phases remain valid");
+    puts("PASS: R63 threshold gate 0/1/2/3 workers and 4/8/16/24/32 KiB; serial/parallel counters enforced");
     return 0;
 }
