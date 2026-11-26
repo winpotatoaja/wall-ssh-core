@@ -3630,9 +3630,12 @@ static int is_libssh2_socket_fatal(int err) {
 /* R63: fatal SSH integrity/protocol errors invalidate the upstream session. */
 static int is_libssh2_protocol_fatal(int err) {
     int fatal = (err == LIBSSH2_ERROR_DECRYPT ||
-                 err == LIBSSH2_ERROR_MAC_FAILURE ||
                  err == LIBSSH2_ERROR_OUT_OF_BOUNDARY ||
                  err == LIBSSH2_ERROR_PROTO);
+#ifdef LIBSSH2_ERROR_MAC_FAILURE
+    if(err == LIBSSH2_ERROR_MAC_FAILURE)
+        fatal = 1;
+#endif
     if(fatal) g_skip_libssh2_cleanup = 1;
     return fatal;
 }

@@ -532,9 +532,12 @@ def patch_core_error_policy(project_root: Path) -> None:
         + marker + "\n"
         "static int is_libssh2_protocol_fatal(int err) {\n"
         "    int fatal = (err == LIBSSH2_ERROR_DECRYPT ||\n"
-        "                 err == LIBSSH2_ERROR_MAC_FAILURE ||\n"
         "                 err == LIBSSH2_ERROR_OUT_OF_BOUNDARY ||\n"
         "                 err == LIBSSH2_ERROR_PROTO);\n"
+        "#ifdef LIBSSH2_ERROR_MAC_FAILURE\n"
+        "    if(err == LIBSSH2_ERROR_MAC_FAILURE)\n"
+        "        fatal = 1;\n"
+        "#endif\n"
         "    if(fatal) g_skip_libssh2_cleanup = 1;\n"
         "    return fatal;\n"
         "}\n",

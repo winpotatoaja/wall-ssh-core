@@ -141,8 +141,9 @@ def main() -> int:
         check("static int is_libssh2_protocol_fatal(int err)" in core and
               all(token in core for token in (
                   "LIBSSH2_ERROR_DECRYPT", "LIBSSH2_ERROR_MAC_FAILURE",
-                  "LIBSSH2_ERROR_OUT_OF_BOUNDARY", "LIBSSH2_ERROR_PROTO")),
-              "SSH decrypt/MAC/framing/protocol errors have a session-fatal class"),
+                  "LIBSSH2_ERROR_OUT_OF_BOUNDARY", "LIBSSH2_ERROR_PROTO")) and
+              "#ifdef LIBSSH2_ERROR_MAC_FAILURE\n    if(err == LIBSSH2_ERROR_MAC_FAILURE)" in core,
+              "SSH fatal classifier handles MAC_FAILURE only when the selected header defines it"),
         check("if (op == PENDING_KEEPALIVE)" in resume_fn and
               "is_libssh2_protocol_fatal(rc)" in resume_fn,
               "pending keepalive protocol errors terminate the SSH session"),
