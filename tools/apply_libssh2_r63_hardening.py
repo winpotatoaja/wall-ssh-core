@@ -314,11 +314,11 @@ poly1305_secure_wipe(void *buffer, size_t length)
 }
 '''
     source = replace_once(
-        source, '#include "poly1305.h"\\n',
-        '#include "poly1305.h"\\n' + helper + "\\n",
+        source, '#include "poly1305.h"\n',
+        '#include "poly1305.h"\n' + helper + "\n",
         "add non-elidable Poly1305 secret wipe"
     )
-    sig = "void\\npoly1305_auth("
+    sig = "void\npoly1305_auth("
     start, end = function_bounds(source, sig)
     fn = source[start:end]
     for old, new, label in (
