@@ -68,6 +68,7 @@ def main() -> int:
     chacha = (root / "src/chacha.c").read_text()
     cipher = (root / "src/cipher-chachapoly.c").read_text()
     cmake = (root / "src/CMakeLists.txt").read_text()
+    poly1305 = (root / "src/poly1305.c").read_text()
 
     crypt_fn = extract(cipher, "int\nchachapoly_crypt(")
     worker_fn = extract(chacha, "static void *\nchacha_parallel_worker_main(void *opaque)")
@@ -81,8 +82,10 @@ def main() -> int:
               "legacy fixed-4-KiB parallel fallback is removed from chachapoly_crypt"),
         check("volatile unsigned char *p" in cipher and
               "chachapoly_secure_wipe(expected_tag" in crypt_fn and
-              "chachapoly_secure_wipe(poly_key" in crypt_fn,
-              "stack secrets use a volatile, non-elidable wipe"),
+              "chachapoly_secure_wipe(poly_key" in crypt_fn and
+              "poly1305_secure_wipe(&state" in poly1305 and
+              "poly1305_secure_wipe(pad" in poly1305,
+              "ChaCha and Poly1305 stack secrets use non-elidable wipes"),
         check(worker_fn.count("chacha_parallel_report_worker_error(pool, lock_rc)") == 2,
               "worker startup and completion mutex failures are reported"),
         check("__atomic_load_n(&pool->worker_error" in owner_fn and

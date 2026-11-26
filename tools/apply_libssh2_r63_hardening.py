@@ -297,6 +297,47 @@ chacha_parallel_report_worker_error(chacha_parallel_pool_t *pool, int error)
     path.write_text(source)
 
 
+
+def patch_poly1305_wipe(root: Path) -> None:
+    path = root / "src/poly1305.c"
+    source = path.read_text()
+    helper = r''' 
+/* R63: keep Poly1305 key-derived state erasure in optimized builds. */
+static void
+poly1305_secure_wipe(void *buffer, size_t length)
+{
+    volatile unsigned char *p = (volatile unsigned char *)buffer;
+    while(length != 0U) {
+        *p++ = 0U;
+        length--;
+    }
+}
+'''
+    source = replace_once(
+        source, '#include "poly1305.h"\\n',
+        '#include "poly1305.h"\\n' + helper + "\\n",
+        "add non-elidable Poly1305 secret wipe"
+    )
+    sig = "void\\npoly1305_auth("
+    start, end = function_bounds(source, sig)
+    fn = source[start:end]
+    for old, new, label in (
+        ("memset(final_block, 0, sizeof(final_block));",
+         "poly1305_secure_wipe(final_block, sizeof(final_block));",
+         "wipe Poly1305 tail scratch"),
+        ("memset(&state, 0, sizeof(state));",
+         "poly1305_secure_wipe(&state, sizeof(state));",
+         "wipe Poly1305 accumulator"),
+        ("memset(pad, 0, sizeof(pad));",
+         "poly1305_secure_wipe(pad, sizeof(pad));",
+         "wipe Poly1305 key pad"),
+    ):
+        if old not in fn:
+            raise RuntimeError(label + ": anchor missing")
+        fn = fn.replace(old, new)
+    path.write_text(source[:start] + fn + source[end:])
+
+
 def patch_mips_asm_guard(root: Path) -> None:
     path = root / "src/CMakeLists.txt"
     source = path.read_text()
@@ -468,13 +509,14 @@ def patch(root: Path, project_root: Path) -> None:
 
     patch_chachapoly(root)
     patch_worker_failure(root)
+    patch_poly1305_wipe(root)
     patch_mips_asm_guard(root)
     patch_core_error_policy(project_root)
 
     (root / MARKER).write_text(
         "Passwall r63 crypto/transport hardening: single threshold-gated dispatch, "
         "worker error notification and bounded wait, partial-output wipe, "
-        "non-elidable secret wipe, MIPS32 assembly ABI guard\n"
+        "non-elidable ChaCha/Poly1305 secret wipe, MIPS32 assembly ABI guard\n"
     )
     print(
         "PASS: R63 removes the legacy threshold bypass, hardens ChaCha worker "
