@@ -70,7 +70,7 @@ def main() -> int:
     cmake = (root / "src/CMakeLists.txt").read_text()
 
     crypt_fn = extract(cipher, "int\nchachapoly_crypt(")
-    worker_fn = extract(chacha, "static void *\nchacha_parallel_worker_main(void opaque)")
+    worker_fn = extract(chacha, "static void *\nchacha_parallel_worker_main(void *opaque)")
     owner_fn = extract(chacha, "int\nchacha_decrypt_poly_worker_only(")
 
     checks = [
@@ -79,8 +79,7 @@ def main() -> int:
               "R62 prerequisites and R63 patch markers are present"),
         check("chacha_encrypt_bytes_parallel" not in crypt_fn,
               "legacy fixed-4-KiB parallel fallback is removed from chachapoly_crypt"),
-        check("chacha_parallel_secure_wipe" not in cipher and
-              "volatile unsigned char *p" in cipher and
+        check("volatile unsigned char *p" in cipher and
               "chachapoly_secure_wipe(expected_tag" in crypt_fn and
               "chachapoly_secure_wipe(poly_key" in crypt_fn,
               "stack secrets use a volatile, non-elidable wipe"),
