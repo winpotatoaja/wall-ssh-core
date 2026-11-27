@@ -114,7 +114,7 @@ def main():
               "helper interfaces remain private to libssh2/OpenSSL backend headers"),
         check("abstract != &session->remote.crypt_abstract" in bridge and
               "!CRYPT_FLAG_R(session, CTR_BULK)" in bridge and
-              "!cctx->encrypt" in bridge and
+              "cctx->encrypt ||" in bridge and
               "cctx->algo != _libssh2_cipher_aes128ctr" in bridge,
               "bridge is restricted to the live remote RX AES-128-CTR context"),
         check("!ctx || !*ctx" in backend and

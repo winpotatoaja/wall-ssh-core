@@ -1,3 +1,9 @@
+## R65-C validator correction — 2026-11-27
+
+- Actions #904 (`45933317448`) passed native regression, including the R65-C ASan/UBSan differential helper. SDK downloaded successfully and all preceding R43–R65-B patchers/source validators passed.
+- The R65-C source validator then failed only its RX/TX restriction assertion. The implementation intentionally rejects a TX context when `cctx->encrypt` is nonzero; the validator incorrectly searched for the literal `!cctx->encrypt`. Corrected the validator to assert `cctx->encrypt ||` inside the rejection condition. This is a test-only correction; no C runtime code changed.
+- The SDK build stopped before compiling libssh2 or producing an IPK; QEMU was skipped. Fresh Actions SDK + same-run QEMU validation is required.
+
 ## R65-C implementation — 2026-11-27
 
 - Created isolated branch `experiment/r65c-rx-outofplace` from the R65-A/B benchmark baseline (`23263ee00b604f078909d3ab3bf61dec804e84ec`).
