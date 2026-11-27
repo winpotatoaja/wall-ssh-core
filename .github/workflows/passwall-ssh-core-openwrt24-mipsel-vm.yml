@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_hotpath_test.py tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py
+          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_hotpath_test.py tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tools/apply_libssh2_r65b_hmac_context.py tests/r65b_hmac_context_source_test.py
           mkdir -p test-results
           gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/chacha_runtime_config_test.c -o /tmp/r62-config-parser-test
           /tmp/r62-config-parser-test | tee test-results/r62-config-parser.log
@@ -48,6 +48,8 @@ jobs:
           /tmp/aesgcm-inplace-test | tee test-results/aesgcm-inplace-test-native.log
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror tests/r64_aes_ctr_bulk_test.c -o /tmp/r64-aes-ctr-bulk-test -lcrypto
           /tmp/r64-aes-ctr-bulk-test | tee test-results/r64-aes-ctr-bulk-test-native.log
+          gcc -std=c11 -O2 -Wall -Wextra -Werror tests/r65b_hmac_context_test.c -o /tmp/r65b-hmac-context-test -lcrypto
+          /tmp/r65b-hmac-context-test | tee test-results/r65b-hmac-context-test-native.log
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror -pthread \
             tests/spsc_rb_test.c -o /tmp/spsc-rb-test
           timeout 90s /tmp/spsc-rb-test | tee test-results/spsc-rb-test-native.log
@@ -175,6 +177,14 @@ jobs:
            python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r65a_diagnostics.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE"
            test -s "$LIBSSH2_SRC/.passwall-r65a-crypto-diagnostics-patched"
            python3 "$GITHUB_WORKSPACE/tests/r65a_crypto_diagnostics_source_test.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE" | tee "$GITHUB_WORKSPACE/test-results/r65a-crypto-diagnostics-source.log"
+            test-results/r65b-hmac-context-source.log
+            test-results/r65b-hmac-context-test-native.log
+            test-results/r65b-hmac-context-test
+            test-results/r65b-hmac-context-test-file.txt
+            test-results/r65b-hmac-context.sha256
+           python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r65b_hmac_context.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE"
+           test -s "$LIBSSH2_SRC/.passwall-r65b-hmac-context-reuse-patched"
+           python3 "$GITHUB_WORKSPACE/tests/r65b_hmac_context_source_test.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE" | tee "$GITHUB_WORKSPACE/test-results/r65b-hmac-context-source.log"
           python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log"
           python3 "$GITHUB_WORKSPACE/tests/poly1305_mips_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/poly1305-mips-hotpath.log"
           # Configure first so the host-side crypto regression uses the exact
@@ -231,6 +241,13 @@ jobs:
           file "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test" | tee "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test-file.txt"
           readelf -h "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test" | grep -q MIPS
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum r64-aes-ctr-test > r64-aes-ctr.sha256)
+           "$MIPS_CC" -std=c11 -O2 -Wall -Wextra -Werror -I"$STAGING/usr/include" \
+             "$GITHUB_WORKSPACE/tests/r65b_hmac_context_test.c" -L"$STAGING/usr/lib" -lcrypto \
+             -o "$GITHUB_WORKSPACE/test-results/r65b-hmac-context-test"
+           chmod 0755 "$GITHUB_WORKSPACE/test-results/r65b-hmac-context-test"
+           file "$GITHUB_WORKSPACE/test-results/r65b-hmac-context-test" | tee "$GITHUB_WORKSPACE/test-results/r65b-hmac-context-test-file.txt"
+           readelf -h "$GITHUB_WORKSPACE/test-results/r65b-hmac-context-test" | grep -q MIPS
+           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum r65b-hmac-context-test > r65b-hmac-context.sha256)
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_enable'
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_snapshot'
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_set_chacha_workers'
@@ -527,13 +544,13 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c tools/mips32/chacha-core.S tests/mips32_chacha_asm_test.c tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_asm_test.c tests/poly1305_mips_hotpath_test.py tools/mips32/poly1305-mips.pl LICENSES/BSD-3-Clause.txt tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tests/r64_aes_ctr_bulk_test.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c tools/mips32/chacha-core.S tests/mips32_chacha_asm_test.c tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_asm_test.c tests/poly1305_mips_hotpath_test.py tools/mips32/poly1305-mips.pl LICENSES/BSD-3-Clause.txt tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tools/apply_libssh2_r65b_hmac_context.py tests/r65b_hmac_context_source_test.py tests/r65b_hmac_context_test.c tests/r64_aes_ctr_bulk_test.c; then
             echo "SDK artifact was built from different package or test sources."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tests/r64_aes_ctr_bulk_test.c
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tools/apply_libssh2_r65b_hmac_context.py tests/r65b_hmac_context_source_test.py tests/r65b_hmac_context_test.c tests/r64_aes_ctr_bulk_test.c
             false
           fi
-          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256 mips32-chacha-asm-test.sha256 poly1305-mips-asm-test.sha256 chachapoly-parallel-r63-mips.sha256 r64-aes-ctr.sha256)
-          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test test-results/mips32-chacha-asm-test test-results/poly1305-mips-asm-test test-results/chachapoly-parallel-r63-mips-test test-results/r64-aes-ctr-test
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256 mips32-chacha-asm-test.sha256 poly1305-mips-asm-test.sha256 chachapoly-parallel-r63-mips.sha256 r64-aes-ctr.sha256 r65b-hmac-context.sha256)
+          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test test-results/mips32-chacha-asm-test test-results/poly1305-mips-asm-test test-results/chachapoly-parallel-r63-mips-test test-results/r64-aes-ctr-test test-results/r65b-hmac-context-test
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           test -s test-results/passwall-ssh-core_1.0.0-r65_mipsel_24kc.ipk
@@ -558,6 +575,7 @@ jobs:
           readelf -h test-results/poly1305-mips-asm-test | grep -q 'MIPS'
           readelf -h test-results/chachapoly-parallel-r63-mips-test | grep -q 'MIPS'
           readelf -h test-results/r64-aes-ctr-test | grep -q 'MIPS'
+           readelf -h test-results/r65b-hmac-context-test | grep -q 'MIPS'
 
       - name: Download MT7621 QEMU emulator and OpenWrt ImageBuilder
         shell: bash
@@ -1097,6 +1115,7 @@ jobs:
             "$GITHUB_WORKSPACE/test-results/poly1305-mips-asm-test" \
             "$GITHUB_WORKSPACE/test-results/chachapoly-parallel-r63-mips-test" \
              "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test" \
+             "$GITHUB_WORKSPACE/test-results/r65b-hmac-context-test" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
@@ -1136,6 +1155,21 @@ jobs:
             fi
           else
             fail "R64 AES-CTR EVP test helper missing"
+          fi
+
+          echo "========== VERIFY R65-B OPENSSL 3 HMAC CONTEXT HELPER =========="
+          if [ -f "$LOG/r65b-hmac-context-test" ] && cp "$LOG/r65b-hmac-context-test" /usr/bin/r65b-hmac-context-test; then
+            chmod 0755 /usr/bin/r65b-hmac-context-test
+            R65B_HMAC_RC=0
+            /usr/bin/r65b-hmac-context-test >"$LOG/r65b-hmac-context-test.log" 2>&1 || R65B_HMAC_RC=$?
+            cat "$LOG/r65b-hmac-context-test.log"
+            if [ "$R65B_HMAC_RC" -eq 0 ]; then
+              pass "MIPS OpenSSL 3 persistent HMAC-SHA256 differential passed"
+            else
+              fail "MIPS OpenSSL 3 HMAC context differential failed (rc=$R65B_HMAC_RC)"
+            fi
+          else
+            fail "R65-B HMAC context helper missing"
           fi
 
           echo "========== VERIFY OFFLINE RUNTIME DEPENDENCIES =========="
@@ -1662,7 +1696,9 @@ jobs:
                grep -Eq 'ctr_rx_copy_bytes=[1-9][0-9]*' "$AES_LOG" && \
                grep -Eq 'mac_rx_calls=[1-9][0-9]*' "$AES_LOG" && \
                grep -Eq 'mac_tx_calls=[1-9][0-9]*' "$AES_LOG" && \
-               grep -Eq 'mac_sha256_setup_calls=[1-9][0-9]*' "$AES_LOG" && \
+               grep -Eq 'mac_sha256_ctx_allocs=[1-9][0-9]*' "$AES_LOG" && \
+               grep -Eq 'mac_sha256_key_inits=[1-9][0-9]*' "$AES_LOG" && \
+               grep -Eq 'mac_sha256_reuse_resets=[1-9][0-9]*' "$AES_LOG" && \
                ! grep -Eq 'ctr_rx_block_calls=[1-9][0-9]*' "$AES_LOG" && \
                ! grep -Eq 'ctr_tx_block_calls=[1-9][0-9]*' "$AES_LOG"; then
               pass "$AES_LABEL AES-128-CTR transfer checksum, both negotiated directions and bulk-only counters"
