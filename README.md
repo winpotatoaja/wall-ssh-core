@@ -29,7 +29,7 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | **R68-B** | Uji seluruh lifecycle packet dan invariant snapshot | **Lulus native, generated-source, SDK, dan MT7621 QEMU.** Actions #935: kedua job SUCCESS; guest `MIPS TEST STATUS: 0`. |
 | **R68-C** | Telemetry kondisi dan fairness TLS worker | **Lulus native, source, SDK, dan MT7621 QEMU (Actions #949).** `[TLSFAIR]` runtime tervalidasi; ditemukan pola RX-preferred saat dua arah siap dan antrean TLS RX/S2C yang perlu ditelusuri di R68-D. |
 | **R68-D** | Durasi antrean S2C, TCP_INFO, dan SIOCOUTQNSD | **Lulus native/source, SDK, dan MT7621 QEMU (Actions #951).** `[S2CAGE]` dan `[TCPINFO]` tervalidasi; SIOCOUTQNSD tersedia pada guest dan sampel active-backpressure menunjukkan antrean kernel not-sent. Diagnostik saja. |
-| **R68-E** | Analisis hasil sebelum optimasi | **Belum dilakukan.** Gabungkan hasil A/B/C/D, identifikasi lokasi bottleneck berdasarkan bukti, lalu tentukan apakah optimasi memang diperlukan. Tidak ada optimasi spekulatif sebelum tahap analisis ini. |
+| **R68-E** | Analisis hasil sebelum optimasi | **Selesai.** Bukti A/B/C/D disintesis; dua pola tekanan antrean diidentifikasi tetapi belum menjadi akar masalah produksi yang sama. Tidak ada tuning runtime; langkah berikut adalah korelasi log satu klien pada router MT7621 fisik. |
 
 **Aturan R68:** A memperbaiki satuan accounting; B wajib membuktikan lifecycle dan invariant sebelum instrumentasi lanjutan dipakai. C dan D hanya mengumpulkan bukti, bukan tuning performa. E menjadi gerbang keputusan. Tidak ada perubahan cipher, buffer, scheduler, worker, prioritas RX/TX, atau kebijakan backpressure dalam tahapan diagnostik ini.
 
@@ -47,7 +47,7 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | R68-B: regression snapshot/lifecycle | **Lulus native + generated source + SDK** | Semua case enable baseline, snapshot reset=0/1, reset kosong/nonkosong, peak rebase ke current, re-enable, disable, NULL arguments, underflow, dan packet drain setelah reset lulus di Actions #935 |
 | R68-C: telemetry TLS worker fairness | **Lulus native + source + SDK + QEMU** | Actions #949: native duplex 4 MiB tiap arah, reset/NULL invariants, `[TLSFAIR]` runtime log lulus. RX ring full hingga 103 observasi per interval aktif; antrean kernel upstream dan SOCKS Send-Q ikut terekam |
 | R68-D: umur antrean S2C + TCP_INFO + SIOCOUTQNSD | **Lulus native + source + SDK + QEMU** | Actions #951: runtime verifier TCP/TLS menerima `[S2CAGE]` dan `[TCPINFO]`; umur episode aktif 1,43–1,50 s, S2C ring 256 KiB, kernel not-sent hingga 2.556.032 byte; TCP_INFO/SIOCOUTQNSD tidak gagal |
-| R68-E: analisis sebelum optimasi | Belum dilakukan | Menunggu sintesis bukti A/B/C/D; belum ada optimasi |
+| R68-E: analisis sebelum optimasi | **Selesai** | Sintesis A/B/C/D dan gerbang keputusan didokumentasikan; tidak ada perubahan runtime atau paket |
 | Source gate profil crypto final + identitas paket R68 | Lulus | Profil R64/R65-B/R66 tetap dijaga; ekspektasi release/artifact disesuaikan ke r68 |
 | Build package SDK OpenWrt 24.10.7 / IPK R68 | **Lulus** | Actions #934 dan #935; IPK `1.0.0-r68`, metadata dan checksum diverifikasi |
 | QEMU MT7621 | **Lulus** | Actions #934 dan #935; #935 kedua job SUCCESS, guest `MIPS TEST STATUS: 0`, TCP/TLS duplex, half-close, multi-client dan checksum checks lulus |
@@ -185,6 +185,54 @@ Source SHA: 171fb772a8e1bd8cfb07c0973ba6eb88e37daf20
 
 **Analisis / keputusan:** R68-D berhasil menangkap episode S2C aktif dan membedakan antrean aplikasi dari antrean TCP yang belum dikirim. Pada fixture ini, tekanan paling jelas berada di ring S2C dan send queue lokal menuju klien, sementara snapshot aktif tidak menunjukkan retransmission. Hasil ini belum membuktikan sumber jeda pada jaringan/hardware nyata; QEMU bukan uji router fisik dan validasi ini bukan benchmark throughput Internet. Lanjutkan ke R68-E untuk menyatukan bukti R68-A/B/C/D sebelum menentukan apakah ada optimasi yang didukung data.
 
+### R68-E — sintesis antrean A/B/C/D dan keputusan sebelum optimasi
+
+#### Peta aliran data download
+
+```text
+SSH/TLS peer
+    ↓ TCP upstream Recv-Q
+TLS Engine: SSL_read
+    ↓ TLS RX ring (tls_to_ssh, kapasitas 256 KiB)
+SSH Owner: transport callback + libssh2 packet queue
+    ↓ channel data / relay
+S2C ring per SOCKS client (kapasitas 256 KiB)
+    ↓ send() ke socket SOCKS
+TCP Send-Q / SIOCOUTQNSD
+    ↓ aplikasi klien
+```
+
+Setiap counter hanya menggambarkan lapisan yang diukurnya. Jangan menjumlahkan semua occupancy sebagai satu total backlog tanpa memastikan snapshot dan rentang byte-nya saling eksklusif.
+
+#### Sintesis bukti
+
+| Lapisan | Bukti yang teramati | Interpretasi yang didukung |
+|---|---|---|
+| Accounting libssh2 — R68-A/B | Enqueue, partial consume, dequeue, baseline, snapshot/reset, peak rebasing dan underflow lulus. Byte queue sekarang berarti unread payload; header CHANNEL_DATA 9 byte dan EXTENDED_DATA 13 byte tidak ikut dihitung. | Counter packet queue cukup konsisten untuk dipakai sebagai indikator occupancy. Ini memperbaiki akurasi diagnostik, bukan optimasi atau bukti bottleneck. |
+| TLS RX ingress — R68-C | Pada satu interval download TLS/SNI 4 klien selama 1.098 ms: RX 17.709.104 byte, `rx_service_us=564.865`, TLS RX ring 262.144/262.144 byte, `rx_ring_full=100`, dan upstream kernel Recv-Q 301.351 byte. | Terjadi tekanan pada handoff TLS Engine → SSH Owner: ring penuh dan data masih mengantre di socket upstream. Ini menunjukkan producer sempat lebih cepat daripada consumer pada interval itu, tetapi belum membedakan apakah penyebabnya biaya SSL_read, pekerjaan SSH Owner/libssh2, burst sumber, atau laju penerima akhir. `rx_service_us` adalah elapsed service time, bukan CPU time. |
+| Kebijakan RX/TX TLS — R68-C | Interval yang sama mencatat `poll_both=183`, `rx_both_ready=183`, `tx_both_ready=0`, `tx_calls=90`, `tx_bytes=3.312`, dan `tx_while_rx_buffered=90`; WANT_READ/WANT_WRITE tidak menunjukkan retry berulang pada sampel tersebut. | Source memang mendahulukan satu SSL_read ketika readiness RX/TX sama-sama muncul; setelah read berhasil, loop kembali ke awal sebelum mencoba write. Karena TX tetap dipanggil pada event writable berikutnya, angka `tx_both_ready=0` sendiri bukan bukti TX starvation atau deadlock. Pada download, kecilnya TX juga wajar karena payload dominan bergerak dari peer ke klien. Jangan ubah prioritas RX/TX hanya berdasarkan rasio byte ini. |
+| Packet queue SSH — R68-A/B/C | Dalam interval TCP terpisah pada runtime R68-C, snapshot mencatat 17 packet / 409.600 byte unread payload, peak 409.600 byte, dan 688.128 byte cumulative payload enqueued pada interval. | Ada payload yang belum dikonsumsi pada queue protokol SSH di snapshot tersebut. Karena ini interval TCP yang berbeda dari sampel TLS RX di atas, nilainya tidak boleh digabung sebagai satu timeline atau dianggap sebagai akar masalah TLS. |
+| S2C dan TCP klien — R68-D | Pada fixture QEMU yang sengaja menghentikan pembacaan penerima: S2C ring 262.144 byte, episode non-empty aktif 1.503.966 us (TCP) / 1.429.447 us (TLS), SOCKS Send-Q 2.556.032 byte, dan SIOCOUTQNSD juga 2.556.032 byte. TCP_INFO pada dua snapshot mencatat RTT 9.623 / 7.804 us, unacked 0, retransmission 0. | Saat receiver sengaja tidak membaca, backlog berada di S2C ring dan terutama TCP send queue lokal yang belum terkirim. Snapshot tersebut tidak menunjukkan antrean paket yang sudah unacked atau retransmission. Ini bukti backpressure fixture yang memang disengaja, bukan bukti packet loss maupun kondisi normal jaringan produksi. |
+
+#### Keputusan R68-E
+
+1. **Belum ada akar masalah tunggal yang terbukti.** R68-C memperlihatkan tekanan pada sisi ingress TLS saat bulk download; R68-D memperlihatkan tekanan egress menuju klien saat penerima sengaja diperlambat. Keduanya berasal dari skenario dan interval yang berbeda, sehingga belum membuktikan satu rantai sebab-akibat pada transfer nyata.
+2. **Belum ada bukti yang cukup untuk mengganti cipher, buffer, jumlah worker, scheduler, atau prioritas RX/TX.** R68-C tidak membuktikan TLS TX starvation; R68-D tidak menunjukkan retransmission pada snapshot aktif; dan tidak ada pengukuran CPU-time yang menetapkan crypto sebagai penyebab.
+3. **Backpressure harus dibedakan dari bottleneck komputasi.** Ring/Send-Q yang penuh menunjukkan data sedang menunggu di suatu batas aliran. Itu belum menjelaskan apakah produsen terlalu cepat, konsumen terlalu lambat, atau penerima memang sedang tidak membaca.
+4. **R68-E selesai sebagai gerbang keputusan, bukan perubahan runtime.** Tidak ada file C, perilaku relay, konfigurasi buffer, cipher, worker, ataupun versi paket yang diubah. Paket tetap `1.0.0-r68`.
+
+#### Langkah paling bernilai sebelum optimasi R69
+
+Gunakan IPK R68 pada **router MT7621 fisik** untuk merekam reproduksi masalah yang sebenarnya: satu SSH session dan satu klien download (termasuk IDM ketika jeda speed muncul), dengan `-log-perf 1`. Simpan timestamp berurutan untuk `[PERF]`, `[TLSFAIR]`, `[QUEUE]`, `[S2CAGE]`, dan `[TCPINFO]` selama transfer; catat juga apakah aplikasi klien sedang membaca atau berhenti. QEMU bukan pengganti pengamatan ini.
+
+Baca hasil per interval dengan aturan berikut:
+- TLS RX ring dan upstream Recv-Q meningkat/bertahan penuh sementara packet queue dan S2C tetap rendah: telusuri konsumsi TLS RX → SSH Owner.
+- TLS RX ring turun tetapi libssh2 packet queue bertambah/bertahan: telusuri SSH Owner, packet drain, dan relay channel.
+- S2C age, S2C occupancy, serta TCP not-sent bertambah bersamaan: telusuri send ke socket klien dan backpressure penerima.
+- Semua antrean rendah ketika speed berhenti: jangan ubah queue/scheduler; periksa jalur upstream, peer, dan perilaku aplikasi klien.
+
+Bila log perangkat fisik belum cukup untuk memisahkan tahap, R69 dapat menambahkan **umur residence** TLS RX ring dan libssh2 packet queue, tanpa mengubah transfer. Pengukuran lintas-thread wajib mempertahankan ownership TLS Engine dan menggunakan mekanisme publikasi yang aman untuk MIPS 32-bit; jangan menambahkan akses 64-bit atomik lintas thread secara asumtif.
+
 ## Profil crypto final
 
 R66 mengunci kombinasi yang paling kuat didukung hasil pengujian MT7621 QEMU:
@@ -272,4 +320,4 @@ Tujuan diagnostik adalah membedakan penumpukan pada socket upstream, ring buffer
 
 ## Status
 
-**R68-A/B/C/D selesai dan tervalidasi pada native/source/SDK/MT7621 QEMU (Actions #935, #949, dan #951). R68-D merekam episode S2C hingga 1,50 s dan kernel not-sent hingga 2,56 MB pada fixture backpressure. R68-E menjadi tahap berikutnya untuk analisis gabungan sebelum optimasi. Tidak ada tuning performa atau benchmark Internet pada R68-D.**
+**R68-A/B/C/D selesai dan tervalidasi pada native/source/SDK/MT7621 QEMU (Actions #935, #949, dan #951). R68-E selesai sebagai sintesis bukti dan gerbang keputusan: belum ada akar masalah produksi tunggal yang terbukti, sehingga tidak ada tuning runtime atau perubahan paket. Langkah berikut yang direkomendasikan adalah merekam transfer satu klien pada router MT7621 fisik dengan IPK R68 sebelum memilih optimasi R69.**
