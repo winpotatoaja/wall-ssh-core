@@ -46,7 +46,8 @@ Target rangkaian ini adalah SSH Core yang aman, stabil, dan cepat pada berbagai 
 | Buat branch R65 | Selesai | `experiment/r65-rx-copy-hmac`, based on R64 commit `40ca4835` |
 | R65-A crypto diagnostics | **PASS — Actions #897** | Commit `c419f457`; native + OpenWrt 24.10.7 mipsel_24kc SDK/IPK + same-run MT7621 QEMU; non-ETM and ETM AES-CTR transfers passed checksum and diagnostic gates |
 | R65-B HMAC context reuse | **PASS — Actions #901** | Commit `dc0454d9`; native + OpenWrt 24.10.7 mipsel_24kc SDK/IPK + same-run MT7621 QEMU; MIPS helper passed 2 directions × 2048 messages, AES-CTR non-ETM/ETM runtime checksums and reuse counters passed. OpenSSL 3.0.3+ reset path exercised; 3.0.0–3.0.2 duplicate fallback source-checked, not runtime-tested |
-| R65-A/B benchmark | **Disiapkan pada `experiment/r65-ab-benchmark`** | Source-matched A #897 vs B #901 artifacts; Datapacket Singapore 100 MB; ABBA repeats for ChaCha control, AES-CTR/HMAC-SHA256 non-ETM and ETM; throughput with LOG_PERF=0, separate HMAC telemetry profiles with LOG_PERF=1 |\n| R65-C out-of-place AES-CTR RX | Ditunda | Keputusan berdasarkan hasil A/B R65-A vs R65-B |
+| R65-A/B benchmark | **Disiapkan pada `experiment/r65-ab-benchmark`** | Source-matched A #897 vs B #901 artifacts; Datapacket Singapore 100 MB; ABBA repeats for ChaCha control, AES-CTR/HMAC-SHA256 non-ETM and ETM; throughput with LOG_PERF=0, separate HMAC telemetry profiles with LOG_PERF=1 |
+| R65-C out-of-place AES-CTR RX | Ditunda | Keputusan berdasarkan hasil A/B R65-A vs R65-B |
 | R66 I/O/backpressure | Direncanakan | Start after R65 is complete |
 | R66 I/O/backpressure | Belum dimulai | Mulai setelah R65 lulus |
 
