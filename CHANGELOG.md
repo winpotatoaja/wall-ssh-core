@@ -7,6 +7,9 @@
 - Add a regression test that compiles the actual inline accounting helpers extracted from the R43 patch template and exercises CHANNEL_DATA, EXTENDED_DATA, partial reads, packet removal, flush, and control packets.
 - Preserve relay behavior, crypto profile, socket I/O, buffers, and worker topology. This is a diagnostic-accounting correction only.
 - Package release: `1.0.0-r68`.
+- Expand the R68 regression harness to compile the actual enable/snapshot API templates and verify existing-queue baseline, non-reset snapshots, empty/non-empty reset semantics, peak rebasing to current, re-enable/disable, NULL arguments, and saturating underflow behavior.
+- Verify generated `session.c` contains the exact enable/snapshot API template used by the native lifecycle test.
+- R68-B expanded-test validation: pending SDK/QEMU workflow.
 - SDK OpenWrt 24.10.7 / mipsel_24kc: **PASS** (Actions #934, source `2f2af74b7db68c9cd13e569ecb577fae302f19e7`).
 - MT7621 QEMU integration: **PASS**; guest installed `1.0.0-r68`, and runtime integration finished with `MIPS TEST STATUS: 0`.
 - IPK SHA-256: `cbcb8dfbcd5b1d2c686cd5d7c6370754323917194f8bac9616932fd721940563`.
