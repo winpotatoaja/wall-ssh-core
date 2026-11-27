@@ -26,7 +26,7 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | Tahap | Pekerjaan | Status / keputusan |
 |---|---|---|
 | **R68-A** | Koreksi counter libssh2 yang sebelumnya memasukkan header 9 byte (CHANNEL_DATA) dan 13 byte (EXTENDED_DATA) ke hitungan payload | **Selesai dan tervalidasi.** Bug accounting diperbaiki; helper native dan source libssh2 1.11.1 hasil patch lulus, IPK r68 berhasil dibangun, dan integrasi MT7621 QEMU lulus. |
-| **R68-B** | Uji seluruh lifecycle packet dan invariant snapshot | **Test diperluas; menunggu validasi CI.** Selain enqueue/read/packet-ask/flush, harness sekarang mengompilasi helper dan API enable/snapshot aktual dari template patch untuk menguji baseline, snapshot non-reset, reset kosong/nonkosong, peak rebase, re-enable, disable, dan underflow protection. |
+| **R68-B** | Uji seluruh lifecycle packet dan invariant snapshot | **Lulus native, generated-source, dan SDK CI.** Helper dan API enable/snapshot aktual dari template patch dikompilasi dan diuji; source libssh2 1.11.1 hasil patch mengandung callsite/API yang sama. QEMU job #935 masih booting dan dicatat terpisah. |
 | **R68-C** | Telemetry kondisi dan fairness TLS worker | **Direncanakan — diagnostik saja.** Catat kondisi kerja dan distribusi/fairness TLS worker untuk analisis. Tidak mengubah scheduler, pembagian tugas, jumlah worker, prioritas, atau perilaku transfer. |
 | **R68-D** | Durasi antrean S2C, TCP_INFO, dan SIOCOUTQNSD | **Direncanakan — diagnostik saja.** Tambahkan pengukuran umur/durasi data di antrean S2C serta snapshot informasi TCP/kernel send queue. Instrumentasi harus menjaga ownership socket dan tidak mengubah mekanisme backpressure. |
 | **R68-E** | Analisis hasil sebelum optimasi | **Belum dilakukan.** Gabungkan hasil B/C/D, identifikasi lokasi bottleneck berdasarkan bukti, lalu tentukan apakah optimasi memang diperlukan. Tidak ada optimasi spekulatif sebelum tahap analisis ini. |
@@ -44,7 +44,7 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | R68-A: helper regression native | Lulus | Actions #934: helper C aktual hasil ekstraksi template patch diuji dengan GCC |
 | R68-A: integrasi source libssh2 1.11.1 hasil patch | Lulus | Semua assertion R68 source-level lulus untuk packet.c, channel.c, session.c, dan libssh2_priv.h |
 | R68-B: lifecycle packet yang sudah dicakup | Lulus untuk kasus saat ini | Enqueue, partial read, packet-ask, channel-flush, DATA 9-byte header, EXTENDED_DATA 13-byte header, control packet, cumulative bytes, dan peak |
-| R68-B: regression snapshot/lifecycle | Implementasi test ditambahkan; validasi menunggu CI | Menguji enable baseline, snapshot reset=0/1, reset saat queue kosong dan nonkosong, peak rebase ke current, re-enable, disable, null arguments, underflow, serta drain packet setelah reset |
+| R68-B: regression snapshot/lifecycle | **Lulus native + generated source + SDK** | Semua case enable baseline, snapshot reset=0/1, reset kosong/nonkosong, peak rebase ke current, re-enable, disable, NULL arguments, underflow, dan packet drain setelah reset lulus di Actions #935 |
 | R68-C: telemetry TLS worker fairness | Belum dimulai | Diagnostik saja; tidak mengubah scheduling atau transfer |
 | R68-D: umur antrean S2C + TCP_INFO + SIOCOUTQNSD | Belum dimulai | Diagnostik saja; tidak mengubah backpressure atau ownership socket |
 | R68-E: analisis sebelum optimasi | Belum dilakukan | Menunggu bukti dari B/C/D; optimasi belum boleh diasumsikan perlu |
@@ -89,6 +89,23 @@ Matriks tambahan:
 - Integrasi source memeriksa bahwa `session.c` hasil patch memuat persis API enable/snapshot yang dikompilasi dan diuji oleh native harness.
 
 Test tambahan ini belum dianggap lulus sampai job CI R68 selesai.
+
+### Hasil validasi R68-B — Actions #935 (SDK/source)
+
+Run: [Actions #935 — `45987495420`](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/45987495420)  
+Source SHA: `0889a47063e8cb3b76a45c0eb1818248ac88b11c`
+
+<badge color="success">Native regression PASS</badge> <badge color="success">Generated-source integration PASS</badge> <badge color="success">SDK/IPK PASS</badge>
+
+Bukti R68-B yang sudah lulus:
+- Native harness mengekstrak helper packet queue dan API enable/snapshot aktual dari template patch R43, mengompilasinya dengan GCC `-Wall -Wextra -Werror`, lalu menjalankan seluruh skenario lifecycle.
+- Baseline saat enable dihitung dari unread payload: DATA 9-byte header, EXTENDED_DATA 13-byte header, dan control packet.
+- Snapshot `reset=0` tidak mengubah counter live; `reset=1` mengembalikan nilai interval sebelum reset, mempertahankan current, mengosongkan cumulative totals, dan merebase peak ke current.
+- Reset saat antrean kosong maupun saat masih ada packet, drain setelah reset, re-enable/disable, NULL arguments, dan saturating underflow lulus.
+- Generated source libssh2 1.11.1 diverifikasi: enqueue, partial read, packet unlink, packet-ask, flush, enable baseline, dan API snapshot sesuai template yang diuji.
+- SDK OpenWrt 24.10.7 / mipsel_24kc berhasil membangun OpenSSL, libssh2, dan IPK R68; source gate final crypto tetap lulus.
+
+**Status QEMU pada run yang sama:** job SDK sukses dan job VM sedang pada step boot guest MT7621. QEMU belum dinyatakan pass/fail. Ini adalah validasi runtime tambahan; hasil source-level R68-B di atas sudah lulus.
 
 ### Hasil validasi berhasil — Actions #934
 
@@ -206,4 +223,4 @@ Tujuan diagnostik adalah membedakan penumpukan pada socket upstream, ring buffer
 
 ## Status
 
-**R68-A selesai dan tervalidasi pada SDK/QEMU. Harness R68-B sudah diperluas untuk lifecycle dan snapshot/reset invariants; hasil validasi test baru menunggu CI. R68-C/D belum dimulai dan R68-E belum dilakukan.**
+**R68-A selesai dan tervalidasi pada SDK/QEMU. R68-B regression lulus pada native C, source libssh2 hasil patch, dan SDK MIPS. QEMU run #935 masih booting; C/D belum dimulai dan E belum dilakukan.**
