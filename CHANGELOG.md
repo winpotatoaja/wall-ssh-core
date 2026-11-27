@@ -9,7 +9,8 @@
 - Package release: `1.0.0-r68`.
 - Expand the R68 regression harness to compile the actual enable/snapshot API templates and verify existing-queue baseline, non-reset snapshots, empty/non-empty reset semantics, peak rebasing to current, re-enable/disable, NULL arguments, and saturating underflow behavior.
 - Verify generated `session.c` contains the exact enable/snapshot API template used by the native lifecycle test.
-- R68-B expanded-test validation: pending SDK/QEMU workflow.
+- R68-B native lifecycle/snapshot regression: **PASS** (Actions #935); generated libssh2 1.11.1 source integration: **PASS**; OpenWrt 24.10.7 SDK/IPK: **PASS**.
+- MT7621 QEMU job in Actions #935: boot step still in progress at documentation update; runtime result not yet claimed.
 - SDK OpenWrt 24.10.7 / mipsel_24kc: **PASS** (Actions #934, source `2f2af74b7db68c9cd13e569ecb577fae302f19e7`).
 - MT7621 QEMU integration: **PASS**; guest installed `1.0.0-r68`, and runtime integration finished with `MIPS TEST STATUS: 0`.
 - IPK SHA-256: `cbcb8dfbcd5b1d2c686cd5d7c6370754323917194f8bac9616932fd721940563`.
