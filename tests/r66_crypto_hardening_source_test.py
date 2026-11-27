@@ -87,8 +87,9 @@ def main() -> int:
               "!defined(LIBSSH2_TEST_FORCE_EVP_MAC_CTX_DUP)" in hmac_hash,
               "normal context reuse and test-forced compatibility fallback paths remain available"),
         check("LIBSSH2_TEST_HMAC_CALLBACKS" in mac and
-              "libssh2_test_hmac256_hash" in mac,
-              "direct callback accessors compile only in dedicated test builds"),
+              "libssh2_test_hmac256_hash" in mac and
+              "static int mac_method_hmac_sha2_256_hash(LIBSSH2_SESSION *session" in mac,
+              "direct callback accessors have a forward declaration and compile only in dedicated test builds"),
         check(kex.count("if(session->local.mac->init(session, key, &free_key,") == 3 and
               kex.count("if(session->remote.mac->init(session, key, &free_key,") == 3,
               "KEX init-error cleanup remains present for both directions"),

@@ -160,6 +160,14 @@ def patch_mac_test_accessors(root: Path) -> None:
     src = path.read_text()
     anchor = "#endif /* OpenSSL 3 HMAC-SHA256 context reuse */\n"
     test_api = r'''#if defined(LIBSSH2_TEST_HMAC_CALLBACKS)
+/* The hash callback is defined immediately below these test-only accessors. */
+static int mac_method_hmac_sha2_256_hash(LIBSSH2_SESSION *session,
+                                         unsigned char *out, uint32_t seqno,
+                                         const unsigned char *packet,
+                                         size_t packet_len,
+                                         const unsigned char *addtl,
+                                         size_t addtl_len, void **abstract);
+
 /* Test-build-only access to the actual static R65-B callbacks. No failure
  * injection or test hook is present in production builds. */
 int libssh2_test_hmac256_init(LIBSSH2_SESSION *session, unsigned char *key,
