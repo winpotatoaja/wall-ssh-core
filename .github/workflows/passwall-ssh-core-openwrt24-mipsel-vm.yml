@@ -2,7 +2,7 @@ name: Passwall SSH core - OpenWrt 24.10.7 mipsel_24kc
 # r61 S2C backpressure: bound direct-tcpip receive credit to twice the 256 KiB client ring; keep SSH control flow unchanged.
 on:
   push:
-    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration, phase2/tls-engine-integration-rxfix, phase3/io-worker-pool-foundation, benchmark/r39-internet-speedtest, experiment/r51-mips32-crypto, experiment/r52-safe-topology-lifecycle, experiment/r53-mips32-crypto-path, experiment/r54-mips32-poly1305-asm, experiment/r55-outofplace-chacha-decrypt, experiment/r56-skip-padding-memmove, experiment/r57-chachapoly-profile, experiment/r58-chacha-perf-log-split, experiment/r59-inline-owner-poly1305, experiment/r60-worker-hotpath-cleanup, experiment/r61-queue-backpressure, experiment/r62-runtime-ab-controls, experiment/r63-hardening, experiment/r64-portable-aes-ctr, experiment/r65-rx-copy-hmac, experiment/r65c-rx-outofplace]
+    branches: [fix/pending-cleanup-bounded-shutdown, perf/4core-ssh-relay-benchmark, experiment/mipsel-mt-benchmark, feature/in-process-pthread-workers, phase2/tls-engine-owner, phase2/tls-engine-integration, phase2/tls-engine-integration-rxfix, phase3/io-worker-pool-foundation, benchmark/r39-internet-speedtest, experiment/r51-mips32-crypto, experiment/r52-safe-topology-lifecycle, experiment/r53-mips32-crypto-path, experiment/r54-mips32-poly1305-asm, experiment/r55-outofplace-chacha-decrypt, experiment/r56-skip-padding-memmove, experiment/r57-chachapoly-profile, experiment/r58-chacha-perf-log-split, experiment/r59-inline-owner-poly1305, experiment/r60-worker-hotpath-cleanup, experiment/r61-queue-backpressure, experiment/r62-runtime-ab-controls, experiment/r63-hardening, experiment/r64-portable-aes-ctr, experiment/r65-rx-copy-hmac, experiment/r65c-rx-outofplace, experiment/r65d-aes-ctr-alignment]
 permissions:
   contents: read
   actions: write
@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_hotpath_test.py tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tools/apply_libssh2_r65b_hmac_context.py tests/r65b_hmac_context_source_test.py tools/apply_libssh2_r65c_outofplace.py tests/r65c_aes_ctr_outofplace_source_test.py
+          python3 -m py_compile tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_hotpath_test.py tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tools/apply_libssh2_r65b_hmac_context.py tests/r65b_hmac_context_source_test.py tools/apply_libssh2_r65c_outofplace.py tests/r65c_aes_ctr_outofplace_source_test.py tools/apply_libssh2_r65d_alignment_diag.py tests/r65d_aes_ctr_alignment_source_test.py
           mkdir -p test-results
           gcc -std=c11 -O2 -Wall -Wextra -Werror -I. tests/chacha_runtime_config_test.c -o /tmp/r62-config-parser-test
           /tmp/r62-config-parser-test | tee test-results/r62-config-parser.log
@@ -52,6 +52,8 @@ jobs:
           /tmp/r65b-hmac-context-test | tee test-results/r65b-hmac-context-test-native.log
           gcc -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer tests/r65c_aes_ctr_outofplace_test.c -o /tmp/r65c-aes-ctr-outofplace-native -lcrypto
           ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/r65c-aes-ctr-outofplace-native | tee test-results/r65c-aes-ctr-outofplace-native.log
+          gcc -std=c11 -O2 -Wall -Wextra -Werror tests/r65d_aes_ctr_alignment_bench.c -o /tmp/r65d-aes-ctr-alignment-native -lcrypto
+          /tmp/r65d-aes-ctr-alignment-native | tee test-results/r65d-aes-ctr-alignment-native.log
           gcc -std=c11 -O2 -g -Wall -Wextra -Werror -pthread \
             tests/spsc_rb_test.c -o /tmp/spsc-rb-test
           timeout 90s /tmp/spsc-rb-test | tee test-results/spsc-rb-test-native.log
@@ -185,6 +187,9 @@ jobs:
            python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r65c_outofplace.py" "$LIBSSH2_SRC"
            test -s "$LIBSSH2_SRC/.passwall-r65c-rx-outofplace-patched"
            python3 "$GITHUB_WORKSPACE/tests/r65c_aes_ctr_outofplace_source_test.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE" | tee "$GITHUB_WORKSPACE/test-results/r65c-aes-ctr-outofplace-source.log"
+            python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r65d_alignment_diag.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE"
+            test -s "$LIBSSH2_SRC/.passwall-r65d-aes-ctr-alignment-diagnostics-patched"
+            python3 "$GITHUB_WORKSPACE/tests/r65d_aes_ctr_alignment_source_test.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE" | tee "$GITHUB_WORKSPACE/test-results/r65d-aes-ctr-alignment-source.log"
           python3 "$GITHUB_WORKSPACE/tests/mips32_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/mips32-hotpath-annotation.log"
           python3 "$GITHUB_WORKSPACE/tests/poly1305_mips_hotpath_test.py" "$LIBSSH2_SRC" | tee "$GITHUB_WORKSPACE/test-results/poly1305-mips-hotpath.log"
           # Configure first so the host-side crypto regression uses the exact
@@ -255,6 +260,13 @@ jobs:
           file "$GITHUB_WORKSPACE/test-results/r65c-aes-ctr-outofplace-test" | tee "$GITHUB_WORKSPACE/test-results/r65c-aes-ctr-outofplace-test-file.txt"
           readelf -h "$GITHUB_WORKSPACE/test-results/r65c-aes-ctr-outofplace-test" | grep -q MIPS
           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum r65c-aes-ctr-outofplace-test > r65c-aes-ctr-outofplace.sha256)
+           "$MIPS_CC" -std=c11 -O2 -Wall -Wextra -Werror -I"$STAGING/usr/include" \
+             "$GITHUB_WORKSPACE/tests/r65d_aes_ctr_alignment_bench.c" -L"$STAGING/usr/lib" -lcrypto \
+             -o "$GITHUB_WORKSPACE/test-results/r65d-aes-ctr-alignment-bench"
+           chmod 0755 "$GITHUB_WORKSPACE/test-results/r65d-aes-ctr-alignment-bench"
+           file "$GITHUB_WORKSPACE/test-results/r65d-aes-ctr-alignment-bench" | tee "$GITHUB_WORKSPACE/test-results/r65d-aes-ctr-alignment-bench-file.txt"
+           readelf -h "$GITHUB_WORKSPACE/test-results/r65d-aes-ctr-alignment-bench" | grep -q MIPS
+           (cd "$GITHUB_WORKSPACE/test-results" && sha256sum r65d-aes-ctr-alignment-bench > r65d-aes-ctr-alignment-bench.sha256)
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_enable'
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_diag_timing_snapshot'
           nm -D "$STAGING/usr/lib/libssh2.so" | grep -F 'libssh2_session_set_chacha_workers'
@@ -457,6 +469,11 @@ jobs:
             test-results/r65c-aes-ctr-outofplace-test
             test-results/r65c-aes-ctr-outofplace-test-file.txt
             test-results/r65c-aes-ctr-outofplace.sha256
+            test-results/r65d-aes-ctr-alignment-native.log
+            test-results/r65d-aes-ctr-alignment-source.log
+            test-results/r65d-aes-ctr-alignment-bench
+            test-results/r65d-aes-ctr-alignment-bench-file.txt
+            test-results/r65d-aes-ctr-alignment-bench.sha256
             test-results/r64-aes-ctr-bulk-test-native.log
             test-results/r64-aes-ctr-test
             test-results/r64-aes-ctr-test-file.txt
@@ -561,13 +578,13 @@ jobs:
           SDK_SOURCE_SHA="$(tr -d '[:space:]' < test-results/build-source.sha)"
           printf '%s' "$SDK_SOURCE_SHA" | grep -Eq '^[0-9a-f]{40}$'
           git fetch --no-tags --depth=1 origin "$SDK_SOURCE_SHA"
-          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c tools/mips32/chacha-core.S tests/mips32_chacha_asm_test.c tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_asm_test.c tests/poly1305_mips_hotpath_test.py tools/mips32/poly1305-mips.pl LICENSES/BSD-3-Clause.txt tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tools/apply_libssh2_r65b_hmac_context.py tests/r65b_hmac_context_source_test.py tests/r65b_hmac_context_test.c tests/r64_aes_ctr_bulk_test.c tools/apply_libssh2_r65c_outofplace.py tests/r65c_aes_ctr_outofplace_source_test.py tests/r65c_aes_ctr_outofplace_test.c; then
+          if ! git diff --quiet "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r43_diag.py tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tools/apply_libssh2_r52_worker_lifecycle.py tests/r52_hardening_test.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py tests/qemu_speedtest.sh tls_engine.c tls_engine.h spsc_rb.h io_worker_pool.c io_worker_pool.h tests/http_parser_test.c tests/spsc_rb_test.c tests/tls_engine_test.c tests/io_worker_pool_test.c tests/client_lifetime_test.c client_lifetime.c client_lifetime.h client_event_token.h tests/client_event_token_test.c io_worker_completion_tracker.c io_worker_completion_tracker.h tests/io_worker_completion_tracker_test.c tests/socks_halfclose.c tests/socks_mt_download.c tests/diag_timer.c tools/mips32/chacha-core.S tests/mips32_chacha_asm_test.c tools/apply_libssh2_r53_mips32_chacha_asm.py tools/apply_libssh2_r54_mips32_poly1305_asm.py tests/poly1305_mips_asm_test.c tests/poly1305_mips_hotpath_test.py tools/mips32/poly1305-mips.pl LICENSES/BSD-3-Clause.txt tools/apply_libssh2_r55_outofplace_chachapoly.py tests/r55_out_of_place_test.py tools/apply_libssh2_r56_skip_padding.py tests/r56_skip_padding_test.py tools/apply_libssh2_r57_chachapoly_profile.py tests/r57_chachapoly_profile_test.py tests/r58_chacha_perf_log_test.py tools/apply_libssh2_r59_inline_poly1305.py tests/r59_inline_poly1305_test.py tests/r59_perf_log_parser_test.py tools/apply_libssh2_r60_worker_hotpath_cleanup.py tests/r60_worker_hotpath_test.py tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tools/apply_libssh2_r65b_hmac_context.py tests/r65b_hmac_context_source_test.py tests/r65b_hmac_context_test.c tests/r64_aes_ctr_bulk_test.c tools/apply_libssh2_r65c_outofplace.py tests/r65c_aes_ctr_outofplace_source_test.py tests/r65c_aes_ctr_outofplace_test.c tools/apply_libssh2_r65d_alignment_diag.py tests/r65d_aes_ctr_alignment_source_test.py tests/r65d_aes_ctr_alignment_bench.c; then
             echo "SDK artifact was built from different package or test sources."
-            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tools/apply_libssh2_r65b_hmac_context.py tests/r65b_hmac_context_source_test.py tests/r65b_hmac_context_test.c tests/r64_aes_ctr_bulk_test.c tools/apply_libssh2_r65c_outofplace.py tests/r65c_aes_ctr_outofplace_source_test.py tests/r65c_aes_ctr_outofplace_test.c
+            git diff --stat "$SDK_SOURCE_SHA" "$GITHUB_SHA" -- Makefile ssh-core.c libssh2_diag.h tools/apply_libssh2_r47_parallel_chacha.py tools/apply_libssh2_r48_worker_only_chacha.py tools/apply_libssh2_r49_worker_poly1305.py tools/apply_libssh2_r51_auth_then_decrypt.py tools/apply_libssh2_r51_mips32_hotpath.py tests/chachapoly_parallel_test.c tests/chachapoly_auth_order_test.py tests/mips32_hotpath_test.py spsc_rb.h io_worker_pool.c io_worker_pool.h tests/spsc_rb_test.c tests/io_worker_pool_test.c tests/socks_halfclose.c tests/socks_mt_download.c tools/apply_libssh2_r61_window_backpressure.py tests/r61_window_backpressure_test.py tests/r61_window_runtime_test.py chacha_runtime_config.h tests/chacha_runtime_config_test.c tools/apply_libssh2_r62_runtime_controls.py tests/r62_chacha_config_source_test.py tests/r62_chacha_runtime_test.py tools/apply_libssh2_r63_hardening.py tests/r63_hardening_test.py tools/apply_libssh2_r64.py tests/r64_aes_ctr_source_test.py tools/apply_libssh2_r65a_diagnostics.py tests/r65a_crypto_diagnostics_source_test.py tools/apply_libssh2_r65b_hmac_context.py tests/r65b_hmac_context_source_test.py tests/r65b_hmac_context_test.c tests/r64_aes_ctr_bulk_test.c tools/apply_libssh2_r65c_outofplace.py tests/r65c_aes_ctr_outofplace_source_test.py tests/r65c_aes_ctr_outofplace_test.c tools/apply_libssh2_r65d_alignment_diag.py tests/r65d_aes_ctr_alignment_source_test.py tests/r65d_aes_ctr_alignment_bench.c
             false
           fi
-          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256 mips32-chacha-asm-test.sha256 poly1305-mips-asm-test.sha256 chachapoly-parallel-r63-mips.sha256 r64-aes-ctr.sha256 r65b-hmac-context.sha256 r65c-aes-ctr-outofplace.sha256)
-          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test test-results/mips32-chacha-asm-test test-results/poly1305-mips-asm-test test-results/chachapoly-parallel-r63-mips-test test-results/r64-aes-ctr-test test-results/r65b-hmac-context-test test-results/r65c-aes-ctr-outofplace-test
+          (cd test-results && sha256sum -c ipk.sha256 halfclose.sha256 mt-download.sha256 spsc-rb.sha256 tls-engine-test.sha256 io-worker-pool.sha256 client-lifetime.sha256 client-event-token.sha256 io-worker-completion-tracker.sha256 diag-timer.sha256 mips32-chacha-asm-test.sha256 poly1305-mips-asm-test.sha256 chachapoly-parallel-r63-mips.sha256 r64-aes-ctr.sha256 r65b-hmac-context.sha256 r65c-aes-ctr-outofplace.sha256 r65d-aes-ctr-alignment-bench.sha256)
+          file test-results/passwall-ssh-core*.ipk test-results/spsc-rb-test test-results/socks-halfclose test-results/socks-mt-download test-results/tls-engine-test test-results/io-worker-pool-test test-results/client-lifetime-test test-results/client-event-token-test test-results/io-worker-completion-tracker-test test-results/mips32-chacha-asm-test test-results/poly1305-mips-asm-test test-results/chachapoly-parallel-r63-mips-test test-results/r64-aes-ctr-test test-results/r65b-hmac-context-test test-results/r65c-aes-ctr-outofplace-test test-results/r65d-aes-ctr-alignment-bench
           cat test-results/elf-header.txt test-results/helper-file.txt test-results/mt-helper-file.txt
           grep -q 'Architecture: mipsel_24kc' <(tar -xOzf test-results/passwall-ssh-core*.ipk ./control.tar.gz | tar -xzO ./control)
           test -s test-results/passwall-ssh-core_1.0.0-r65_mipsel_24kc.ipk
@@ -1135,6 +1152,7 @@ jobs:
              "$GITHUB_WORKSPACE/test-results/r64-aes-ctr-test" \
              "$GITHUB_WORKSPACE/test-results/r65b-hmac-context-test" \
              "$GITHUB_WORKSPACE/test-results/r65c-aes-ctr-outofplace-test" \
+              "$GITHUB_WORKSPACE/test-results/r65d-aes-ctr-alignment-bench" \
             /tmp/mips-fixtures/payload-1MiB.bin /tmp/mips-fixtures/slow-download-32MiB.bin \
             /tmp/mips-fixtures/half-close-upload-8MiB.bin \
             root@127.0.0.1:/tmp/mips-test/
@@ -1204,6 +1222,21 @@ jobs:
             fi
           else
             fail "R65-C MIPS out-of-place AES-CTR helper missing"
+          fi
+
+          echo "========== VERIFY R65-D AES-CTR ALIGNMENT BENCHMARK =========="
+          if [ -f "$LOG/r65d-aes-ctr-alignment-bench" ] && cp "$LOG/r65d-aes-ctr-alignment-bench" /usr/bin/r65d-aes-ctr-alignment-bench; then
+            chmod 0755 /usr/bin/r65d-aes-ctr-alignment-bench
+            R65D_ALIGN_RC=0
+            /usr/bin/r65d-aes-ctr-alignment-bench >"$LOG/r65d-aes-ctr-alignment-bench.log" 2>&1 || R65D_ALIGN_RC=$?
+            cat "$LOG/r65d-aes-ctr-alignment-bench.log"
+            if [ "$R65D_ALIGN_RC" -eq 0 ]; then
+              pass "MIPS AES-CTR 16x16 source/destination alignment benchmark passed"
+            else
+              fail "MIPS R65-D AES-CTR alignment benchmark failed (rc=$R65D_ALIGN_RC)"
+            fi
+          else
+            fail "R65-D AES-CTR alignment benchmark helper missing"
           fi
 
           echo "========== VERIFY OFFLINE RUNTIME DEPENDENCIES =========="
