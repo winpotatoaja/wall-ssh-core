@@ -234,24 +234,53 @@ def summarize_mac_profile(profile: str, runs: list[dict]) -> dict:
             if r["profile"] == profile and r["variant"] == variant and r["kind"] == "profile"
         ), None)
         totals = run.get("perf_totals", {}) if run else {}
+        status = {}
+        if run:
+            for line in run.get("profile_status", []):
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    status[key] = value
+        issues = []
+        if not run:
+            issues.append("profile-only run missing")
+        else:
+            if not run.get("perf_mac"):
+                issues.append("no PERF-MAC lines")
+            if run.get("auth_count") != 1:
+                issues.append(f"expected one core authentication, found {run.get('auth_count')}")
+            if run.get("keys_count") != 1:
+                issues.append(f"expected one SSH key establishment, found {run.get('keys_count')}")
+            expected = PROFILES[profile]
+            joined = "\n".join(run.get("negotiation", []))
+            if expected["cipher"] not in joined:
+                issues.append(f"expected cipher {expected['cipher']} not observed")
+            if expected["mac"] and expected["mac"] not in joined:
+                issues.append(f"expected MAC {expected['mac']} not observed")
+            try:
+                profile_bytes = int(status.get("PROFILE_BYTES", "0"))
+                curl_rc = int(status.get("PROFILE_CURL_RC", "-1"))
+            except ValueError:
+                profile_bytes, curl_rc = 0, -1
+            if profile_bytes < 1_000_000:
+                issues.append(f"profile transfer too small: {profile_bytes} bytes")
+            if curl_rc not in (0, 28):
+                issues.append(f"profile curl returned unexpected code {curl_rc}")
+            if run.get("errors"):
+                issues.append("profile runner recorded errors: " + "; ".join(run["errors"]))
+        if run and variant == "A" and totals.get("mac_sha256_setup_calls", 0) <= 0:
+            issues.append("R65-A setup_calls counter was zero")
+        if run and variant == "B" and any(totals.get(k, 0) <= 0 for k in (
+            "mac_sha256_ctx_allocs", "mac_sha256_key_inits", "mac_sha256_reuse_resets"
+        )):
+            issues.append("R65-B context allocation/key-init/reuse-reset counters were not all nonzero")
         out[variant] = {
             "run_found": run is not None,
             "perf_mac_intervals": len(run.get("perf_mac", [])) if run else 0,
             "totals": totals,
             "mac_rx_avg_us_per_call": round(totals.get("mac_rx_us", 0) / totals.get("mac_rx_calls", 0), 3) if totals.get("mac_rx_calls", 0) else None,
             "mac_tx_avg_us_per_call": round(totals.get("mac_tx_us", 0) / totals.get("mac_tx_calls", 0), 3) if totals.get("mac_tx_calls", 0) else None,
-            "issues": [],
+            "issues": issues,
         }
-        if not run:
-            out[variant]["issues"].append("profile-only run missing")
-        elif not run.get("perf_mac"):
-            out[variant]["issues"].append("no PERF-MAC lines")
-        elif variant == "A" and totals.get("mac_sha256_setup_calls", 0) <= 0:
-            out[variant]["issues"].append("R65-A setup_calls counter was zero")
-        elif variant == "B" and any(totals.get(k, 0) <= 0 for k in (
-            "mac_sha256_ctx_allocs", "mac_sha256_key_inits", "mac_sha256_reuse_resets"
-        )):
-            out[variant]["issues"].append("R65-B context allocation/key-init/reuse-reset counters were not all nonzero")
     return out
 
 
