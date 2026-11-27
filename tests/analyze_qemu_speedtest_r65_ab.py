@@ -15,7 +15,7 @@ DOWNLOAD = re.compile(
     r"http_code=(\d+) remote_ip=(\S+)"
 )
 THREAD = re.compile(r"tid=(\d+)/([^:,]+):([0-9.]+)%")
-RX = re.compile(r"wan\\(default\\)_rx=([0-9.]+)MiB/s")
+RX = re.compile(r"wan\(default\)_rx=([0-9.]+)MiB/s")
 FIELD = re.compile(r"([a-zA-Z0-9_]+)=([0-9]+)")
 
 PROFILES = {
