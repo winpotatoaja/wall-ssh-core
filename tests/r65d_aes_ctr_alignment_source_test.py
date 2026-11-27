@@ -56,9 +56,9 @@ def main():
               "#define TRIALS 5U" in bench and
               "PAIR src=" in bench and "SUMMARY pairs=" in bench,
               "benchmark covers all 256 alignment pairs, 16 KiB updates, five trials"),
-        check("memcmp(output, expected, TOTAL_BYTES)" in bench and
-              "memcmp(mut, expected, TOTAL_BYTES)" in bench and
-              "memcmp(cipher, snapshot, TOTAL_BYTES)" in bench,
+        check("memcmp(out, plain, TOTAL_BYTES)" in bench and
+              "memcmp(mut, plain, TOTAL_BYTES)" in bench and
+              "memcmp(cipher, snap, TOTAL_BYTES)" in bench,
               "benchmark validates plaintext and immutable OOP source"),
         check("decrypt_impl" not in patcher and "EVP_CipherUpdate" not in patcher and
               "ctr_rx_src_align_mask" in patcher,
