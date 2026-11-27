@@ -1,10 +1,10 @@
-# R66 Final — Passwall SSH Core (OpenWrt 24.10.7 mipsel_24kc)
+# R67-DIAG — Passwall SSH Core
 
 Tanggal: 2026-11-27  
-Branch: **release/r66-final**  
+Branch: **experiment/r67-diag**  
 Commit final: \`41b101378ebda17e211d03be7ea7e7709f04f0ab\`  
 Basis crypto: R65-B commit \`dc0454d93a93afc94e8024f6346b54eb3ccd07d7\`  
-Paket: **1.0.0-r66**
+Paket: **1.0.0-r67**
 
 ## Profil crypto final
 
@@ -78,7 +78,19 @@ Artifact:
 5. SDK, IPK, dan firmware MT7621 QEMU divalidasi dalam satu workflow run dan satu source commit.
 6. Source gate R66 mencegah regresi jalur crypto final serta salah versi IPK/artifact.
 
+## R67-DIAG — instrumentasi antrean
+
+R67-DIAG mempertahankan profil kriptografi, jalur relay, ukuran buffer, worker, dan kebijakan backpressure R66 tanpa perubahan perilaku transfer. Perubahannya hanya diagnostik yang aktif melalui `-log-perf 1`:
+
+- Snapshot kernel TCP upstream: Recv-Q dan Send-Q.
+- Snapshot kernel TCP untuk setiap SOCKS relay client: Recv-Q dan Send-Q, termasuk jumlah sampel sukses/gagal dan nilai agregat/puncak.
+- Untuk transport TLS, snapshot socket dilakukan melalui API TLS Engine agar ownership socket tetap pada thread TLS; dua ring buffer TLS juga dicatat.
+- Baris `[QUEUE]` dikeluarkan bersama interval `[PERF]`; tanpa `LOG_PERF`, pengambilan snapshot tidak berjalan.
+
+Tujuan diagnostik adalah membedakan penumpukan pada socket upstream, ring buffer TLS, ring S2C/C2S, dan socket SOCKS. Nilai Recv-Q/Send-Q merupakan snapshot sesaat, bukan counter byte kumulatif.
+
+**R67-DIAG adalah build diagnostik, bukan optimasi throughput.** Hasil benchmark hardware harus dibandingkan dengan R66 pada kondisi client dan durasi yang sama.
+
 ## Status
 
-**R66 FINAL — SDK dan MT7621 QEMU lulus pada Actions #919.**  
-Package \`1.0.0-r66\` sudah dibangun, metadata dan checksum diverifikasi, dan seluruh integration test guest lulus.
+**R67-DIAG — SDK/QEMU validation pending.**
