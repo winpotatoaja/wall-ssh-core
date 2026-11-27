@@ -50,7 +50,6 @@
 #define MAX_HTTP_SKIP_BODY     (16U * 1024U * 1024U)
 #define C2S_RELAY_BUF_SIZE     32768
 #define S2C_RELAY_BUF_SIZE     262144
-#define S2C_SSH_READ_WINDOW_SIZE (512U * 1024U)
 #define MAX_EVENTS             128
 #define SSH_CORE_IO_QUEUE_CAPACITY 64U
 #define DEFAULT_MAX_CLIENTS    64
@@ -3779,18 +3778,6 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
     if (rb_init(&c->c2s, C2S_RELAY_BUF_SIZE) < 0 || rb_init(&c->s2c, S2C_RELAY_BUF_SIZE) < 0) {
         start_closing_client(epfd, c);
         return 1;
-    }
-    unsigned long s2c_read_window_initial = 0UL;
-    (void)libssh2_channel_window_read_ex(
-        c->channel, NULL, &s2c_read_window_initial);
-    log_blue("[S2C WINDOW] client=%llu initial=%lu ring=%u",
-             (unsigned long long)c->client_id,
-             s2c_read_window_initial, (unsigned int)S2C_RELAY_BUF_SIZE);
-    if(s2c_read_window_initial !=
-       (unsigned long)S2C_SSH_READ_WINDOW_SIZE) {
-        log_red("[S2C WINDOW] unexpected initial receive window: expected=%u actual=%lu",
-                (unsigned int)S2C_SSH_READ_WINDOW_SIZE,
-                s2c_read_window_initial);
     }
     if (c->early_len > 0) {
         (void)rb_push(&c->c2s, c->early_buf, c->early_len);

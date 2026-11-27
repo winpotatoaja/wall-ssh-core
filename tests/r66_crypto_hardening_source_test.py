@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """R66 crypto hardening source and malformed-padding regression checks."""
 from pathlib import Path
+import re
 import sys
 
 
@@ -52,29 +53,45 @@ def main() -> int:
     init = extract(mac, "static int\nmac_method_hmac_sha2_256_init(")
     hmac_hash = extract(mac, "static int\nmac_method_hmac_sha2_256_hash(")
 
+    mac_error_blocks = re.findall(r"if\(mac_rc\)\s*\{(.*?)\n\s*\}", fullpacket, re.S)
+    padding_guard = "if(session->fullpacket_macstate == LIBSSH2_MAC_CONFIRMED &&"
+    mac_compare = fullpacket.find("if(memcmp(macbuf")
+    guard_at = fullpacket.find(padding_guard)
+    seq_at = fullpacket.find("session->remote.seqno++")
+    subtract_at = fullpacket.find("session->fullpacket_payload_len -= p->padding_length")
+
     checks = [
-        check((root / ".passwall-r66-crypto-hardening-patched").is_file(), "R66 hardening marker exists"),
-        check(fullpacket.count("if(mac_rc) {") == 2 and
-              fullpacket.count("LIBSSH2_FREE(session, p->payload);") >= 2 and
-              fullpacket.count("return LIBSSH2_ERROR_MAC_FAILURE;") >= 2,
-              "ETM and non-ETM MAC failures free and null payload then fail closed"),
-        check(fullpacket.index("if(p->padding_length < 4U") <
-              fullpacket.index("session->fullpacket_payload_len -= p->padding_length"),
-              "fullpacket validates padding before subtracting it from payload length"),
-        check("p->padding_length < 4U" in fullpacket and "p->padding_length > p->packet_length - 1U" in fullpacket,
-              "fullpacket preserves upper bound and enforces minimum padding"),
-        check("p->padding_length < 4U" in read_impl and "p->padding_length > p->packet_length - 1U" in read_impl,
-              "transport read validates non-ETM padding and clears payload on malformed input"),
-        check("if(!abstract || !free_key || !key)" in init,
-              "HMAC init rejects invalid args before allocating or dereferencing"),
-        check("EVP_MAC_CTX_dup(state->ctx)" in hmac_hash and "EVP_MAC_init(ctx, NULL, 0, NULL)" in hmac_hash,
-              "both compatibility fallback and 3.0.3+ reuse paths remain intact"),
+        check((root / ".passwall-r66-crypto-hardening-patched").is_file(),
+              "R66 hardening marker exists"),
+        check(len(mac_error_blocks) == 2 and all(
+            "LIBSSH2_FREE(session, p->payload);" in block and
+            "p->payload = NULL;" in block and
+            "return LIBSSH2_ERROR_MAC_FAILURE;" in block
+            for block in mac_error_blocks),
+            "both ETM and non-ETM MAC callback errors free and null payload before failing closed"),
+        check(mac_compare >= 0 and guard_at > mac_compare and
+              guard_at < seq_at < subtract_at,
+              "padding validation runs after MAC comparison and before sequence/payload updates"),
+        check("p->padding_length < 4U" in fullpacket and
+              "p->padding_length > p->packet_length - 1U" in fullpacket,
+              "authenticated fullpacket path enforces minimum and maximum padding"),
+        check("p->padding_length > p->packet_length - 1" in read_impl and
+              "p->padding_length < 4U" not in read_impl,
+              "pre-MAC transport path retains only the legacy upper-bound sanity check"),
+        check(init.find("if(!abstract || !free_key)") >= 0 and
+              init.find("if(!abstract || !free_key)") < init.find("*abstract = NULL;") <
+              init.find("if(!session || !key)") < init.find("LIBSSH2_ALLOC(session"),
+              "HMAC init validates output pointers and session/key before allocation"),
+        check("EVP_MAC_CTX_dup(state->ctx)" in hmac_hash and
+              "EVP_MAC_init(ctx, NULL, 0, NULL)" in hmac_hash and
+              "!defined(LIBSSH2_TEST_FORCE_EVP_MAC_CTX_DUP)" in hmac_hash,
+              "normal context reuse and test-forced compatibility fallback paths remain available"),
         check("LIBSSH2_TEST_HMAC_CALLBACKS" in mac and
               "libssh2_test_hmac256_hash" in mac,
-              "direct callback accessors compile only in test builds"),
+              "direct callback accessors compile only in dedicated test builds"),
         check(kex.count("if(session->local.mac->init(session, key, &free_key,") == 3 and
               kex.count("if(session->remote.mac->init(session, key, &free_key,") == 3,
-              "KEX init-error checks remain for both directions"),
+              "KEX init-error cleanup remains present for both directions"),
     ]
     return 0 if all(checks) else 1
 

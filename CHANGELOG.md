@@ -1,5 +1,16 @@
 # R66 Final — Changelog
 
+## 2026-11-27 — crypto-hardening follow-up (experiment/r66-crypto-hardening)
+
+- Fix MAC callback error handling in both ETM and non-ETM receive paths by releasing and nulling the packet payload before returning a fatal MAC error.
+- Enforce SSH minimum padding length only after the packet MAC is confirmed; retain the existing pre-MAC upper-bound sanity check.
+- Validate HMAC-SHA256 callback output pointers, session and key before allocating callback state.
+- Add direct tests of the actual libssh2 HMAC callbacks for standard/ETM argument shapes, TX/RX keys, context reuse, rekey, fail-closed handling, and independent session state.
+- Exercise both OpenSSL 3.x context reset and the test-forced EVP_MAC_CTX_dup compatibility code path. The latter validates the branch logic on the installed OpenSSL provider; it is not a separate run on OpenSSL 3.0.0/3.0.2.
+- Remove the per-client `[S2C WINDOW]` diagnostic and its mismatch warning from the production SOCKS client path. No replacement message is emitted.
+- SDK/QEMU validation for this follow-up is pending.
+
+
 ## 2026-11-27 — final crypto profile and OpenWrt package
 
 - Created \`release/r66-final\` from the R65-B baseline commit \`dc0454d93a93afc94e8024f6346b54eb3ccd07d7\`.
