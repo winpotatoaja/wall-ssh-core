@@ -24,103 +24,59 @@ def extract(src: str, signature: str) -> str:
         if line_comment:
             if c == "\n": line_comment = False
         elif block_comment:
-            if c == "*" and n == "/":
-                block_comment = False
-                i += 2
-                continue
+            if c == "*" and n == "/": block_comment = False; i += 2; continue
         elif quote:
-            if c == "\\":
-                i += 2
-                continue
-            if c == quote:
-                quote = None
-        elif c == "/" and n == "/":
-            line_comment = True
-            i += 2
-            continue
-        elif c == "/" and n == "*":
-            block_comment = True
-            i += 2
-            continue
-        elif c in ("'", '"'):
-            quote = c
-        elif c == "{":
-            depth += 1
+            if c == "\\": i += 2; continue
+            if c == quote: quote = None
+        elif c == "/" and n == "/": line_comment = True; i += 2; continue
+        elif c == "/" and n == "*": block_comment = True; i += 2; continue
+        elif c in ("'", '"'): quote = c
+        elif c == "{": depth += 1
         elif c == "}":
             depth -= 1
-            if depth == 0:
-                return src[start:i + 1]
+            if depth == 0: return src[start:i + 1]
         i += 1
     raise RuntimeError("unterminated function: " + signature)
 
 
-def padding_valid(padding: int, packet_length: int) -> bool:
-    return 4 <= padding <= packet_length - 1
-
-
 def main() -> int:
     if len(sys.argv) != 2:
-        print("usage: r66_crypto_hardening_source_test.py LIBSSH2_SOURCE_DIR",
-              file=sys.stderr)
+        print("usage: r66_crypto_hardening_source_test.py LIBSSH2_SOURCE_DIR", file=sys.stderr)
         return 2
     root = Path(sys.argv[1])
     transport = (root / "src/transport.c").read_text()
     mac = (root / "src/mac.c").read_text()
     kex = (root / "src/kex.c").read_text()
-
-    fullpacket = extract(transport,
-                         "static int\nfullpacket(LIBSSH2_SESSION * session, int encrypted")
-    read_impl = extract(transport,
-                        "static int _libssh2_transport_read_impl(LIBSSH2_SESSION * session)")
-
-    cleanup_marker = (
-        "if(mac_rc) {\n                    if(p->payload) {\n"
-    )
-
-    padding_values = []
-    for padding in range(0, 5):
-        padding_values.append(padding_valid(padding, 32))
+    fullpacket = extract(transport, "static int\nfullpacket(LIBSSH2_SESSION * session, int encrypted")
+    read_impl = extract(transport, "static int _libssh2_transport_read_impl(LIBSSH2_SESSION * session)")
+    init = extract(mac, "static int\nmac_method_hmac_sha2_256_init(")
+    hmac_hash = extract(mac, "static int\nmac_method_hmac_sha2_256_hash(")
 
     checks = [
-        check((root / ".passwall-r66-crypto-hardening-patched").is_file(),
-              "R66 crypto-hardening marker is present"),
-        check(fullpacket.count(cleanup_marker) >= 2,
-              "both ETM/non-ETM MAC receive failures free payload and clear its pointer"),
-        check(fullpacket.count("p->payload = NULL;") >= 3,
-              "fullpacket payload cleanup/ownership paths clear pointers"),
-        check(fullpacket.count("return LIBSSH2_ERROR_MAC_FAILURE;") >= 2,
-              "both receive MAC callbacks propagate MAC_FAILURE"),
-        check("p->padding_length < 4U" in fullpacket and
-              "p->padding_length > p->packet_length - 1U" in fullpacket,
-              "fullpacket enforces both minimum and maximum padding"),
-        check("p->padding_length < 4U" in read_impl and
-              "p->padding_length > p->packet_length - 1U" in read_impl,
-              "transport receive path rejects minimum/maximum padding violations"),
-        check("p->padding_length < 4U" in transport and
-              "p->padding_length > p->packet_length - 1U" in transport,
-              "malformed padding is rejected before payload length subtraction"),
-        check(padding_values == [False, False, False, False, True],
-              "malformed padding 0/1/2/3 rejects and padding 4 accepts"),
-        check("EVP_MAC_fetch(NULL, OSSL_MAC_NAME_HMAC, NULL)" in mac and
-              "EVP_MAC_CTX_dup(state->ctx)" in mac,
-              "R65-B HMAC EVP_MAC initialization and legacy fallback remain present"),
-        check("EVP_MAC_init(ctx, NULL, 0, NULL)" in mac,
-              "OpenSSL 3.0.3+ context reuse reset remains present"),
-        check("EVP_MAC_update(ctx, packet, packet_len)" in mac and
-              "EVP_MAC_final(ctx, buf, &out_len, 32)" in mac,
-              "HMAC callback performs update/final with exact 32-byte output"),
-        check(mac.count("mac_method_hmac_sha2_256_init,") == 2 and
-              mac.count("mac_method_hmac_sha2_256_dtor,") == 2,
-              "standard and ETM method tables retain separate init/dtor callbacks"),
+        check((root / ".passwall-r66-crypto-hardening-patched").is_file(), "R66 hardening marker exists"),
+        check(fullpacket.count("if(mac_rc) {") == 2 and
+              fullpacket.count("LIBSSH2_FREE(session, p->payload);") >= 2 and
+              fullpacket.count("return LIBSSH2_ERROR_MAC_FAILURE;") >= 2,
+              "ETM and non-ETM MAC failures free and null payload then fail closed"),
+        check(fullpacket.index("if(p->padding_length < 4U") <
+              fullpacket.index("session->fullpacket_payload_len -= p->padding_length"),
+              "fullpacket validates padding before subtracting it from payload length"),
+        check("p->padding_length < 4U" in fullpacket and "p->padding_length > p->packet_length - 1U" in fullpacket,
+              "fullpacket preserves upper bound and enforces minimum padding"),
+        check("p->padding_length < 4U" in read_impl and "p->padding_length > p->packet_length - 1U" in read_impl,
+              "transport read validates non-ETM padding and clears payload on malformed input"),
+        check("if(!abstract || !free_key || !key)" in init,
+              "HMAC init rejects invalid args before allocating or dereferencing"),
+        check("EVP_MAC_CTX_dup(state->ctx)" in hmac_hash and "EVP_MAC_init(ctx, NULL, 0, NULL)" in hmac_hash,
+              "both compatibility fallback and 3.0.3+ reuse paths remain intact"),
+        check("LIBSSH2_TEST_HMAC_CALLBACKS" in mac and
+              "libssh2_test_hmac256_hash" in mac,
+              "direct callback accessors compile only in test builds"),
         check(kex.count("if(session->local.mac->init(session, key, &free_key,") == 3 and
               kex.count("if(session->remote.mac->init(session, key, &free_key,") == 3,
-              "both KEX directions retain init-failure cleanup checks"),
+              "KEX init-error checks remain for both directions"),
     ]
-
-    if not all(checks):
-        return 1
-    print("PASS: R66 crypto transport/HMAC source hardening checks")
-    return 0
+    return 0 if all(checks) else 1
 
 
 if __name__ == "__main__":

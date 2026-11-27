@@ -18,7 +18,7 @@ def bounds(src: str, signature: str):
     if start < 0 or src.find(signature, start + 1) >= 0:
         raise RuntimeError("expected exactly one function: " + signature)
     brace = src.find("{", start)
-    depth = quote = 0
+    depth = 0
     quote_char = None
     line_comment = block_comment = False
     i = brace
@@ -33,27 +33,18 @@ def bounds(src: str, signature: str):
                 i += 2
                 continue
         elif quote_char:
-            if c == "\\":
-                i += 2
-                continue
-            if c == quote_char:
-                quote_char = None
+            if c == "\\": i += 2; continue
+            if c == quote_char: quote_char = None
         elif c == "/" and n == "/":
-            line_comment = True
-            i += 2
-            continue
+            line_comment = True; i += 2; continue
         elif c == "/" and n == "*":
-            block_comment = True
-            i += 2
-            continue
+            block_comment = True; i += 2; continue
         elif c in ("'", '"'):
             quote_char = c
-        elif c == "{":
-            depth += 1
+        elif c == "{": depth += 1
         elif c == "}":
             depth -= 1
-            if depth == 0:
-                return start, i + 1
+            if depth == 0: return start, i + 1
         i += 1
     raise RuntimeError("unterminated function: " + signature)
 
@@ -65,11 +56,11 @@ def patch_fullpacket(root: Path) -> None:
     start, end = bounds(src, sig)
     fn = src[start:end]
 
-    old_etm = (
+    old_mac_error = (
         "                if(mac_rc)\n"
         "                    return LIBSSH2_ERROR_MAC_FAILURE;\n"
     )
-    cleanup_etm = (
+    cleanup_mac_error = (
         "                if(mac_rc) {\n"
         "                    if(p->payload) {\n"
         "                        LIBSSH2_FREE(session, p->payload);\n"
@@ -78,13 +69,14 @@ def patch_fullpacket(root: Path) -> None:
         "                    return LIBSSH2_ERROR_MAC_FAILURE;\n"
         "                }\n"
     )
-    if fn.count(old_etm) != 2:
-        raise RuntimeError(f"fullpacket MAC cleanup: expected 2 mac_rc error blocks, found {fn.count(old_etm)}")
-    fn = fn.replace(old_etm, cleanup_etm)
+    if fn.count(old_mac_error) != 2:
+        raise RuntimeError(
+            "fullpacket MAC cleanup: expected 2 mac_rc error blocks, found "
+            + str(fn.count(old_mac_error))
+        )
+    fn = fn.replace(old_mac_error, cleanup_mac_error)
 
-    old_etm_padding = (
-        "                if(p->padding_length > p->packet_length - 1U) {\n"
-    )
+    old_etm_padding = "                if(p->padding_length > p->packet_length - 1U) {\n"
     new_etm_padding = (
         "                if(p->padding_length < 4U ||\n"
         "                   p->padding_length > p->packet_length - 1U) {\n"
@@ -93,10 +85,9 @@ def patch_fullpacket(root: Path) -> None:
         raise RuntimeError("ETM padding upper-bound check not found exactly once")
     fn = fn.replace(old_etm_padding, new_etm_padding, 1)
 
-    # Non-ETM padding is known before fullpacket allocates/decreases payload length.
-    payload_anchor = (
-        "        session->fullpacket_payload_len = p->packet_length - 1;\n\n"
-    )
+    # Non-ETM padding is authenticated by the MAC before this check. Reject it
+    # before fullpacket_payload_len is reduced by the padding length below.
+    payload_anchor = "        session->fullpacket_payload_len = p->packet_length - 1;\n\n"
     payload_replacement = (
         "        session->fullpacket_payload_len = p->packet_length - 1;\n\n"
         "        if(encrypted && remote_mac && !remote_mac->etm &&\n"
@@ -111,7 +102,6 @@ def patch_fullpacket(root: Path) -> None:
     )
     fn = once(fn, payload_anchor, payload_replacement,
               "add non-ETM minimum/maximum padding validation")
-
     path.write_text(src[:start] + fn + src[end:])
 
 
@@ -121,7 +111,6 @@ def patch_transport_read(root: Path) -> None:
     sig = "static int _libssh2_transport_read_impl(LIBSSH2_SESSION * session)"
     start, end = bounds(src, sig)
     fn = src[start:end]
-
     old = (
         "                    if(p->padding_length > p->packet_length - 1) {\n"
         "                        return LIBSSH2_ERROR_DECRYPT;\n"
@@ -138,9 +127,54 @@ def patch_transport_read(root: Path) -> None:
         "                    }\n"
     )
     if fn.count(old) != 1:
-        raise RuntimeError("transport read non-ETM padding upper-bound check not found exactly once")
+        raise RuntimeError("transport read non-ETM padding check not found exactly once")
     fn = fn.replace(old, new, 1)
     path.write_text(src[:start] + fn + src[end:])
+
+
+def patch_mac_test_accessors(root: Path) -> None:
+    path = root / "src/mac.c"
+    src = path.read_text()
+    anchor = "#endif /* OpenSSL 3 HMAC-SHA256 context reuse */\n"
+    test_api = r'''#if defined(LIBSSH2_TEST_HMAC_CALLBACKS)
+/* Test-build-only access to the actual static R65-B callbacks. No failure
+ * injection or test hook is present in production builds. */
+int libssh2_test_hmac256_init(LIBSSH2_SESSION *session, unsigned char *key,
+                              int *free_key, void **abstract)
+{
+    return mac_method_hmac_sha2_256_init(session, key, free_key, abstract);
+}
+
+int libssh2_test_hmac256_hash(LIBSSH2_SESSION *session, unsigned char *out,
+                              uint32_t seqno, const unsigned char *packet,
+                              size_t packet_len, const unsigned char *addtl,
+                              size_t addtl_len, void **abstract)
+{
+    return mac_method_hmac_sha2_256_hash(session, out, seqno, packet,
+                                         packet_len, addtl, addtl_len, abstract);
+}
+
+int libssh2_test_hmac256_dtor(LIBSSH2_SESSION *session, void **abstract)
+{
+    return mac_method_hmac_sha2_256_dtor(session, abstract);
+}
+
+int libssh2_test_hmac256_invalidate(void **abstract)
+{
+    LIBSSH2_HMAC_SHA256_STATE *state;
+    if(!abstract || !*abstract)
+        return 1;
+    state = (LIBSSH2_HMAC_SHA256_STATE *)*abstract;
+    EVP_MAC_CTX_free(state->ctx);
+    state->ctx = NULL;
+    return 0;
+}
+#endif
+'''
+    if src.count(anchor) != 1:
+        raise RuntimeError("R65-B HMAC insertion point not unique")
+    src = src.replace(anchor, test_api + anchor, 1)
+    path.write_text(src)
 
 
 def patch(root: Path) -> None:
@@ -152,13 +186,13 @@ def patch(root: Path) -> None:
         raise RuntimeError("R66 hardening is pinned to libssh2 1.11.1")
     if (root / MARKER).exists():
         raise RuntimeError("R66 crypto hardening patch marker already exists")
-
     patch_fullpacket(root)
     patch_transport_read(root)
+    patch_mac_test_accessors(root)
     (root / MARKER).write_text(
         "R66 crypto hardening: MAC RX cleanup and minimum SSH padding validation\n"
     )
-    print("PASS: R66 transport and MAC RX hardening applied")
+    print("PASS: R66 transport/padding hardening and test-only HMAC callback accessors applied")
 
 
 if __name__ == "__main__":
