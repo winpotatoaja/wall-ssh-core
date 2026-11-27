@@ -264,6 +264,10 @@ test_rejections(void)
     if(checked_outofplace_update(ctx, overlap + 1U, overlap + 64U, 17U) == 0 ||
        memcmp(overlap, snapshot, sizeof(overlap)) != 0)
         goto cleanup;
+    /* SSH framing rejects a 35,000-byte fragment: it is not 16-byte aligned. */
+    if(checked_outofplace_update(ctx, overlap + 1U, overlap + 64U, 35000U) == 0 ||
+       memcmp(overlap, snapshot, sizeof(overlap)) != 0)
+        goto cleanup;
     if(checked_outofplace_update(ctx, (unsigned char *)(uintptr_t)1U,
                                  (const unsigned char *)(uintptr_t)2U,
                                  (size_t)INT_MAX + 1U) == 0)

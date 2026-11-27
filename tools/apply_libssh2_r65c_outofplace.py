@@ -167,7 +167,7 @@ def patch_openssl_backend(root: Path) -> None:
         s,
         "#include <stdlib.h>\n#include <assert.h>\n#include <limits.h>\n",
         "#include <stdlib.h>\n#include <assert.h>\n#include <limits.h>\n"
-        "#include <stdint.h>\n",
+        "#include <stdint.h>\n#include <openssl/obj_mac.h>\n",
         "include uintptr_t definitions"
     )
     helper = r'''#if defined(LIBSSH2_CRYPT_HAS_CTR_BULK)

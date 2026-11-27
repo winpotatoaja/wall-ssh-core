@@ -144,7 +144,7 @@ def main():
               "ctr_rx_copy_bytes +=" not in bulk and
               "ctr_rx_copy_ns +=" not in bulk,
               "R65-A EVP/bulk telemetry remains while bulk copy telemetry stays zero"),
-        check("if(!IS_FIRST(firstlast))" in decrypt and
+        check("!IS_FIRST(firstlast)" in decrypt and
               "memcpy(dest, source, decryptlen)" in decrypt,
               "FIRST_BLOCK and the non-bulk fallback retain their original transport path"),
         check("EVP_MAC_init(ctx, NULL, 0, NULL)" in mac and
