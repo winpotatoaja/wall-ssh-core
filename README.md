@@ -46,4 +46,4 @@ R65-C menghapus copy RX bulk, tetapi total waktu jalur dekripsi sedikit memburuk
 ## Status
 
 R65-C sebagai baseline: SDK dan MT7621 QEMU lulus pada Actions #905.  
-R65-D: source, benchmark, dan workflow disiapkan; hasil build/runtime belum dinyatakan.
+R65-D: source, benchmark, dan workflow telah dipush; hasil SDK/QEMU masih pending.
