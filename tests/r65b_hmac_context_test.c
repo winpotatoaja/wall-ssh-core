@@ -151,7 +151,7 @@ fail:
     return 0;
 }
 
-static int test_init_update_final_failures(void)
+static int test_init_and_final_failures(void)
 {
     unsigned char key[32];
     unsigned char sb[4] = {0, 0, 0, 1};
@@ -176,14 +176,6 @@ static int test_init_update_final_failures(void)
     missing_key[1] = OSSL_PARAM_construct_end();
     missing_key[2] = OSSL_PARAM_construct_end();
     if(EVP_MAC_init(ctx, NULL, 0, missing_key) == 1)
-        goto fail;
-    EVP_MAC_CTX_free(ctx);
-
-    ctx = ctx_new_keyed(key);
-    if(!ctx)
-        goto fail;
-    ok = EVP_MAC_update(ctx, NULL, 1);
-    if(ok == 1)
         goto fail;
     EVP_MAC_CTX_free(ctx);
 
@@ -275,7 +267,7 @@ int main(void)
     }
 
     if(!run_direction(0, txkey) || !run_direction(1, rxkey) ||
-       !test_rekey_and_reuse() || !test_init_update_final_failures()) {
+       !test_rekey_and_reuse() || !test_init_and_final_failures()) {
         EVP_MAC_free(g_hmac);
         OPENSSL_cleanse(txkey, sizeof(txkey));
         OPENSSL_cleanse(rxkey, sizeof(rxkey));

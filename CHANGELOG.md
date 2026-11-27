@@ -8,6 +8,7 @@
 - Add direct tests of the actual libssh2 HMAC callbacks for standard/ETM argument shapes, TX/RX keys, context reuse, rekey, fail-closed handling, and independent session state.
 - Exercise both OpenSSL 3.x context reset and the test-forced EVP_MAC_CTX_dup compatibility code path. The latter validates the branch logic on the installed OpenSSL provider; it is not a separate run on OpenSSL 3.0.0/3.0.2.
 - Remove the per-client `[S2C WINDOW]` diagnostic and its mismatch warning from the production SOCKS client path. No replacement message is emitted.
+- Removed a pre-existing native-helper test that called `EVP_MAC_update(ctx, NULL, 1)`; some OpenSSL providers segfault on that invalid API input rather than returning an error. Retained safe initialization and undersized-final-output failure checks.
 - SDK/QEMU validation for this follow-up is pending.
 
 
