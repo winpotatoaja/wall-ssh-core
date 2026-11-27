@@ -1,14 +1,10 @@
-# R65-D change log
+# R65-E change log
 
-## 2026-11-27 — AES-128-CTR alignment investigation
+## 2026-11-27 — realistic AES-CTR RX workload investigation
 
-- Branch `experiment/r65d-aes-ctr-alignment` dibuat dari R65-C commit `a0defe54e7fe8b1bb47d3a8af3c463b6ac0ebfc1`.
-- Analisis ulang log mentah R65-B/R65-C QEMU: non-ETM R65-B total EVP + copy 51.05 ms/MiB, R65-C out-of-place EVP 52.46 ms/MiB (+2.76%). ETM R65-B 42.66 ms/MiB, R65-C 44.31 ms/MiB (+3.88%).
-- Ditambahkan telemetry residue modulo 16 untuk source dan destination pada jalur AES-CTR RX bulk R65-C. Telemetry disalurkan melalui diagnostic snapshot dan PERF-CTR.
-- Ditambahkan benchmark OpenSSL 3 untuk 256 pasangan source/destination alignment, membandingkan EVP in-place + copy dengan EVP out-of-place. Setiap metode memverifikasi plaintext; kandidat out-of-place juga memastikan ciphertext sumber tidak berubah.
-- Operasi cipher produksi tetap tidak berubah.
-- Actions #909 SDK job: SUCCESS. R65-D patcher dan source validator lulus; OpenWrt IPK dibangun; MIPS32r2 little-endian benchmark helper dikompilasi dan diunggah.
-- Native x86/OpenSSL 3.0.13 benchmark: 256/256 pasangan lulus. Median in-place EVP + copy 119,856 ns/MiB; out-of-place EVP 98,574 ns/MiB (-17.76%). Ini hanya hasil x86 host dan bukan kesimpulan untuk MT7621.
-- Same-run MT7621 QEMU job: SUCCESS pada Actions #909. MIPS alignment matrix 256/256 lulus; median in-place EVP + copy 52,726,548 ns/MiB vs out-of-place 41,650,284 ns/MiB (-21.01%). Out-of-place menang pada seluruh pasangan; pasangan pointer yang teramati di transport: non-ETM (12,11) -15.29% dan ETM (4,15) -16.04%.
-- PERF-CTR runtime masks: non-ETM source residues 12 (kadang 4), destination 11; ETM source 4, destination 15. Copy RX bulk tetap 0.
-- Transfer QEMU 32 MiB + SHA-256: non-ETM 9.541 MiB/s dengan EVP 52.44 ms/MiB; ETM 9.240 MiB/s dengan EVP 44.95 ms/MiB. Profil transfer nyata tidak menunjukkan peningkatan sebanding dengan microbenchmark; hasil antar-run bukan A/B terkontrol. R65-D tetap diagnostic/benchmark-only, tidak mengubah strategi crypto produksi.
+- Created isolated branch \`experiment/r65e-aes-ctr-realistic-bench\` from validated R65-D commit \`e0406352787b22aa5a0dad663f6c6ee4d3d50096\`.
+- Recomputed R65-D runtime bulk RX averages from guest logs: non-ETM 16,105 bytes/call; ETM 28,938 bytes/call, unlike the previous 16 KiB-only microbenchmark.
+- Added runtime 4 KiB call-size histogram and exact min/max packet lengths.
+- Added backend-only EVP timing and separated it from total bridge/dispatch/outer-call timing. The timer is optional and enabled only for diagnostics.
+- Added MIPS benchmark matrix: 3 observed alignment pairs × 3 update sizes (16/29/32 KiB) × 3 working sets (256 KiB/4 MiB/32 MiB) × 5 trials. Baseline is in-place EVP plus packet-by-packet memcpy; candidate is out-of-place EVP.
+- Production cipher operation remains unchanged. SDK/QEMU validation: pending.
