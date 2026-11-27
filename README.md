@@ -17,24 +17,44 @@ R68 memulai perbaikan diagnostik antrean yang ditemukan saat audit R67:
 
 Regression test R68 mengekstrak helper C yang benar-benar dihasilkan template patch R43, mengompilasinya, lalu menguji lifecycle payload. Pemeriksaan terhadap source libssh2 hasil patch juga disiapkan untuk tahap SDK.
 
-Tidak ada perubahan pada jalur transfer, cipher, buffer, worker, atau prioritas RX/TX. R68 saat ini merupakan koreksi accounting diagnostik; validasi SDK dan QEMU belum dijalankan.
+Tidak ada perubahan pada jalur transfer, cipher, buffer, worker, atau prioritas RX/TX. Koreksi accounting dan regression test R68 sudah lulus pada helper native serta source libssh2 1.11.1 hasil patch. Namun validasi package SDK belum selesai: Actions #933 berhenti pada source gate warisan R66 yang masih meminta versi paket dan nama artifact `r66`; job QEMU dilewati karena SDK gagal.
 
 ## Progress pengerjaan R68
 
 **Update: 2026-11-27**
 
-| Tahap | Status | Catatan |
+| Pemeriksaan | Status | Catatan |
 |---|---|---|
 | Branch R68 dari R67-DIAG | Selesai | `experiment/r68-queue-accounting` |
-| Koreksi satuan byte enqueue | Selesai | Enqueue kini menambahkan `data_len - data_head`, konsisten dengan konsumsi, dequeue, dan baseline |
-| Regression helper C | Lulus lokal | 16 assertion; dikompilasi dengan GCC `-Wall -Wextra -Werror`, termasuk DATA, EXTENDED_DATA, partial read, packet removal, flush, dan control packet |
-| Sintaks regression Python | Lulus lokal | Salinan test harness berhasil melalui `py_compile` |
-| Integrasi regression terhadap source libssh2 hasil patch | Menunggu SDK | Workflow memeriksa `packet.c`, `channel.c`, `session.c`, dan `libssh2_priv.h` hasil patch |
-| SDK OpenWrt 24.10.7 / IPK R68 | Menunggu | Belum dijalankan |
-| QEMU MT7621 | Menunggu | Belum dijalankan |
-| Benchmark throughput | Menunggu | Tidak ada tuning performa pada R68-A |
+| R68-A: koreksi enqueue menjadi payload tersisa | Selesai | Counter memakai `data_len - data_head`; header DATA 9 byte dan EXTENDED_DATA 13 byte tidak ikut dihitung |
+| R68-A/B: regression helper native | Lulus | Actions #933 — langkah native regression sukses; test R68 menyelesaikan assertion helper |
+| R68-A/B: integrasi dengan source libssh2 1.11.1 hasil patch | Lulus | Test R68 dijalankan pada source hasil `apply_libssh2_r43_diag.py`; lifecycle accounting yang saat ini tercakup lulus |
+| R68-B: seluruh lifecycle + invariant snapshot/reset | Belum lengkap | Perlu melengkapi cakupan lifecycle serta assertion eksplisit untuk konsistensi snapshot/reset, current, dan peak |
+| R68-C: telemetry TLS worker fairness | Belum dimulai | Diagnostik saja; tidak mengubah scheduling atau transfer |
+| R68-D: umur antrean S2C + TCP_INFO + SIOCOUTQNSD | Belum dimulai | Diagnostik saja; tidak mengubah backpressure atau ownership socket |
+| R68-E: analisis sebelum optimasi | Belum dilakukan | Menunggu bukti dari B/C/D; optimasi belum boleh diasumsikan perlu |
+| Build package SDK OpenWrt 24.10.7 / IPK R68 | Gagal pada source gate workflow | Belum ada IPK R68 tervalidasi. Dua assertion masih mengharapkan release dan nama artifact `r66` |
+| QEMU MT7621 | Dilewati | Job VM bergantung pada keberhasilan job SDK |
+| Benchmark throughput | Belum dijalankan | Tidak ada tuning performa R68 yang diuji |
 
-**Batas validasi lokal:** helper C dan skenario accounting sudah diuji secara native. Pemeriksaan terhadap hasil patch libssh2 yang dibuat dari source OpenWrt serta build target MIPS32 tetap menunggu job SDK. Status ini tidak boleh dianggap sebagai SDK/QEMU pass.
+### Detail kegagalan Actions #933
+
+Run: [Actions #933 — `45981132744`](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/45981132744)  
+Commit pemicu: `63810db3a20d9ed51bc68546f81dcf0e4e3b4abe`
+
+Yang sudah lulus sebelum job berhenti:
+- Native regression relay-core/SPSC, termasuk regression helper R68.
+- Download dan verifikasi checksum OpenWrt 24.10.7 SDK.
+- Regression R68 terhadap source libssh2 1.11.1 yang sudah menerima patch R43.
+- Pemeriksaan source crypto dan transport yang dijalankan sebelum final profile gate.
+
+Penyebab dua assertion gagal:
+- `OpenWrt package release is exactly r66`
+- `SDK/VM artifact names and embedded IPK metadata target r66`
+
+Keduanya merupakan ekspektasi versi/nama dari source gate final R66 yang belum disesuaikan untuk cabang paket R68. Tidak ada assertion accounting R68 yang gagal pada log run ini. Karena shell menggunakan fail-fast, build IPK R68 tidak mencapai tahap selesai; job VM/QEMU kemudian berstatus skipped.
+
+**Tindak lanjut sebelum mengulang SDK:** sesuaikan pemeriksaan release/artifact pada `tests/r66_final_profile_source_test.py` agar mempertahankan pemeriksaan profil crypto final R66 tetapi menerima identitas paket R68 pada branch ini. Setelah gate diperbaiki, ulangi SDK; QEMU hanya dijalankan setelah SDK sukses.
 
 ## Profil crypto final
 
@@ -123,4 +143,4 @@ Tujuan diagnostik adalah membedakan penumpukan pada socket upstream, ring buffer
 
 ## Status
 
-**R68 — native packet-queue helper regression is prepared; SDK/QEMU validation pending.**
+**R68 — packet queue accounting fix and current source regressions pass; SDK/IPK validation is blocked by stale R66 release/artifact assertions in the workflow. R68-B snapshot/lifecycle completion, C/D diagnostics, and E analysis remain pending.**
