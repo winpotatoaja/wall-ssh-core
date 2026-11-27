@@ -97,7 +97,8 @@ def main():
               kex.count("_libssh2_explicit_zero(key, session->local.mac->key_len)") >= 3 and
               kex.count("_libssh2_explicit_zero(key, session->remote.mac->key_len)") >= 3,
               "all six KEX MAC init paths check errors and wipe/free the derived key"),
-        check(fullpacket.count("if(mac_rc)") == 2 and
+        check(fullpacket.count("int mac_rc;") == 2 and
+              fullpacket.count("if(mac_rc)") == 2 and
               fullpacket.count("return LIBSSH2_ERROR_MAC_FAILURE;") >= 2 and
               fullpacket.index("if(mac_rc)") < fullpacket.index("memcmp(macbuf"),
               "both RX MAC callback failures abort before compare/decrypt"),

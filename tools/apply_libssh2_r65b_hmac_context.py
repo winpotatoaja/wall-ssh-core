@@ -359,18 +359,21 @@ def patch_rx(root):
     for old, new, label in pairs:
         fn = once(fn, old, new, label)
 
-    fn = once(fn,
+    declaration_anchor = (
         "                unsigned long long mac_end_ns;\n"
-        "                /* store hash here */",
-        "                unsigned long long mac_end_ns;\n"
-        "                int mac_rc;\n"
-        "                /* store hash here */", "declare ETM mac_rc")
-    fn = once(fn,
-        "                unsigned long long mac_end_ns;\n"
-        "                /* store hash here */",
+        "                /* store hash here */"
+    )
+    declaration_replacement = (
         "                unsigned long long mac_end_ns;\n"
         "                int mac_rc;\n"
-        "                /* store hash here */", "declare non-ETM mac_rc")
+        "                /* store hash here */"
+    )
+    declaration_count = fn.count(declaration_anchor)
+    if declaration_count != 2:
+        raise RuntimeError(
+            f"declare ETM/non-ETM mac_rc: expected 2 anchors, found {declaration_count}"
+        )
+    fn = fn.replace(declaration_anchor, declaration_replacement)
     p.write_text(s[:start] + fn + s[end:])
 
 
