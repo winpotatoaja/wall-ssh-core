@@ -47,7 +47,7 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | R68-C: telemetry TLS worker fairness | Belum dimulai | Diagnostik saja; tidak mengubah scheduling atau transfer |
 | R68-D: umur antrean S2C + TCP_INFO + SIOCOUTQNSD | Belum dimulai | Diagnostik saja; tidak mengubah backpressure atau ownership socket |
 | R68-E: analisis sebelum optimasi | Belum dilakukan | Menunggu bukti dari B/C/D; optimasi belum boleh diasumsikan perlu |
-| Build package SDK OpenWrt 24.10.7 / IPK R68 | Gagal pada source gate workflow | Belum ada IPK R68 tervalidasi. Dua assertion masih mengharapkan release dan nama artifact `r66` |
+| Source gate profil crypto final + identitas paket R68 | Diperbaiki | Test tetap memverifikasi profil R64/R65-B/R66, tetapi sekarang mengharapkan `PKG_RELEASE:=68`, artifact dan metadata IPK `r68` |\n| Build package SDK OpenWrt 24.10.7 / IPK R68 | Menunggu rerun | Belum ada IPK R68 tervalidasi setelah perbaikan gate |
 | QEMU MT7621 | Dilewati | Job VM bergantung pada keberhasilan job SDK |
 | Benchmark throughput | Belum dijalankan | Tidak ada tuning performa R68 yang diuji |
 
@@ -68,7 +68,7 @@ Penyebab dua assertion gagal:
 
 Keduanya merupakan ekspektasi versi/nama dari source gate final R66 yang belum disesuaikan untuk cabang paket R68. Tidak ada assertion accounting R68 yang gagal pada log run ini. Karena shell menggunakan fail-fast, build IPK R68 tidak mencapai tahap selesai; job VM/QEMU kemudian berstatus skipped.
 
-**Tindak lanjut sebelum mengulang SDK:** sesuaikan pemeriksaan release/artifact pada `tests/r66_final_profile_source_test.py` agar mempertahankan pemeriksaan profil crypto final R66 tetapi menerima identitas paket R68 pada branch ini. Setelah gate diperbaiki, ulangi SDK; QEMU hanya dijalankan setelah SDK sukses.
+**Perbaikan source gate:** commit `94042ba13363f46729fe106bae510b4f3ce97f5f` mengubah pemeriksaan stale dari `r67` menjadi identitas paket R68 pada `tests/r66_final_profile_source_test.py`. Pemeriksaan profil crypto final tetap utuh: R64 in-place AES-CTR + copy, R65-B HMAC context reuse, dan absennya patcher eksperimen R65-C/D/E. Build SDK/IPK perlu dijalankan ulang untuk membuktikan gate dan package target lulus; QEMU hanya dijalankan setelah SDK sukses.
 
 ## Profil crypto final
 
@@ -157,4 +157,4 @@ Tujuan diagnostik adalah membedakan penumpukan pada socket upstream, ring buffer
 
 ## Status
 
-**R68 — packet queue accounting fix and current source regressions pass; SDK/IPK validation is blocked by stale R66 release/artifact assertions in the workflow. R68-B snapshot/lifecycle completion, C/D diagnostics, and E analysis remain pending.**
+**R68 — packet queue accounting fix and source regressions pass. The stale package-version assertions in the final-profile gate are corrected for r68; SDK/IPK rerun is the next validation. R68-B snapshot/lifecycle completion, C/D diagnostics, and E analysis remain pending.**
