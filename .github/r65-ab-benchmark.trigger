@@ -1,0 +1,10 @@
+benchmark=R65-A-vs-R65-B
+r65a_run_id=45917988440
+r65a_source_sha=c419f4576bc46e7f8b30ff56ecbfcce71d00a1e
+r65b_run_id=45921040962
+r65b_source_sha=dc0454d93a93afc94e8024f6346b54eb3ccd07d7
+profiles=chacha,nonetm,etm
+throughput_order=A1,B1,B2,A2
+transfer_bytes=100MB
+transfer_timeout_seconds=50
+perf_profile_timeout_seconds=12
