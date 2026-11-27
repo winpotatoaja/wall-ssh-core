@@ -102,6 +102,86 @@ def check_tlsfair_log(path):
           file=sys.stderr)
     return False
 
+S2CAGE_REQUIRED = (
+    "span_ms", "nonempty_clients", "age_samples", "age_untracked",
+    "age_us_avg", "age_us_max",
+)
+
+TCPINFO_REQUIRED = (
+    "span_ms", "samples", "fail", "rtt_us_avg", "rtt_us_max",
+    "rttvar_us_max", "unacked_segments_sum", "unacked_segments_max",
+    "snd_cwnd_segments_sum", "snd_cwnd_segments_max", "total_retrans_sum",
+    "total_retrans_max", "notsent_supported", "notsent_samples",
+    "notsent_fail", "notsent_bytes_sum", "notsent_bytes_max",
+)
+
+def parse_tag(line, tag):
+    return dict(FIELD_RE.findall(line)) if f"[{tag}]" in line else None
+
+def valid_s2cage(fields):
+    if not fields or any(k not in fields for k in S2CAGE_REQUIRED):
+        return False, "missing S2CAGE fields"
+    try: v = {k: int(fields[k], 10) for k in S2CAGE_REQUIRED}
+    except ValueError: return False, "non-integer S2CAGE field"
+    if v["span_ms"] < 1000: return False, "S2CAGE interval below one second"
+    if v["age_samples"] > v["nonempty_clients"] or v["age_untracked"] > v["nonempty_clients"]:
+        return False, "S2CAGE sample counts exceed nonempty clients"
+    if v["age_samples"] + v["age_untracked"] > v["nonempty_clients"]:
+        return False, "S2CAGE tracked and untracked counts exceed clients"
+    if v["age_us_avg"] > v["age_us_max"]:
+        return False, "S2CAGE average age exceeds maximum"
+    if v["age_samples"] == 0 and (v["age_us_avg"] or v["age_us_max"]):
+        return False, "S2CAGE age present without samples"
+    return True, "valid"
+
+def valid_tcpinfo(fields):
+    if not fields or any(k not in fields for k in TCPINFO_REQUIRED):
+        return False, "missing TCPINFO fields"
+    try: v = {k: int(fields[k], 10) for k in TCPINFO_REQUIRED}
+    except ValueError: return False, "non-integer TCPINFO field"
+    if v["span_ms"] < 1000: return False, "TCPINFO interval below one second"
+    if v["notsent_supported"] not in (0, 1):
+        return False, "invalid SIOCOUTQNSD support flag"
+    if v["rtt_us_avg"] > v["rtt_us_max"]:
+        return False, "TCP RTT average exceeds maximum"
+    if v["unacked_segments_max"] > v["unacked_segments_sum"]:
+        return False, "TCP unacked maximum exceeds sum"
+    if v["snd_cwnd_segments_max"] > v["snd_cwnd_segments_sum"]:
+        return False, "TCP congestion window maximum exceeds sum"
+    if v["total_retrans_max"] > v["total_retrans_sum"]:
+        return False, "TCP retransmit maximum exceeds sum"
+    if v["notsent_bytes_max"] > v["notsent_bytes_sum"]:
+        return False, "notsent maximum exceeds sum"
+    if v["samples"] == 0 and any(v[k] for k in (
+        "rtt_us_avg", "rtt_us_max", "rttvar_us_max", "unacked_segments_sum",
+        "unacked_segments_max", "snd_cwnd_segments_sum",
+        "snd_cwnd_segments_max", "total_retrans_sum", "total_retrans_max"
+    )):
+        return False, "TCPINFO metrics present without samples"
+    if v["notsent_supported"] == 0 and (
+        v["notsent_samples"] or v["notsent_fail"] or
+        v["notsent_bytes_sum"] or v["notsent_bytes_max"]
+    ):
+        return False, "unsupported SIOCOUTQNSD reports measurements"
+    return True, "valid"
+
+def check_tag_log(path, tag, validator):
+    try: lines = Path(path).read_text(errors="replace").splitlines()
+    except OSError as exc:
+        print(f"FAIL: cannot read {tag} log {path}: {exc}", file=sys.stderr); return False
+    seen = 0
+    for line in lines:
+        fields = parse_tag(line, tag)
+        if fields is None: continue
+        seen += 1
+        ok, reason = validator(fields)
+        if ok:
+            print(f"PASS: {tag} interval ({fields.get('span_ms')} ms)")
+            return True
+    print(f"FAIL: no valid {tag} record in {path} (records_seen={seen})",
+          file=sys.stderr)
+    return False
+
 def self_test():
     sample = "[QUEUE] span_ms=1004 transport=TLS up_rxq_valid=1 up_rxq_bytes=0 up_txq_valid=1 up_txq_bytes=12 tls_rx_buffered_bytes=7 tls_tx_buffered_bytes=9 tls_queue_capacity_bytes=65536 socks_clients=1 socks_rxq_samples=1 socks_rxq_bytes_sum=10 socks_rxq_bytes_max=10 socks_rxq_fail=0 socks_txq_samples=1 socks_txq_bytes_sum=20 socks_txq_bytes_max=20 socks_txq_fail=0 c2s_ring_bytes_sum=0 c2s_ring_bytes_max=0 s2c_ring_bytes_sum=4 s2c_ring_bytes_max=4"
     fields = parse(sample)
@@ -116,13 +196,30 @@ def self_test():
         "tx_both_ready":"4", "tx_while_rx_buffered":"7", "tx_burst_max":"6",
         "rx_ring_full":"0",
     }
+    s2cage_sample = {
+        "span_ms":"1001", "nonempty_clients":"2", "age_samples":"2",
+        "age_untracked":"0", "age_us_avg":"2500", "age_us_max":"4000",
+    }
+    tcpinfo_sample = {
+        "span_ms":"1001", "samples":"2", "fail":"0", "rtt_us_avg":"1200",
+        "rtt_us_max":"1800", "rttvar_us_max":"300", "unacked_segments_sum":"3",
+        "unacked_segments_max":"2", "snd_cwnd_segments_sum":"20",
+        "snd_cwnd_segments_max":"12", "total_retrans_sum":"1",
+        "total_retrans_max":"1", "notsent_supported":"1", "notsent_samples":"2",
+        "notsent_fail":"0", "notsent_bytes_sum":"4096", "notsent_bytes_max":"4096",
+    }
     checks = [(valid(fields, "TLS")[0], "complete TLS record accepted"),
               (not valid(fields, "TCP")[0], "transport mismatch rejected"),
               (not valid({**fields, "up_rxq_valid":"0"}, "TLS")[0], "invalid ioctl rejected"),
               (not valid({**fields, "tls_rx_buffered_bytes":"65537"}, "TLS")[0], "TLS over-capacity record rejected"),
               (valid_tlsfair(fair_sample)[0], "complete TLS fairness interval accepted"),
               (not valid_tlsfair({**fair_sample, "tx_bytes":"0"})[0], "empty TX activity rejected"),
-              (not valid_tlsfair({**fair_sample, "rx_ok":"25"})[0], "success count above attempt count rejected")]
+              (not valid_tlsfair({**fair_sample, "rx_ok":"25"})[0], "success count above attempt count rejected"),
+              (valid_s2cage(s2cage_sample)[0], "complete S2C age interval accepted"),
+              (not valid_s2cage({**s2cage_sample, "age_us_avg":"5000"})[0], "S2C age average above max rejected"),
+              (valid_tcpinfo(tcpinfo_sample)[0], "complete TCP_INFO/SIOCOUTQNSD interval accepted"),
+              (valid_tcpinfo({**tcpinfo_sample, "notsent_supported":"0", "notsent_samples":"0", "notsent_fail":"0", "notsent_bytes_sum":"0", "notsent_bytes_max":"0"})[0], "unsupported SIOCOUTQNSD fallback accepted"),
+              (not valid_tcpinfo({**tcpinfo_sample, "notsent_bytes_max":"8192"})[0], "notsent maximum above sum rejected")]
     passed = True
     for ok, label in checks:
         print(("PASS: " if ok else "FAIL: ") + label); passed = passed and ok
@@ -134,7 +231,11 @@ def main():
         print("usage: r67_queue_runtime_test.py TCP_LOG TLS_LOG", file=sys.stderr); return 2
     if not check_log(sys.argv[1], "TCP"): return 1
     if not check_log(sys.argv[2], "TLS"): return 1
-    return 0 if check_tlsfair_log(sys.argv[2]) else 1
+    if not check_tlsfair_log(sys.argv[2]): return 1
+    for path in sys.argv[1:]:
+        if not check_tag_log(path, "S2CAGE", valid_s2cage): return 1
+        if not check_tag_log(path, "TCPINFO", valid_tcpinfo): return 1
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())

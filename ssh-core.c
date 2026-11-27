@@ -20,6 +20,7 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -393,6 +394,7 @@ typedef struct client_conn {
     int            c2s_post_eof_window_logged;
     size_t         c2s_peak_used;
     size_t         s2c_peak_used;
+    uint64_t       s2c_nonempty_since_ns;
     int            s2c_saturated;
     int            s2c_final_logged;
 
@@ -1548,6 +1550,38 @@ static int perf_socket_queue_bytes(int fd, unsigned long request,
     return 0;
 }
 
+static void perf_note_s2c_nonempty(client_conn_t *c, size_t previous_used)
+{
+    if (!g_log_perf || !c) return;
+    if (c->s2c.used == 0U) {
+        c->s2c_nonempty_since_ns = 0;
+        return;
+    }
+    if (previous_used == 0U || c->s2c_nonempty_since_ns == 0)
+        c->s2c_nonempty_since_ns = perf_now_ns();
+}
+
+/* TCP_INFO is sampled only by the SSH Owner; reject kernels returning a
+ * truncated structure before reading fields that were not supplied. */
+static int perf_tcp_info_snapshot(int fd, struct tcp_info *info)
+{
+    if (fd < 0 || !info) {
+        errno = EINVAL;
+        return -1;
+    }
+    memset(info, 0, sizeof(*info));
+    socklen_t info_len = (socklen_t)sizeof(*info);
+    if (getsockopt(fd, IPPROTO_TCP, TCP_INFO, info, &info_len) < 0)
+        return -1;
+    if ((size_t)info_len <
+        offsetof(struct tcp_info, tcpi_total_retrans) +
+        sizeof(info->tcpi_total_retrans)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return 0;
+}
+
 static void perf_begin(long long now) {
     if (!g_log_perf) return;
     memset(&g_perf_stats, 0, sizeof(g_perf_stats));
@@ -1599,6 +1633,20 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session,
     uint64_t socks_txq_sum = 0, socks_txq_max = 0;
     unsigned int socks_rxq_samples = 0, socks_txq_samples = 0;
     unsigned int socks_rxq_fail = 0, socks_txq_fail = 0;
+    uint64_t s2c_age_sum_us = 0, s2c_age_max_us = 0;
+    unsigned int s2c_age_samples = 0, s2c_age_untracked = 0;
+    uint64_t tcp_rtt_us_sum = 0, tcp_rtt_us_max = 0, tcp_rttvar_us_max = 0;
+    uint64_t tcp_unacked_segments_sum = 0, tcp_unacked_segments_max = 0;
+    uint64_t tcp_snd_cwnd_segments_sum = 0, tcp_snd_cwnd_segments_max = 0;
+    uint64_t tcp_total_retrans_sum = 0, tcp_total_retrans_max = 0;
+    uint64_t socks_notsent_bytes_sum = 0, socks_notsent_bytes_max = 0;
+    unsigned int tcp_info_samples = 0, tcp_info_fail = 0;
+    unsigned int socks_notsent_samples = 0, socks_notsent_fail = 0;
+    unsigned int socks_notsent_supported = 0;
+#if defined(SIOCOUTQNSD)
+    socks_notsent_supported = 1;
+#endif
+    uint64_t s2c_age_sample_now_ns = perf_now_ns();
     for (const client_conn_t *c = g_clients; c; c = c->next) {
         if (c->state != ST_RELAY) continue;
         relay_clients++;
@@ -1614,6 +1662,17 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session,
         if (c->s2c.used > s2c_used_max) s2c_used_max = c->s2c.used;
         if (c->s2c.used > 0) {
             s2c_nonempty_clients++;
+            if (c->s2c_nonempty_since_ns != 0 &&
+                s2c_age_sample_now_ns >= c->s2c_nonempty_since_ns) {
+                uint64_t age_us =
+                    (s2c_age_sample_now_ns - c->s2c_nonempty_since_ns) /
+                    UINT64_C(1000);
+                s2c_age_sum_us += age_us;
+                if (age_us > s2c_age_max_us) s2c_age_max_us = age_us;
+                s2c_age_samples++;
+            } else {
+                s2c_age_untracked++;
+            }
             if (c->fd >= 0 && (c->epoll_events & EPOLLOUT)) {
                 epollout_armed_clients++;
             } else if (c->fd >= 0 && !c->hup_pending && !c->client_dead) {
@@ -1633,6 +1692,39 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session,
                 if (queued > socks_txq_max) socks_txq_max = queued;
                 socks_txq_samples++;
             } else socks_txq_fail++;
+
+#if defined(SIOCOUTQNSD)
+            queued = 0;
+            if (perf_socket_queue_bytes(c->fd, SIOCOUTQNSD, &queued) == 0) {
+                socks_notsent_bytes_sum += queued;
+                if (queued > socks_notsent_bytes_max)
+                    socks_notsent_bytes_max = queued;
+                socks_notsent_samples++;
+            } else {
+                socks_notsent_fail++;
+            }
+#endif
+
+            struct tcp_info tcp_info;
+            if (perf_tcp_info_snapshot(c->fd, &tcp_info) == 0) {
+                tcp_info_samples++;
+                tcp_rtt_us_sum += tcp_info.tcpi_rtt;
+                if (tcp_info.tcpi_rtt > tcp_rtt_us_max)
+                    tcp_rtt_us_max = tcp_info.tcpi_rtt;
+                if (tcp_info.tcpi_rttvar > tcp_rttvar_us_max)
+                    tcp_rttvar_us_max = tcp_info.tcpi_rttvar;
+                tcp_unacked_segments_sum += tcp_info.tcpi_unacked;
+                if (tcp_info.tcpi_unacked > tcp_unacked_segments_max)
+                    tcp_unacked_segments_max = tcp_info.tcpi_unacked;
+                tcp_snd_cwnd_segments_sum += tcp_info.tcpi_snd_cwnd;
+                if (tcp_info.tcpi_snd_cwnd > tcp_snd_cwnd_segments_max)
+                    tcp_snd_cwnd_segments_max = tcp_info.tcpi_snd_cwnd;
+                tcp_total_retrans_sum += tcp_info.tcpi_total_retrans;
+                if (tcp_info.tcpi_total_retrans > tcp_total_retrans_max)
+                    tcp_total_retrans_max = tcp_info.tcpi_total_retrans;
+            } else {
+                tcp_info_fail++;
+            }
         }
     }
 
@@ -1813,6 +1905,35 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session,
             socks_txq_samples, (unsigned long long)socks_txq_sum,
             (unsigned long long)socks_txq_max, socks_txq_fail,
             c2s_used_sum, c2s_used_max, s2c_used_sum, s2c_used_max);
+
+    log_raw("[S2CAGE] span_ms=%lld nonempty_clients=%u age_samples=%u "
+            "age_untracked=%u age_us_avg=%llu age_us_max=%llu",
+            span_ms, s2c_nonempty_clients, s2c_age_samples, s2c_age_untracked,
+            (unsigned long long)(s2c_age_samples
+                ? s2c_age_sum_us / s2c_age_samples : 0),
+            (unsigned long long)s2c_age_max_us);
+
+    log_raw("[TCPINFO] span_ms=%lld samples=%u fail=%u "
+            "rtt_us_avg=%llu rtt_us_max=%llu rttvar_us_max=%llu "
+            "unacked_segments_sum=%llu unacked_segments_max=%llu "
+            "snd_cwnd_segments_sum=%llu snd_cwnd_segments_max=%llu "
+            "total_retrans_sum=%llu total_retrans_max=%llu "
+            "notsent_supported=%u notsent_samples=%u notsent_fail=%u "
+            "notsent_bytes_sum=%llu notsent_bytes_max=%llu",
+            span_ms, tcp_info_samples, tcp_info_fail,
+            (unsigned long long)(tcp_info_samples
+                ? tcp_rtt_us_sum / tcp_info_samples : 0),
+            (unsigned long long)tcp_rtt_us_max,
+            (unsigned long long)tcp_rttvar_us_max,
+            (unsigned long long)tcp_unacked_segments_sum,
+            (unsigned long long)tcp_unacked_segments_max,
+            (unsigned long long)tcp_snd_cwnd_segments_sum,
+            (unsigned long long)tcp_snd_cwnd_segments_max,
+            (unsigned long long)tcp_total_retrans_sum,
+            (unsigned long long)tcp_total_retrans_max,
+            socks_notsent_supported, socks_notsent_samples, socks_notsent_fail,
+            (unsigned long long)socks_notsent_bytes_sum,
+            (unsigned long long)socks_notsent_bytes_max);
 
     log_raw("[PERF-CHACHA] span_ms=%lld "
             "libssh2_chacha_workers_requested=%u libssh2_chacha_workers_active=%u "
@@ -3295,6 +3416,7 @@ static int flush_s2c_to_client(int epfd, client_conn_t *c) {
     size_t before = c->s2c.used;
     uint64_t tx_started_ns = g_log_perf ? perf_now_ns() : 0;
     int tx_rc = send_from_rb(c->fd, &c->s2c, 0);
+    perf_note_s2c_nonempty(c, before);
     if (g_log_perf) {
         g_perf_stats.socks_tx_flush_calls++;
         if (tx_started_ns != 0) {
@@ -4237,11 +4359,13 @@ static int resume_pending_op(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
 
         if (r > 0) {
             if (!discard_output) {
+                size_t s2c_before = c->s2c.used;
                 if ((size_t)r > rlen || rb_commit_write(&c->s2c, (size_t)r) < 0) {
                     log_red("S2C ring commit rejected after pending read");
                     clear_pending_operation();
                     return -1;
                 }
+                perf_note_s2c_nonempty(c, s2c_before);
                 if (g_log_perf && c->s2c.used == c->s2c.cap)
                     g_perf_stats.s2c_full++;
                 note_s2c_buffer_peak(c);
@@ -4640,6 +4764,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                     ssize_t r = channel_read_with_rx_flush(
                         u, c->channel, (char *)ptr, avail);
                     if (r > 0) {
+                        size_t s2c_before = c->s2c.used;
                         if ((size_t)r > avail || rb_commit_write(&c->s2c, (size_t)r) < 0) {
                             log_red("S2C ring commit rejected in relay pump");
                             *agg_dirs_out = agg_dirs;
@@ -4647,6 +4772,7 @@ static int pump_ssh_channels(int epfd, LIBSSH2_SESSION *session, upstream_ctx_t 
                             *did_ssh_read_out = did_ssh_read;
                             return -1;
                         }
+                        perf_note_s2c_nonempty(c, s2c_before);
                         did_ssh_read = 1;
                         if (g_log_perf && c->s2c.used == c->s2c.cap)
                             g_perf_stats.s2c_full++;

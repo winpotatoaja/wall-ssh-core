@@ -37,6 +37,27 @@ def main():
         check("engine_try_read_measured" in tls_c and "engine_try_write_measured" in tls_c and "rx_while_tx_pending" in tls_c and "tx_while_rx_buffered" in tls_c, "TLS worker measures RX/TX service and cross-direction backlog"),
         check("poll_wait_us" in tls_c and "poll_socket_both" in tls_c and "rx_ring_full" in tls_c, "TLS worker records wait time, simultaneous readiness and RX ring pressure"),
         check("SSL_read(" not in diag_api and "SSL_write(" not in diag_api and "poll(" not in diag_api, "fairness snapshot reads counters only and performs no I/O"),
+        check("uint64_t       s2c_nonempty_since_ns;" in ssh and
+              "perf_note_s2c_nonempty(c, s2c_before);" in ssh and
+              ssh.count("perf_note_s2c_nonempty(c, s2c_before);") == 2 and
+              "perf_note_s2c_nonempty(c, before);" in ssh,
+              "S2C nonempty episode timing follows both enqueue paths and the single client flush path"),
+        check("s2c_nonempty_age_us_max" in perf or
+              ('log_raw("[S2CAGE] span_ms=%lld' in perf and "s2c_nonempty_since_ns" in perf),
+              "S2C episode age is sampled and emitted per LOG_PERF interval"),
+        check("getsockopt(fd, IPPROTO_TCP, TCP_INFO" in ssh and
+              "tcpi_rtt" in ssh and "tcpi_rttvar" in ssh and
+              "tcpi_unacked" in ssh and "tcpi_snd_cwnd" in ssh and
+              "tcpi_total_retrans" in ssh and "offsetof(struct tcp_info" in ssh,
+              "TCP_INFO sampling validates returned structure length before reading fields"),
+        check("#if defined(SIOCOUTQNSD)" in ssh and
+              "perf_socket_queue_bytes(c->fd, SIOCOUTQNSD" in ssh and
+              "notsent_supported=%u" in ssh,
+              "SIOCOUTQNSD is compile-time guarded and reports support, samples and failures"),
+        check('log_raw("[TCPINFO] span_ms=%lld' in perf and
+              'log_raw("[S2CAGE] span_ms=%lld' in perf and
+              "if (!g_log_perf || !c) return;" in ssh,
+              "R68-D records remain read-only and LOG_PERF-gated"),
     ]
     if not all(checks): return 1
     print("PASS: R67 queue and R68-C TLS fairness diagnostics are read-only and LOG_PERF-gated")
