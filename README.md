@@ -26,7 +26,7 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | Tahap | Pekerjaan | Status / keputusan |
 |---|---|---|
 | **R68-A** | Koreksi counter libssh2 yang sebelumnya memasukkan header 9 byte (CHANNEL_DATA) dan 13 byte (EXTENDED_DATA) ke hitungan payload | **Selesai dan tervalidasi.** Bug accounting diperbaiki; helper native dan source libssh2 1.11.1 hasil patch lulus, IPK r68 berhasil dibangun, dan integrasi MT7621 QEMU lulus. |
-| **R68-B** | Uji seluruh lifecycle packet dan invariant snapshot | **Wajib; belum lengkap.** Regression saat ini sudah mencakup enqueue, partial read, penghapusan melalui packet-ask, channel-flush, DATA/EXTENDED_DATA, serta control packet. Masih perlu melengkapi matriks lifecycle dan membuktikan invariant current/peak serta perilaku snapshot/reset secara eksplisit. |
+| **R68-B** | Uji seluruh lifecycle packet dan invariant snapshot | **Test diperluas; menunggu validasi CI.** Selain enqueue/read/packet-ask/flush, harness sekarang mengompilasi helper dan API enable/snapshot aktual dari template patch untuk menguji baseline, snapshot non-reset, reset kosong/nonkosong, peak rebase, re-enable, disable, dan underflow protection. |
 | **R68-C** | Telemetry kondisi dan fairness TLS worker | **Direncanakan — diagnostik saja.** Catat kondisi kerja dan distribusi/fairness TLS worker untuk analisis. Tidak mengubah scheduler, pembagian tugas, jumlah worker, prioritas, atau perilaku transfer. |
 | **R68-D** | Durasi antrean S2C, TCP_INFO, dan SIOCOUTQNSD | **Direncanakan — diagnostik saja.** Tambahkan pengukuran umur/durasi data di antrean S2C serta snapshot informasi TCP/kernel send queue. Instrumentasi harus menjaga ownership socket dan tidak mengubah mekanisme backpressure. |
 | **R68-E** | Analisis hasil sebelum optimasi | **Belum dilakukan.** Gabungkan hasil B/C/D, identifikasi lokasi bottleneck berdasarkan bukti, lalu tentukan apakah optimasi memang diperlukan. Tidak ada optimasi spekulatif sebelum tahap analisis ini. |
@@ -44,7 +44,7 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | R68-A: helper regression native | Lulus | Actions #934: helper C aktual hasil ekstraksi template patch diuji dengan GCC |
 | R68-A: integrasi source libssh2 1.11.1 hasil patch | Lulus | Semua assertion R68 source-level lulus untuk packet.c, channel.c, session.c, dan libssh2_priv.h |
 | R68-B: lifecycle packet yang sudah dicakup | Lulus untuk kasus saat ini | Enqueue, partial read, packet-ask, channel-flush, DATA 9-byte header, EXTENDED_DATA 13-byte header, control packet, cumulative bytes, dan peak |
-| R68-B: seluruh lifecycle + invariant snapshot/reset | Belum lengkap | Masih perlu test eksplisit snapshot/reset, baseline enable, reset peak ke current, dan invariant current/peak pada seluruh urutan packet lifecycle |
+| R68-B: regression snapshot/lifecycle | Implementasi test ditambahkan; validasi menunggu CI | Menguji enable baseline, snapshot reset=0/1, reset saat queue kosong dan nonkosong, peak rebase ke current, re-enable, disable, null arguments, underflow, serta drain packet setelah reset |
 | R68-C: telemetry TLS worker fairness | Belum dimulai | Diagnostik saja; tidak mengubah scheduling atau transfer |
 | R68-D: umur antrean S2C + TCP_INFO + SIOCOUTQNSD | Belum dimulai | Diagnostik saja; tidak mengubah backpressure atau ownership socket |
 | R68-E: analisis sebelum optimasi | Belum dilakukan | Menunggu bukti dari B/C/D; optimasi belum boleh diasumsikan perlu |
@@ -71,6 +71,24 @@ Penyebab dua assertion gagal:
 Keduanya merupakan ekspektasi versi/nama dari source gate final R66 yang belum disesuaikan untuk cabang paket R68. Tidak ada assertion accounting R68 yang gagal pada log run ini. Karena shell menggunakan fail-fast, build IPK R68 tidak mencapai tahap selesai; job VM/QEMU kemudian berstatus skipped.
 
 **Perbaikan source gate:** commit `94042ba13363f46729fe106bae510b4f3ce97f5f` mengubah ekspektasi release/artifact stale menjadi identitas paket R68 pada `tests/r66_final_profile_source_test.py`. Pemeriksaan profil crypto final tetap utuh: R64 in-place AES-CTR + copy, R65-B HMAC context reuse, dan absennya patcher eksperimen R65-C/D/E.
+
+
+
+### R68-B — cakupan regression yang ditambahkan
+
+Harness `tests/r68_packet_queue_accounting_test.py` kini mengompilasi helper queue dan implementasi `libssh2_session_diag_timing_enable()` / `libssh2_session_diag_timing_snapshot()` langsung dari template patch R43 yang digunakan untuk menghasilkan source libssh2. Model list kecil hanya menyediakan struktur list/session; fungsi C yang diuji tetap diambil dari template aktual.
+
+Matriks tambahan:
+- Enable dari queue yang sudah berisi DATA, EXTENDED_DATA, dan control packet; baseline current serta peak harus sama dengan jumlah unread payload.
+- Snapshot `reset=0` harus mengembalikan data tanpa mengubah current/peak/cumulative counters.
+- Snapshot `reset=1` saat queue kosong harus mengembalikan interval sebelumnya lalu mengosongkan cumulative counters dan merebase peak ke current (nol).
+- Snapshot `reset=1` saat queue masih berisi data harus mempertahankan current, menghapus cumulative totals, dan merebase peak ke current yang tersisa, bukan mempertahankan peak interval lama.
+- Setelah reset, packet drain tetap harus mencapai current nol tanpa mengubah high-water mark interval baru.
+- Re-enable harus membangun ulang baseline dari packet list dan membersihkan counter lama; disable harus mengosongkan counter dan mematikan tracking.
+- API snapshot menolak pointer NULL; over-consume/duplicate dequeue tidak boleh menyebabkan unsigned counter wrap.
+- Integrasi source memeriksa bahwa `session.c` hasil patch memuat persis API enable/snapshot yang dikompilasi dan diuji oleh native harness.
+
+Test tambahan ini belum dianggap lulus sampai job CI R68 selesai.
 
 ### Hasil validasi berhasil — Actions #934
 
@@ -188,4 +206,4 @@ Tujuan diagnostik adalah membedakan penumpukan pada socket upstream, ring buffer
 
 ## Status
 
-**R68-A selesai: packet queue accounting fix lulus native/source regression, SDK OpenWrt 24.10.7, dan MT7621 QEMU. R68-B masih terbuka untuk melengkapi invariant snapshot/reset; R68-C/D belum dimulai dan R68-E belum dilakukan.**
+**R68-A selesai dan tervalidasi pada SDK/QEMU. Harness R68-B sudah diperluas untuk lifecycle dan snapshot/reset invariants; hasil validasi test baru menunggu CI. R68-C/D belum dimulai dan R68-E belum dilakukan.**
