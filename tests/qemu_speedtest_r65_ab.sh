@@ -543,12 +543,18 @@ main() {
                 return 2
             fi
         else
-            for FIELD in mac_sha256_ctx_allocs mac_sha256_key_inits mac_sha256_reuse_resets; do
-                if ! grep -Eq "${FIELD}=[1-9][0-9]*" "$RESULT/core.log"; then
-                    echo "ERROR: R65-B profiling did not record nonzero $FIELD" | tee -a "$RESULT/errors.log"
-                    return 2
-                fi
-            done
+            # Context allocation/key initialization happens during KEX, before
+            # libssh2 diagnostic timing is enabled after Session Keys Established.
+            # Validate the measured data path instead: reuse resets must occur,
+            # and the legacy per-call HMAC setup path must remain inactive.
+            if ! grep -Eq 'mac_sha256_reuse_resets=[1-9][0-9]*' "$RESULT/core.log"; then
+                echo "ERROR: R65-B profiling did not record HMAC context reuse resets" | tee -a "$RESULT/errors.log"
+                return 2
+            fi
+            if grep -Eq 'mac_sha256_setup_calls=[1-9][0-9]*' "$RESULT/core.log"; then
+                echo "ERROR: R65-B profiling unexpectedly used legacy per-call HMAC setup" | tee -a "$RESULT/errors.log"
+                return 2
+            fi
         fi
         {
             echo "R65 HMAC PROFILE CAPTURE (instrumented; not a throughput sample)"
