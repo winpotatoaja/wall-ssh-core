@@ -2,7 +2,8 @@
 
 Tanggal: 2026-11-27  
 Branch: **release/r66-final**  
-Basis final: R65-B commit dc0454d93a93afc94e8024f6346b54eb3ccd07d7  
+Commit final: \`41b101378ebda17e211d03be7ea7e7709f04f0ab\`  
+Basis crypto: R65-B commit \`dc0454d93a93afc94e8024f6346b54eb3ccd07d7\`  
 Paket: **1.0.0-r66**
 
 ## Profil crypto final
@@ -17,7 +18,7 @@ R65-C out-of-place tidak disertakan. R65-D/E hanya alat eksperimen dan tidak iku
 
 ## Bukti keputusan dari R65-E
 
-Actions #918, run 45942020408, commit R65-E 163d85697b2368e3a02753a1597fd66938c1c959, lulus SDK dan MT7621 QEMU. Guest menggunakan OpenSSL 3.0.22.
+Actions #918, run \`45942020408\`, commit R65-E \`163d85697b2368e3a02753a1597fd66938c1c959\`, lulus SDK dan MT7621 QEMU. Guest menggunakan OpenSSL 3.0.22.
 
 Benchmark MIPS membandingkan in-place EVP yang langsung diikuti memcpy per paket terhadap EVP out-of-place. Matriks: 3 pasangan alignment teramati, update 16/29/32 KiB, working set 256 KiB/4 MiB/32 MiB, lima sampel per konfigurasi.
 
@@ -39,24 +40,45 @@ Pemisahan waktu R65-E:
 
 Tidak ada alasan performa yang tervalidasi untuk mempromosikan jalur out-of-place. Angka di atas adalah hasil QEMU/CI, bukan klaim throughput router fisik.
 
-## Perubahan release R66
+## Hasil final R66 — Actions #919
 
-1. Naikkan package release OpenWrt menjadi **1.0.0-r66**.
-2. Pertahankan R64 in-place AES-CTR + copy serta R65-B HMAC context reuse.
-3. Pertahankan R65-A diagnostics; timer/counter tetap mengikuti flag diagnostics.
-4. Pastikan workflow final tidak menjalankan patcher R65-C/D/E.
-5. Jalankan native regressions, OpenWrt 24.10.7 mipsel_24kc SDK/IPK, lalu MT7621 QEMU memakai artifact SDK dari workflow run yang sama.
-6. Tambahkan R66 source gate untuk mencegah regresi jalur crypto final dan salah penamaan IPK/artifact.
+<badge color="success">SDK PASS</badge> <badge color="success">MT7621 QEMU PASS</badge>
 
-## Validasi final
+Run: [Actions #919 — \`45944954879\`](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/45944954879)  
+Source SHA: \`41b101378ebda17e211d03be7ea7e7709f04f0ab\`
 
-- [ ] R66 source gate memastikan AES-CTR in-place + copy aktif, HMAC reuse aktif, dan R65-C/D/E tidak diterapkan.
-- [ ] SDK menghasilkan passwall-ssh-core_1.0.0-r66_mipsel_24kc.ipk dengan control metadata 1.0.0-r66.
-- [ ] Job VM memvalidasi artifact SDK, checksum, dan ELF MIPS.
-- [ ] MT7621 OpenWrt 24.10.7 QEMU lulus regresi TCP/TLS, AES-CTR non-ETM/ETM, dan checksum.
-- [ ] SDK dan VM sukses pada satu workflow run serta source commit yang sama.
+Kedua job (\`sdk\` dan \`vm\`) berakhir **SUCCESS** pada source SHA yang sama. Semua langkah wajib SDK dan seluruh langkah VM selesai tanpa gagal; hanya job bandwidth datapacket opsional yang dilewati.
+
+Validasi package:
+- IPK dibangun: \`passwall-ssh-core_1.0.0-r66_mipsel_24kc.ipk\`
+- Control metadata diverifikasi sebagai \`Version: 1.0.0-r66\`.
+- SHA-256 IPK: \`3b67a40af48c532d3bd61394a843ec90504fb5123379a89254a1f78e956e3d9f\`
+- SDK artifact ID: \`15174341956\`
+- QEMU/guest artifact ID: \`15174981023\`
+
+Validasi crypto dan guest:
+- Source gate R66 lulus: R64 in-place AES-CTR + copy aktif, R65-B HMAC context reuse aktif, patch marker R65-C/D/E tidak ada.
+- Helper AES-CTR MIPS lulus **72 kasus**: bulk, in-place, loop 16-byte, irregular split, dekripsi, offset/alignment, dan counter-wrap.
+- Helper HMAC-SHA256 lulus untuk **2 arah × 2.048 pesan**.
+- AES-CTR **non-ETM dan ETM** sama-sama lulus transfer checksum; log verifikasi memastikan cipher ternegosiasi pada kedua arah, bulk-only counters, dan counter reuse HMAC.
+- Default SSH cipher tetap \`chacha20-poly1305@openssh.com\`; TLS 1.3 berhasil menegosiasikan \`TLS_CHACHA20_POLY1305_SHA256\`.
+- Uji single SSH session dengan 4 klien SOCKS menyelesaikan 4 × 32 MiB, semua SHA-256 cocok, aggregate **12.675 MiB/s** pada MT7621 QEMU.
+- Uji TCP full-duplex, half-close, reconnect setelah RST, serta uji TLS/SNI juga lulus.
+
+Artifact:
+- [IPK OpenWrt 24.10.7 mipsel_24kc](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/45944954879/artifacts/15174341956)
+- [Hasil integrasi MT7621 QEMU](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/45944954879/artifacts/15174981023)
+
+## Lingkup release R66
+
+1. Package release OpenWrt ditetapkan ke **1.0.0-r66**.
+2. Mempertahankan R64 in-place AES-CTR + copy serta R65-B HMAC context reuse.
+3. Mempertahankan R65-A diagnostics; timer/counter tetap mengikuti flag diagnostics.
+4. Workflow final tidak menjalankan patcher R65-C/D/E.
+5. SDK, IPK, dan firmware MT7621 QEMU divalidasi dalam satu workflow run dan satu source commit.
+6. Source gate R66 mencegah regresi jalur crypto final serta salah versi IPK/artifact.
 
 ## Status
 
-R65-E: PASS — Actions #918 (SDK + MT7621 QEMU).  
-R66: final source disiapkan; SDK/QEMU release gate menunggu hasil Actions.
+**R66 FINAL — SDK dan MT7621 QEMU lulus pada Actions #919.**  
+Package \`1.0.0-r66\` sudah dibangun, metadata dan checksum diverifikasi, dan seluruh integration test guest lulus.
