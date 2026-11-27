@@ -302,7 +302,7 @@ def main() -> int:
     data = {
         "environment": "OpenWrt 24.10.7 MT7621 QEMU (4 guest vCPU / 2 emulated cores), Datapacket Singapore HTTP 100 MB, 50 s transfer cap",
         "provenance": {
-            "R65-A": {"run_id": 45917988440, "source_sha": "c419f4576bc46e7f8b30ff56ecbfcce71d00a1e"},
+            "R65-A": {"run_id": 45917988440, "source_sha": "c419f4576bc46e7f8b30ff56ecb5fcce71d00a1e"},
             "R65-B": {"run_id": 45921040962, "source_sha": "dc0454d93a93afc94e8024f6346b54eb3ccd07d7"},
         },
         "profiles": throughput, "hmac_diagnostics": mac, "run_count": len(runs),
