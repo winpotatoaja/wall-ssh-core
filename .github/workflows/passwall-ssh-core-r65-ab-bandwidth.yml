@@ -83,16 +83,16 @@ jobs:
             test -n "$CORE_IPK"
             test -n "$LIBSSH2_IPK"
             CORE_CONTROL="$(tar -xOzf "$CORE_IPK" ./control.tar.gz | tar -xzO ./control)"
-            printf '%s\\n' "$CORE_CONTROL" | grep -Fq 'Package: passwall-ssh-core'
-            printf '%s\\n' "$CORE_CONTROL" | grep -Fq 'Version: 1.0.0-r65'
-            printf '%s\\n' "$CORE_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
+            printf '%s\n' "$CORE_CONTROL" | grep -Fq 'Package: passwall-ssh-core'
+            printf '%s\n' "$CORE_CONTROL" | grep -Fq 'Version: 1.0.0-r65'
+            printf '%s\n' "$CORE_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
             LIBSSH2_CONTROL="$(tar -xOzf "$LIBSSH2_IPK" ./control.tar.gz | tar -xzO ./control)"
-            printf '%s\\n' "$LIBSSH2_CONTROL" | grep -Fq 'Package: libssh2-1'
-            printf '%s\\n' "$LIBSSH2_CONTROL" | grep -Fq 'Version: 1.11.1-r1'
-            printf '%s\\n' "$LIBSSH2_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
+            printf '%s\n' "$LIBSSH2_CONTROL" | grep -Fq 'Package: libssh2-1'
+            printf '%s\n' "$LIBSSH2_CONTROL" | grep -Fq 'Version: 1.11.1-r1'
+            printf '%s\n' "$LIBSSH2_CONTROL" | grep -Fq 'Architecture: mipsel_24kc'
             test -s "$DIR/ipk.sha256"
             (cd "$DIR" && sha256sum -c ipk.sha256)
-            ACTUAL_SHA="$(tr -d '\\r\\n' < "$DIR/build-source.sha")"
+            ACTUAL_SHA="$(tr -d '\r\n' < "$DIR/build-source.sha")"
             if [ "$LABEL" = r65a ]; then EXPECTED_SHA="$R65A_SOURCE_SHA"; else EXPECTED_SHA="$R65B_SOURCE_SHA"; fi
             test "$ACTUAL_SHA" = "$EXPECTED_SHA"
             test -s "$DIR/diag-timer"
@@ -197,7 +197,7 @@ jobs:
           cd "$IB_DIR"
           make image PROFILE="zbtlink_zbt-wg3526-16m" PACKAGES="curl libopenssl libssh2" FILES="$FILES_DIR"
           echo "ImageBuilder completed; available firmware images:"
-          find bin/targets/ramips/mt7621 -maxdepth 1 -type f -printf '%f (%s bytes)\\n' | sort
+          find bin/targets/ramips/mt7621 -maxdepth 1 -type f -printf '%f (%s bytes)\n' | sort
           SYSUP="$(find bin/targets/ramips/mt7621 -maxdepth 1 -type f -name '*sysupgrade.bin' -print -quit)"
           if [ -z "$SYSUP" ]; then
             echo "No sysupgrade image was produced by ImageBuilder."
@@ -308,6 +308,8 @@ jobs:
             "$GITHUB_WORKSPACE/package-r65a" "$GITHUB_WORKSPACE/package-r65b" \
             "$GITHUB_WORKSPACE/tests/qemu_speedtest_r65_ab.sh" \
             root@127.0.0.1:/tmp/mips-test/
+          ssh "${SSH_OPTS[@]}" root@127.0.0.1 \
+            'cp /tmp/mips-test/package-r65a/diag-timer /tmp/mips-test/diag-timer && chmod 0700 /tmp/mips-test/diag-timer'
           ssh "${SSH_OPTS[@]}" root@127.0.0.1 \
             'chmod 0700 /tmp/mips-test/package-r65a/diag-timer /tmp/mips-test/qemu_speedtest_r65_ab.sh && DIAG_TIMER=/tmp/mips-test/package-r65a/diag-timer sh /tmp/mips-test/qemu_speedtest_r65_ab.sh --self-test'
 
