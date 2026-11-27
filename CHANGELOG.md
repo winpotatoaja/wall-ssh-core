@@ -9,7 +9,12 @@
 - Exercise both OpenSSL 3.x context reset and the test-forced EVP_MAC_CTX_dup compatibility code path. The latter validates the branch logic on the installed OpenSSL provider; it is not a separate run on OpenSSL 3.0.0/3.0.2.
 - Remove the per-client `[S2C WINDOW]` diagnostic and its mismatch warning from the production SOCKS client path. Retain only the silent initial-window read used by the R61 source invariant; no replacement message is emitted.
 - Removed a pre-existing native-helper test that called `EVP_MAC_update(ctx, NULL, 1)`; some OpenSSL providers segfault on that invalid API input rather than returning an error. Retained safe initialization and undersized-final-output failure checks.
-- SDK/QEMU validation for this follow-up is pending.
+- **SDK/QEMU validation PASS:** GitHub Actions run #45954357503, build source commit `d5bd88ac8e82c64a63f78c209750fcdf6560c832`; both SDK and VM jobs succeeded and MIPS guest test status was `0`.
+- Direct HMAC callback test passed in both normal context-reset and forced `EVP_MAC_CTX_dup` compatibility modes.
+- R66 source test confirmed MAC callback failure cleanup in ETM/non-ETM, authenticated minimum/maximum padding validation, and HMAC init argument guards.
+- MT7621 QEMU runtime passed TCP SOCKS transfers, RST reconnects, half-close, 32 MiB upload, four concurrent 32 MiB downloads over one SSH session, AES-128-CTR non-ETM/ETM checksums, and TLS/SNI multi-client checks.
+- TCP and TLS runtime logs both passed the check for absence of the `[S2C WINDOW]` diagnostic.
+- Built IPK: `passwall-ssh-core_1.0.0-r66_mipsel_24kc.ipk`; SHA-256 `e3a2a02debb946691f4c000b3c4c0f9b857df148b92dc3e2cc489bd8463e7594`.
 
 
 ## 2026-11-27 — final crypto profile and OpenWrt package
