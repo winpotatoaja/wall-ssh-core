@@ -17,7 +17,7 @@ R68 memulai perbaikan diagnostik antrean yang ditemukan saat audit R67:
 
 Regression R68-A/B menguji satuan payload serta lifecycle enqueue/consume/dequeue dan invariant snapshot/reset. Pada Actions #935, native regression, generated-source libssh2 1.11.1, build SDK/IPK, serta integrasi runtime MT7621 QEMU lulus; kedua job SUCCESS dan guest melaporkan `MIPS TEST STATUS: 0`.
 
-R68-A, R68-B, dan R68-C telah lulus validasi native/source, SDK, serta MT7621 QEMU. R68-C menambahkan telemetry observasional TLS Engine yang hanya aktif dengan `-log-perf 1`. Actions #949 membuktikan regresi duplex 4 MiB per arah, snapshot/reset, build IPK `1.0.0-r68`, serta keluarnya `[TLSFAIR]` pada guest. Analisis menunjukkan RX-preferred service saat kedua arah siap, TLS RX ring kadang penuh bersama upstream Recv-Q, dan S2C/kernel Send-Q bisa menumpuk pada full-duplex. R68-C tidak mengubah scheduling atau perilaku transfer.
+R68-A sampai R68-D telah lulus validasi native/source, SDK, serta MT7621 QEMU. R68-D menambahkan umur episode ring S2C dan snapshot `TCP_INFO`/`SIOCOUTQNSD`, tetap hanya saat `-log-perf 1`. Actions #951 membuktikan kedua job SDK dan VM SUCCESS serta guest `MIPS TEST STATUS: 0`. Pada fixture backpressure, ring S2C mencapai 256 KiB dan kernel Send-Q/not-sent mencapai sekitar 2,56 MB, dengan umur episode sekitar 1,43–1,50 detik. Belum ada perubahan scheduler atau optimasi transfer.
 
 ## Roadmap pengerjaan R68-A sampai R68-E
 
@@ -28,7 +28,7 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | **R68-A** | Koreksi counter libssh2 yang sebelumnya memasukkan header 9 byte (CHANNEL_DATA) dan 13 byte (EXTENDED_DATA) ke hitungan payload | **Selesai dan tervalidasi.** Bug accounting diperbaiki; helper native dan source libssh2 1.11.1 hasil patch lulus, IPK r68 berhasil dibangun, dan integrasi MT7621 QEMU lulus. |
 | **R68-B** | Uji seluruh lifecycle packet dan invariant snapshot | **Lulus native, generated-source, SDK, dan MT7621 QEMU.** Actions #935: kedua job SUCCESS; guest `MIPS TEST STATUS: 0`. |
 | **R68-C** | Telemetry kondisi dan fairness TLS worker | **Lulus native, source, SDK, dan MT7621 QEMU (Actions #949).** `[TLSFAIR]` runtime tervalidasi; ditemukan pola RX-preferred saat dua arah siap dan antrean TLS RX/S2C yang perlu ditelusuri di R68-D. |
-| **R68-D** | Durasi antrean S2C, TCP_INFO, dan SIOCOUTQNSD | **Direncanakan — diagnostik saja.** Tambahkan pengukuran umur/durasi data di antrean S2C serta snapshot informasi TCP/kernel send queue. Instrumentasi harus menjaga ownership socket dan tidak mengubah mekanisme backpressure. |
+| **R68-D** | Durasi antrean S2C, TCP_INFO, dan SIOCOUTQNSD | **Lulus native/source, SDK, dan MT7621 QEMU (Actions #951).** `[S2CAGE]` dan `[TCPINFO]` tervalidasi; SIOCOUTQNSD tersedia pada guest dan sampel active-backpressure menunjukkan antrean kernel not-sent. Diagnostik saja. |
 | **R68-E** | Analisis hasil sebelum optimasi | **Belum dilakukan.** Gabungkan hasil B/C/D, identifikasi lokasi bottleneck berdasarkan bukti, lalu tentukan apakah optimasi memang diperlukan. Tidak ada optimasi spekulatif sebelum tahap analisis ini. |
 
 **Aturan R68:** A memperbaiki satuan accounting; B wajib membuktikan lifecycle dan invariant sebelum instrumentasi lanjutan dipakai. C dan D hanya mengumpulkan bukti, bukan tuning performa. E menjadi gerbang keputusan. Tidak ada perubahan cipher, buffer, scheduler, worker, prioritas RX/TX, atau kebijakan backpressure dalam tahapan diagnostik ini.
@@ -46,8 +46,8 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | R68-B: lifecycle packet yang sudah dicakup | Lulus untuk kasus saat ini | Enqueue, partial read, packet-ask, channel-flush, DATA 9-byte header, EXTENDED_DATA 13-byte header, control packet, cumulative bytes, dan peak |
 | R68-B: regression snapshot/lifecycle | **Lulus native + generated source + SDK** | Semua case enable baseline, snapshot reset=0/1, reset kosong/nonkosong, peak rebase ke current, re-enable, disable, NULL arguments, underflow, dan packet drain setelah reset lulus di Actions #935 |
 | R68-C: telemetry TLS worker fairness | **Lulus native + source + SDK + QEMU** | Actions #949: native duplex 4 MiB tiap arah, reset/NULL invariants, `[TLSFAIR]` runtime log lulus. RX ring full hingga 103 observasi per interval aktif; antrean kernel upstream dan SOCKS Send-Q ikut terekam |
-| R68-D: umur antrean S2C + TCP_INFO + SIOCOUTQNSD | Belum dimulai | Diagnostik saja; tidak mengubah backpressure atau ownership socket |
-| R68-E: analisis sebelum optimasi | Belum dilakukan | Menunggu bukti dari B/C/D; optimasi belum boleh diasumsikan perlu |
+| R68-D: umur antrean S2C + TCP_INFO + SIOCOUTQNSD | **Lulus native + source + SDK + QEMU** | Actions #951: runtime verifier TCP/TLS menerima `[S2CAGE]` dan `[TCPINFO]`; umur episode aktif 1,43–1,50 s, S2C ring 256 KiB, kernel not-sent hingga 2.556.032 byte; TCP_INFO/SIOCOUTQNSD tidak gagal |
+| R68-E: analisis sebelum optimasi | Belum dilakukan | Menunggu sintesis bukti A/B/C/D; belum ada optimasi |
 | Source gate profil crypto final + identitas paket R68 | Lulus | Profil R64/R65-B/R66 tetap dijaga; ekspektasi release/artifact disesuaikan ke r68 |
 | Build package SDK OpenWrt 24.10.7 / IPK R68 | **Lulus** | Actions #934 dan #935; IPK `1.0.0-r68`, metadata dan checksum diverifikasi |
 | QEMU MT7621 | **Lulus** | Actions #934 dan #935; #935 kedua job SUCCESS, guest `MIPS TEST STATUS: 0`, TCP/TLS duplex, half-close, multi-client dan checksum checks lulus |
@@ -157,6 +157,34 @@ Artifact:
 - [IPK R68 dan hasil SDK (artifact #15189988439)](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/45982721268/artifacts/15189988439)
 - [Hasil integrasi guest MT7621 QEMU (artifact #15190004476)](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/45982721268/artifacts/15190004476)
 
+
+
+### R68-D — umur episode S2C dan TCP/kernel send queue
+
+R68-D menambahkan diagnostik read-only pada SSH Owner, hanya ketika -log-perf 1 aktif:
+
+- s2c_nonempty_since_ns dimulai pada transisi ring S2C kosong menjadi berisi data, baik melalui jalur pending-read maupun relay pump. Timer dibersihkan saat jalur flush klien membuat ring kosong kembali.
+- [S2CAGE] melaporkan jumlah client relay yang saat snapshot masih memiliki data, jumlah sampel umur, umur rata-rata, dan maksimum dalam mikrodetik.
+- Definisi umur: ini adalah durasi episode ring tetap non-empty sejak transisi kosong-ke-terisi, bukan timestamp individual untuk setiap byte dan bukan akumulasi semua episode yang selesai di antara dua snapshot. Interpretasikan sebagai umur episode antrean yang masih aktif saat interval diamati.
+- [TCPINFO] mengambil getsockopt(TCP_INFO) pada socket SOCKS yang dimiliki SSH Owner. Pembacaan memvalidasi panjang struktur sebelum memakai field RTT, RTT variance, unacked segments, send congestion window, dan total retransmission.
+- SIOCOUTQNSD diambil secara terpisah dari SIOCOUTQ. Fitur dikompilasi hanya jika macro tersedia; record menyebut support flag, jumlah sampel, dan kegagalan ioctl. Nilainya menunjukkan data pada TCP send queue yang belum dikirim, bukan jumlah byte yang sudah diakui peer.
+- Semua pengukuran bersifat observasional. Tidak ada perubahan pada send, receive window, backpressure, ring capacity, scheduler, cipher, maupun worker topology.
+
+### Hasil validasi R68-D — Actions #951
+
+Run: [Actions #951 — 46000210513](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/46000210513)  
+Source SHA: 171fb772a8e1bd8cfb07c0973ba6eb88e37daf20  
+**SDK: SUCCESS · MT7621 QEMU: SUCCESS · MIPS TEST STATUS: 0**
+
+- Native/source regression lulus. Source gate memeriksa dua jalur enqueue S2C, jalur flush, pembacaan panjang struktur TCP_INFO, compile-time fallback SIOCOUTQNSD, serta LOG_PERF gating. Runtime verifier menerima record TCP dan TLS untuk [S2CAGE] dan [TCPINFO].
+- IPK OpenWrt 24.10.7 / mipsel_24kc: passwall-ssh-core_1.0.0-r68_mipsel_24kc.ipk; metadata 1.0.0-r68. SHA-256: 60cc28ddb9943bac9d689a1b7a97bda58cb450b73a7d5ced77ea20cf76668956.
+- Artifact IPK: [#15197269934](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/46000210513/artifacts/15197269934). Artifact hasil MT7621 QEMU: [#15198965861](https://github.com/winpotatoaja/wall-ssh-core/actions/runs/46000210513/artifacts/15198965861).
+- Pada satu interval TCP dengan tekanan penerima terkontrol: S2C ring 262,144/262,144 byte, umur episode 1,503,966 us, SOCKS Send-Q 2,556,032 byte, dan SIOCOUTQNSD juga 2,556,032 byte. Snapshot TCP_INFO menunjukkan RTT 9,623 us, RTT variance 17,007 us, unacked 0, congestion window 10 segmen, dan retransmission 0.
+- Pada satu interval TLS: S2C ring kembali 262,144/262,144 byte, umur episode 1,429,447 us, SOCKS Send-Q dan not-sent sama-sama 2,556,032 byte. TCP_INFO mencatat RTT 7,804 us, RTT variance 14,316 us, unacked 0, dan retransmission 0.
+- SIOCOUTQNSD dilaporkan tersedia pada guest; sampel runtime tidak mencatat kegagalan ioctl TCP_INFO maupun not-sent. Kecocokan nilai SIOCOUTQ dan SIOCOUTQNSD pada snapshot aktif menunjukkan sebagian besar antrean send tersebut masih berada di sisi not-yet-sent kernel, bukan data yang sedang menunggu retransmission. Ini konsisten dengan skenario backpressure penerima yang disengaja dalam fixture QEMU; bukan bukti packet loss atau klaim bahwa semua koneksi produksi selalu memiliki kondisi yang sama.
+
+**Analisis / keputusan:** R68-D berhasil menangkap episode S2C aktif dan membedakan antrean aplikasi dari antrean TCP yang belum dikirim. Pada fixture ini, tekanan paling jelas berada di ring S2C dan send queue lokal menuju klien, sementara snapshot aktif tidak menunjukkan retransmission. Hasil ini belum membuktikan sumber jeda pada jaringan/hardware nyata; QEMU bukan uji router fisik dan validasi ini bukan benchmark throughput Internet. Lanjutkan ke R68-E untuk menyatukan bukti R68-A/B/C/D sebelum menentukan apakah ada optimasi yang didukung data.
+
 ## Profil crypto final
 
 R66 mengunci kombinasi yang paling kuat didukung hasil pengujian MT7621 QEMU:
@@ -244,4 +272,4 @@ Tujuan diagnostik adalah membedakan penumpukan pada socket upstream, ring buffer
 
 ## Status
 
-**R68-A/B/C selesai dan tervalidasi pada native/source/SDK/MT7621 QEMU (Actions #935 dan #949). R68-C menemukan RX-first service pada simultaneous-ready events serta pressure pada TLS RX ring dan S2C/client Send-Q. R68-D belum dimulai; R68-E menunggu data queue-age/TCP. Tidak ada tuning performa atau benchmark Internet pada R68-C.**
+**R68-A/B/C/D selesai dan tervalidasi pada native/source/SDK/MT7621 QEMU (Actions #935, #949, dan #951). R68-D merekam episode S2C hingga 1,50 s dan kernel not-sent hingga 2,56 MB pada fixture backpressure. R68-E menjadi tahap berikutnya untuk analisis gabungan sebelum optimasi. Tidak ada tuning performa atau benchmark Internet pada R68-D.**
