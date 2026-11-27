@@ -15,8 +15,7 @@
 
 typedef struct { unsigned int src; unsigned int dst; } align_case_t;
 typedef struct {
-    uint64_t baseline_evp_ns;
-    uint64_t baseline_copy_ns;
+    uint64_t baseline_total_ns;
     uint64_t outofplace_ns;
 } result_t;
 
@@ -82,9 +81,10 @@ static int encrypt_reference(const unsigned char key[16], const unsigned char iv
     EVP_CIPHER_CTX_free(ctx);
     return 1;
 }
-static int run_inplace(const unsigned char key[16], const unsigned char iv[16],
-                       unsigned char *buffer, size_t total, size_t chunk,
-                       uint64_t *elapsed) {
+static int run_inplace_copy(const unsigned char key[16],
+                            const unsigned char iv[16],
+                            unsigned char *buffer, unsigned char *dst,
+                            size_t total, size_t chunk, uint64_t *elapsed) {
     EVP_CIPHER_CTX *ctx = new_ctx(key, iv, 0);
     size_t pos = 0;
     uint64_t start, end;
@@ -95,29 +95,15 @@ static int run_inplace(const unsigned char key[16], const unsigned char iv[16],
         size_t amount = total - pos;
         int outl = 0;
         if (amount > chunk) amount = chunk;
+        /* Reproduce the original per-packet in-place EVP then memcpy sequence. */
         if (EVP_CipherUpdate(ctx, buffer + pos, &outl, buffer + pos,
                              (int)amount) != 1 || outl != (int)amount) {
             EVP_CIPHER_CTX_free(ctx); return 0;
         }
+        memcpy(dst + pos, buffer + pos, amount);
         pos += amount;
     }
     end = now_ns(); EVP_CIPHER_CTX_free(ctx);
-    if (end < start) return 0;
-    *elapsed = end - start;
-    return 1;
-}
-static int run_packet_copy(const unsigned char *src, unsigned char *dst,
-                           size_t total, size_t chunk, uint64_t *elapsed) {
-    size_t pos = 0;
-    uint64_t start = now_ns(), end;
-    if (!start) return 0;
-    while (pos < total) {
-        size_t amount = total - pos;
-        if (amount > chunk) amount = chunk;
-        memcpy(dst + pos, src + pos, amount);
-        pos += amount;
-    }
-    end = now_ns();
     if (end < start) return 0;
     *elapsed = end - start;
     return 1;
@@ -165,7 +151,7 @@ static int run_case(const unsigned char key[16], const unsigned char iv[16],
     unsigned char *cipher = aligned_offset(cipher_mem, src_residue);
     unsigned char *mut = aligned_offset(mut_mem, src_residue);
     unsigned char *out = aligned_offset(out_mem, dst_residue);
-    uint64_t base_evp[TRIALS], base_copy[TRIALS], oop[TRIALS];
+    uint64_t baseline[TRIALS], oop[TRIALS];
     uint64_t cipher_hash;
     unsigned int t;
 
@@ -177,9 +163,8 @@ static int run_case(const unsigned char key[16], const unsigned char iv[16],
     for (t = 0; t < TRIALS; t++) {
         if ((t & 1U) == 0U) {
             memcpy(mut, cipher, total);
-            if (!run_inplace(key, iv, mut, total, chunk, &base_evp[t]) ||
+            if (!run_inplace_copy(key, iv, mut, out, total, chunk, &baseline[t]) ||
                 memcmp(mut, plain, total) != 0 ||
-                !run_packet_copy(mut, out, total, chunk, &base_copy[t]) ||
                 memcmp(out, plain, total) != 0)
                 return 0;
             if (!run_outofplace(key, iv, cipher, out, total, chunk, &oop[t]) ||
@@ -192,15 +177,13 @@ static int run_case(const unsigned char key[16], const unsigned char iv[16],
                 checksum64(cipher, total) != cipher_hash)
                 return 0;
             memcpy(mut, cipher, total);
-            if (!run_inplace(key, iv, mut, total, chunk, &base_evp[t]) ||
+            if (!run_inplace_copy(key, iv, mut, out, total, chunk, &baseline[t]) ||
                 memcmp(mut, plain, total) != 0 ||
-                !run_packet_copy(mut, out, total, chunk, &base_copy[t]) ||
                 memcmp(out, plain, total) != 0)
                 return 0;
         }
     }
-    result->baseline_evp_ns = median5(base_evp);
-    result->baseline_copy_ns = median5(base_copy);
+    result->baseline_total_ns = median5(baseline);
     result->outofplace_ns = median5(oop);
     return 1;
 }
@@ -233,7 +216,7 @@ int main(void) {
             size_t chunk = chunks[c];
             for (a = 0; a < ALIGN_CASES; a++) {
                 result_t r;
-                uint64_t evp, copy, baseline, candidate;
+                uint64_t baseline, candidate;
                 double delta;
                 if (!run_case(key, iv, total, chunk, align_cases[a].src,
                               align_cases[a].dst, plain, cipher, mut, out, &r)) {
@@ -241,20 +224,16 @@ int main(void) {
                             total, chunk, align_cases[a].src, align_cases[a].dst);
                     goto cleanup;
                 }
-                evp = ns_per_mib(r.baseline_evp_ns, total);
-                copy = ns_per_mib(r.baseline_copy_ns, total);
-                baseline = evp + copy;
+                baseline = ns_per_mib(r.baseline_total_ns, total);
                 candidate = ns_per_mib(r.outofplace_ns, total);
                 delta = baseline ? ((double)candidate - (double)baseline) *
                          100.0 / (double)baseline : 0.0;
                 printf("CASE workset_bytes=%zu chunk_bytes=%zu src=%u dst=%u "
-                       "baseline_evp_ns_per_mib=%" PRIu64
-                       " copy_ns_per_mib=%" PRIu64
-                       " baseline_total_ns_per_mib=%" PRIu64
+                       "baseline_packet_evp_copy_ns_per_mib=%" PRIu64
                        " outofplace_ns_per_mib=%" PRIu64
                        " delta_pct=%+.2f\n",
                        total, chunk, align_cases[a].src, align_cases[a].dst,
-                       evp, copy, baseline, candidate, delta);
+                       baseline, candidate, delta);
             }
         }
     }

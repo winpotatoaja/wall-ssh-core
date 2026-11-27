@@ -73,9 +73,10 @@ def main():
               "benchmark includes 16/29/32 KiB update sizes"),
         check("{12U, 11U}" in bench and "{4U, 11U}" in bench and "{4U, 15U}" in bench,
               "benchmark uses observed source/destination alignment pairs"),
-        check("run_packet_copy" in bench and "run_outofplace" in bench and
-              "run_inplace" in bench and "checksum64(cipher, total) != cipher_hash" in bench,
-              "benchmark compares packet copy with out-of-place and checks source immutability"),
+        check("run_inplace_copy" in bench and "run_outofplace" in bench and
+              "memcpy(dst + pos, buffer + pos, amount);" in bench and
+              "checksum64(cipher, total) != cipher_hash" in bench,
+              "baseline reproduces packet-by-packet in-place EVP then memcpy; candidate checks immutable source"),
         check("decrypt_impl" not in patcher and "EVP_CipherUpdate" not in patcher,
               "R65-E is diagnostic/benchmark-only; production decrypt operation unchanged"),
     ]

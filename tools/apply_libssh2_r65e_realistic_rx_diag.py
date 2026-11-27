@@ -66,14 +66,18 @@ def patch_layout(root: Path, project: Path) -> None:
     source = priv.read_text()
     source = once(
         source,
-        "        unsigned int ctr_rx_dst_align_mask;\n",
-        "        unsigned int ctr_rx_dst_align_mask;\n" + PRIVATE_COUNTERS,
+        "        unsigned int ctr_rx_dst_align_mask;\n"
+        "        unsigned long long ctr_rx_evp_ns;\n",
+        "        unsigned int ctr_rx_dst_align_mask;\n" + PRIVATE_COUNTERS +
+        "        unsigned long long ctr_rx_evp_ns;",
         "extend private R65-D diagnostic state"
     )
     source = once(
         source,
-        "    unsigned int ctr_rx_dst_align_mask;\n",
-        "    unsigned int ctr_rx_dst_align_mask;\n" + SNAPSHOT_COUNTERS,
+        "    unsigned int ctr_rx_dst_align_mask;\n"
+        "    unsigned long long ctr_rx_evp_ns;\n",
+        "    unsigned int ctr_rx_dst_align_mask;\n" + SNAPSHOT_COUNTERS +
+        "    unsigned long long ctr_rx_evp_ns;",
         "extend private diagnostic snapshot structure"
     )
     source = once(
@@ -89,8 +93,10 @@ def patch_layout(root: Path, project: Path) -> None:
     source = public.read_text()
     source = once(
         source,
-        "    unsigned int ctr_rx_dst_align_mask;\n",
-        "    unsigned int ctr_rx_dst_align_mask;\n" + SNAPSHOT_COUNTERS,
+        "    unsigned int ctr_rx_dst_align_mask;\n"
+        "    unsigned long long ctr_rx_evp_ns;\n",
+        "    unsigned int ctr_rx_dst_align_mask;\n" + SNAPSHOT_COUNTERS +
+        "    unsigned long long ctr_rx_evp_ns;",
         "synchronize public R65-E snapshot layout"
     )
     public.write_text(source)

@@ -24,7 +24,7 @@ Benchmark R65-D hanya memakai update 16 KiB dan working set 256 KiB. Jadi ia bel
 1. Tambah histogram ukuran aktual bulk RX dalam bucket 4 KiB, serta minimum/maksimum per interval.
 2. Pisahkan waktu EVP backend \`EVP_CipherUpdate\` dari waktu total pemanggilan melalui bridge. Selisihnya mencakup validasi context/pointer, dispatch, dan biaya pengukuran luar.
 3. Tambah benchmark MIPS dengan tiga working set (256 KiB, 4 MiB, 32 MiB), tiga ukuran update (16 KiB, 29 KiB, 32 KiB), dan tiga pasangan alignment yang teramati pada transfer.
-4. Setiap konfigurasi membandingkan in-place EVP + packet-by-packet memcpy dengan EVP out-of-place; lima sampel median, urutan metode berselang-seling, verifikasi plaintext, serta checksum ciphertext sumber.
+4. Setiap konfigurasi membandingkan baseline in-place EVP yang langsung diikuti memcpy pada setiap paket dengan EVP out-of-place; lima sampel median, urutan metode berselang-seling, verifikasi plaintext, serta checksum ciphertext sumber.
 5. Jalankan benchmark native dan MIPS/QEMU; pertahankan transfer integration 32 MiB non-ETM/ETM dan SHA-256.
 
 ## Batas perubahan
