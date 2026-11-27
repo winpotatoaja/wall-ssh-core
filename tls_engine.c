@@ -13,7 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <linux/sockios.h>
 #include <time.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -423,6 +425,18 @@ static int tls_shutdown_bounded(SSL *ssl, int fd, int timeout_ms)
     }
 }
 
+/* Serialize read-only queue ioctls against the TLS owner's final socket close. */
+static void tls_engine_close_owned_socket(tls_engine_t *engine)
+{
+    if (!engine) return;
+    int fd = -1;
+    if (engine->mutex_ready) pthread_mutex_lock(&engine->mutex);
+    fd = engine->socket_fd;
+    engine->socket_fd = -1;
+    if (engine->mutex_ready) pthread_mutex_unlock(&engine->mutex);
+    if (fd >= 0) close(fd);
+}
+
 static void *tls_engine_thread(void *opaque)
 {
     tls_engine_t *engine = (tls_engine_t *)opaque;
@@ -431,8 +445,7 @@ static void *tls_engine_thread(void *opaque)
     int start_error = tls_handshake(engine, &ssl, &retryable);
     if (start_error != 0) {
         publish_startup(engine, 0, start_error, retryable, NULL);
-        if (engine->socket_fd >= 0) close(engine->socket_fd);
-        engine->socket_fd = -1;
+        tls_engine_close_owned_socket(engine);
         return NULL;
     }
 
@@ -696,8 +709,7 @@ static void *tls_engine_thread(void *opaque)
 #endif
     signal_eventfd(engine->owner_event_fd);
     SSL_free(ssl);
-    if (engine->socket_fd >= 0) close(engine->socket_fd);
-    engine->socket_fd = -1;
+    tls_engine_close_owned_socket(engine);
     return NULL;
 }
 
@@ -941,6 +953,38 @@ int tls_engine_tx_pending(const tls_engine_t *engine)
     return engine ? ring_used(&engine->ssh_to_tls) : 0;
 }
 
+int tls_engine_queue_snapshot(const tls_engine_t *engine,
+                              tls_engine_queue_snapshot_t *snapshot)
+{
+    if (!engine || !snapshot) {
+        errno = EINVAL;
+        return -1;
+    }
+    memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->rx_buffered_bytes = (uint32_t)ring_used(&engine->tls_to_ssh);
+    snapshot->tx_buffered_bytes = (uint32_t)ring_used(&engine->ssh_to_tls);
+    snapshot->capacity_bytes = engine->ssh_to_tls.capacity;
+
+    /* Keep the descriptor stable while the read-only ioctls are issued. */
+    tls_engine_t *mutable_engine = (tls_engine_t *)engine;
+    pthread_mutex_lock(&mutable_engine->mutex);
+    int fd = mutable_engine->socket_fd;
+    if (fd >= 0) {
+        int queued = 0;
+        if (ioctl(fd, SIOCINQ, &queued) == 0 && queued >= 0) {
+            snapshot->socket_rxq_bytes = queued;
+            snapshot->socket_rxq_valid = 1;
+        }
+        queued = 0;
+        if (ioctl(fd, SIOCOUTQ, &queued) == 0 && queued >= 0) {
+            snapshot->socket_txq_bytes = queued;
+            snapshot->socket_txq_valid = 1;
+        }
+    }
+    pthread_mutex_unlock(&mutable_engine->mutex);
+    return 0;
+}
+
 int tls_engine_rx_terminal(const tls_engine_t *engine, int *error_out)
 {
     if (!engine) return 1;
@@ -990,7 +1034,7 @@ void tls_engine_destroy(tls_engine_t *engine)
         tls_engine_stop(engine, 0, 1);
         (void)tls_engine_join(engine);
     }
-    if (engine->socket_fd >= 0) close(engine->socket_fd);
+    tls_engine_close_owned_socket(engine);
     if (engine->worker_event_fd >= 0) close(engine->worker_event_fd);
     if (engine->owner_event_fd >= 0) close(engine->owner_event_fd);
     if (engine->cond_ready) pthread_cond_destroy(&engine->cond);
