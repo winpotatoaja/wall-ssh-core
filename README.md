@@ -47,4 +47,7 @@ R65-C menghapus copy RX bulk, tetapi total waktu jalur dekripsi sedikit memburuk
 ## Status
 
 R65-C sebagai baseline: SDK dan MT7621 QEMU lulus pada Actions #905.  
-R65-D: source, benchmark, dan workflow telah dipush; hasil SDK/QEMU masih pending.
+
+R65-D SDK: SUCCESS pada Actions #909 (run `45937284912`), termasuk patcher, source validator, build IPK, dan cross-compile helper MIPS. Native x86 benchmark: 256/256 pasangan lulus; median out-of-place 98,574 ns/MiB vs in-place+copy 119,856 ns/MiB (-17.76%). Angka x86 ini bukan hasil MT7621.
+
+R65-D MT7621 QEMU: masih berjalan pada langkah boot guest; hasil benchmark MIPS, mask alignment runtime, dan tes transfer belum dinyatakan.
