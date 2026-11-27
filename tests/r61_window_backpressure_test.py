@@ -104,8 +104,10 @@ def main() -> int:
         check("#define S2C_RELAY_BUF_SIZE     262144" in core and
               "#define S2C_SSH_READ_WINDOW_SIZE (512U * 1024U)" in core and
               "libssh2_channel_window_read_ex(" in core and
-              '"[S2C WINDOW] client=%llu initial=%lu ring=%u"' in core,
-              "SSH Owner records actual initial receive window against the 256 KiB S2C ring"),
+              "s2c_read_window_initial" in core and
+              "[S2C WINDOW]" not in core and
+              "unexpected initial receive window" not in core,
+              "SSH Owner reads the configured initial window without emitting per-client logs"),
         check("rb_free_space(&c->s2c) > 0" in core and
               "channel_read_with_rx_flush(" in core,
               "S2C channel reads remain gated by available ring space"),

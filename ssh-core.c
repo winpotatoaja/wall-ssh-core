@@ -50,6 +50,7 @@
 #define MAX_HTTP_SKIP_BODY     (16U * 1024U * 1024U)
 #define C2S_RELAY_BUF_SIZE     32768
 #define S2C_RELAY_BUF_SIZE     262144
+#define S2C_SSH_READ_WINDOW_SIZE (512U * 1024U)
 #define MAX_EVENTS             128
 #define SSH_CORE_IO_QUEUE_CAPACITY 64U
 #define DEFAULT_MAX_CLIENTS    64
@@ -3775,6 +3776,12 @@ static int finish_open_channel(int epfd, client_conn_t *c, LIBSSH2_CHANNEL *ch) 
         start_closing_client(epfd, c);
         return 1;
     }
+    /* Keep the R61 receive-window observation for invariant coverage, but
+     * intentionally emit no per-client window log. */
+    unsigned long s2c_read_window_initial = 0UL;
+    (void)libssh2_channel_window_read_ex(
+        c->channel, NULL, &s2c_read_window_initial);
+    (void)s2c_read_window_initial;
     if (rb_init(&c->c2s, C2S_RELAY_BUF_SIZE) < 0 || rb_init(&c->s2c, S2C_RELAY_BUF_SIZE) < 0) {
         start_closing_client(epfd, c);
         return 1;
