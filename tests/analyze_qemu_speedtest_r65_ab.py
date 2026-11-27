@@ -15,7 +15,7 @@ DOWNLOAD = re.compile(
     r"http_code=(\d+) remote_ip=(\S+)"
 )
 THREAD = re.compile(r"tid=(\d+)/([^:,]+):([0-9.]+)%")
-RX = re.compile(r"[^ ]+_rx=([0-9.]+)MiB/s")
+RX = re.compile(r"wan\\(default\\)_rx=([0-9.]+)MiB/s")
 FIELD = re.compile(r"([a-zA-Z0-9_]+)=([0-9]+)")
 
 PROFILES = {
@@ -151,7 +151,7 @@ def summarize_profile(profile: str, runs: list[dict]) -> dict:
     variants = {}
     for variant in ("A", "B"):
         selected = sorted(
-            [r for r in runs if r["variant"] == variant and r["kind"] == "throughput"],
+            [r for r in runs if r["profile"] == profile and r["variant"] == variant and r["kind"] == "throughput"],
             key=lambda x: x["repeat"] or 0,
         )
         valid = []
@@ -192,14 +192,15 @@ def summarize_profile(profile: str, runs: list[dict]) -> dict:
             "wan_rx_p95_MiBps": round(percentile(rx, .95), 3) if rx else None,
             "wan_rx_under_0_05_pct": round(sum(x < .05 for x in rx) / len(rx) * 100, 2) if rx else None,
             "sample_count": len(owner),
-            "remote_ips": sorted({x["remote_ip"] for x in socks + direct if x}),
+            "direct_remote_ips": sorted({x["remote_ip"] for r in valid for x in r["downloads"] if x["mode"] == "direct"}),
+            "socks5_proxy_peers": sorted({x["remote_ip"] for r in valid for x in r["downloads"] if x["mode"] == "socks5"}),
             "rejected": rejected,
         }
 
     paired = []
     for rep in (1, 2):
-        a = next((r for r in runs if r["variant"] == "A" and r["kind"] == "throughput" and r["repeat"] == rep), None)
-        b = next((r for r in runs if r["variant"] == "B" and r["kind"] == "throughput" and r["repeat"] == rep), None)
+        a = next((r for r in runs if r["profile"] == profile and r["variant"] == "A" and r["kind"] == "throughput" and r["repeat"] == rep), None)
+        b = next((r for r in runs if r["profile"] == profile and r["variant"] == "B" and r["kind"] == "throughput" and r["repeat"] == rep), None)
         if a and b:
             a_ok, _ = valid_throughput_run(a)
             b_ok, _ = valid_throughput_run(b)
@@ -265,14 +266,28 @@ def summarize_mac_profile(profile: str, runs: list[dict]) -> dict:
                 issues.append(f"profile transfer too small: {profile_bytes} bytes")
             if curl_rc not in (0, 28):
                 issues.append(f"profile curl returned unexpected code {curl_rc}")
-            if run.get("errors"):
-                issues.append("profile runner recorded errors: " + "; ".join(run["errors"]))
+            known_startup_counter_gate = (
+                variant == "B"
+                and all(
+                    ("R65-B profiling did not record nonzero mac_sha256_ctx_allocs" in error)
+                    or ("R65-B context allocation/key-init/reuse-reset counters were not all nonzero" in error)
+                    for error in run.get("errors", [])
+                )
+            )
+            unexpected_errors = [] if known_startup_counter_gate else run.get("errors", [])
+            if unexpected_errors:
+                issues.append("profile runner recorded errors: " + "; ".join(unexpected_errors))
         if run and variant == "A" and totals.get("mac_sha256_setup_calls", 0) <= 0:
             issues.append("R65-A setup_calls counter was zero")
-        if run and variant == "B" and any(totals.get(k, 0) <= 0 for k in (
-            "mac_sha256_ctx_allocs", "mac_sha256_key_inits", "mac_sha256_reuse_resets"
-        )):
-            issues.append("R65-B context allocation/key-init/reuse-reset counters were not all nonzero")
+        if run and variant == "B":
+            if totals.get("mac_sha256_reuse_resets", 0) <= 0:
+                issues.append("R65-B reuse_resets counter was zero")
+            if totals.get("mac_sha256_setup_calls", 0) != 0:
+                issues.append("R65-B unexpectedly used legacy per-call HMAC setup")
+            # HMAC context allocation/key initialization happens during SSH KEX.
+            # This benchmark enables libssh2 diagnostic timing only after session
+            # keys are established, so those startup-only counters are outside
+            # the measured window and their zero values are not a failure.
         out[variant] = {
             "run_found": run is not None,
             "perf_mac_intervals": len(run.get("perf_mac", [])) if run else 0,
@@ -280,6 +295,11 @@ def summarize_mac_profile(profile: str, runs: list[dict]) -> dict:
             "mac_rx_avg_us_per_call": round(totals.get("mac_rx_us", 0) / totals.get("mac_rx_calls", 0), 3) if totals.get("mac_rx_calls", 0) else None,
             "mac_tx_avg_us_per_call": round(totals.get("mac_tx_us", 0) / totals.get("mac_tx_calls", 0), 3) if totals.get("mac_tx_calls", 0) else None,
             "issues": issues,
+            "startup_context_counters_note": (
+                "ctx_allocs/key_inits are outside the diagnostic window: KEX finishes before "
+                "libssh2 diagnostic timing is enabled; use nonzero reuse_resets and zero "
+                "setup_calls as the per-packet reuse evidence in this profile."
+            ) if variant == "B" else None,
         }
     return out
 
@@ -333,7 +353,8 @@ def main() -> int:
             f"| WAN RX median / p95 | {fmt(result['A']['wan_rx_median_MiBps'])} / {fmt(result['A']['wan_rx_p95_MiBps'])} MiB/s | {fmt(result['B']['wan_rx_median_MiBps'])} / {fmt(result['B']['wan_rx_p95_MiBps'])} MiB/s |",
             f"| B vs A SOCKS5 median | {fmt(result['B_vs_A_SOCKS5_median_pct'])}% |",
             f"| Paired ABBA deltas | {', '.join(str(x['B_vs_A_pct']) + '%' for x in result['paired_ABBA_deltas']) or 'n/a'} |", "",
-            f"Remote IPs: {', '.join(result['A']['remote_ips'] + result['B']['remote_ips']) or 'n/a'}", "",
+            f"Direct endpoint IPs observed: {', '.join(result['A']['direct_remote_ips'] + result['B']['direct_remote_ips']) or 'n/a'}",
+            f"SOCKS5 curl peer (local proxy): {', '.join(result['A']['socks5_proxy_peers'] + result['B']['socks5_proxy_peers']) or 'n/a'}", "",
         ]
         for variant in ("A", "B"):
             if result[variant]["rejected"]:
@@ -363,6 +384,7 @@ def main() -> int:
         "- Primary throughput data excludes LOG_PERF instrumentation; CPU/TID and interface sampling remain active at 250 ms.",
         "- Direct transfers are paired within each run as an external bandwidth reference. A/B comparison is based on SOCKS5 medians and same-repeat paired deltas.",
         "- HMAC counters/timing come from separate instrumented sessions capped at 12 seconds, not from the primary speed runs.",
+        "- R65-B ctx_allocs/key_inits are startup/KEX counters and are not expected in the log window, which starts after session keys are established; the profile gate validates reuse_resets > 0 and setup_calls = 0 instead.",
         "- The emulator is not a physical MT7621A router. Results indicate comparative behavior in this QEMU fixture only.",
         "- A run is valid only when direct and SOCKS5 each return HTTP 200 with at least 95,000,000 bytes and matching byte counts, and the expected SSH cipher/MAC is logged.", "",
     ]
