@@ -36,12 +36,13 @@ R65-C menghapus copy RX bulk, tetapi total waktu jalur dekripsi sedikit memburuk
 
 ## Validasi
 
-- [ ] Patcher dan source validator lulus.
-- [ ] Native benchmark lulus 256 pasangan.
-- [ ] Helper yang sama dikompilasi untuk MIPS little-endian dan lulus di MT7621 QEMU.
-- [ ] Mask source/destination muncul pada record PERF-CTR selama AES-CTR RX bulk.
-- [ ] AES-CTR non-ETM dan ETM existing integration lulus checksum.
-- [ ] IPK OpenWrt 24.10.7 `mipsel_24kc` dan QEMU berasal dari commit/artifact SDK yang sama.
+- [x] Patcher dan source validator lulus pada OpenWrt SDK libssh2 1.11.1.
+- [x] Native benchmark lulus 256 pasangan.
+- [x] Helper dikompilasi sebagai MIPS32r2 little-endian dan checksum artifact diverifikasi.
+- [ ] Helper MIPS belum selesai dijalankan di MT7621 QEMU.
+- [ ] Mask source/destination belum diverifikasi dari record PERF-CTR transfer AES-CTR RX.
+- [ ] AES-CTR non-ETM dan ETM integration QEMU belum selesai.
+- [x] IPK OpenWrt 24.10.7 `mipsel_24kc` berhasil dibangun dan artifact SDK tersedia.
 
 ## Status
 
