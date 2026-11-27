@@ -15,9 +15,23 @@ R68 memulai perbaikan diagnostik antrean yang ditemukan saat audit R67:
 - Jalur partial read mengurangi byte yang benar-benar dikonsumsi; packet-ask dan channel-flush mengurangi payload yang tersisa saat node dihapus.
 - Baseline saat diagnostics diaktifkan tetap dihitung dari `data_len - data_head`, sehingga konsisten dengan accounting setelah enable.
 
-Regression test R68 mengekstrak helper C yang benar-benar dihasilkan template patch R43, mengompilasinya, lalu menguji lifecycle payload. Pemeriksaan terhadap source libssh2 hasil patch juga disiapkan untuk tahap SDK.
+Regression test R68 mengekstrak helper C yang benar-benar dihasilkan template patch R43, mengompilasinya, lalu menguji lifecycle payload. Dalam Actions #933, pengujian juga dijalankan terhadap source libssh2 1.11.1 hasil patch dan lulus.
 
 Tidak ada perubahan pada jalur transfer, cipher, buffer, worker, atau prioritas RX/TX. Koreksi accounting dan regression test R68 sudah lulus pada helper native serta source libssh2 1.11.1 hasil patch. Namun validasi package SDK belum selesai: Actions #933 berhenti pada source gate warisan R66 yang masih meminta versi paket dan nama artifact `r66`; job QEMU dilewati karena SDK gagal.
+
+## Roadmap pengerjaan R68-A sampai R68-E
+
+Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi tambahan, dan keputusan optimasi. Tahap B wajib diselesaikan sebelum data diagnostik C/D dijadikan dasar keputusan.
+
+| Tahap | Pekerjaan | Status / keputusan |
+|---|---|---|
+| **R68-A** | Koreksi counter libssh2 yang sebelumnya memasukkan header 9 byte (CHANNEL_DATA) dan 13 byte (EXTENDED_DATA) ke hitungan payload | **Perbaikan diterapkan; regression source lulus.** Bug accounting terkonfirmasi. Helper native dan pengujian pada source libssh2 1.11.1 hasil patch lulus. Validasi package SDK masih tertahan oleh source gate warisan R66, bukan oleh assertion R68. |
+| **R68-B** | Uji seluruh lifecycle packet dan invariant snapshot | **Wajib; belum lengkap.** Regression saat ini sudah mencakup enqueue, partial read, penghapusan melalui packet-ask, channel-flush, DATA/EXTENDED_DATA, serta control packet. Masih perlu melengkapi matriks lifecycle dan membuktikan invariant current/peak serta perilaku snapshot/reset secara eksplisit. |
+| **R68-C** | Telemetry kondisi dan fairness TLS worker | **Direncanakan — diagnostik saja.** Catat kondisi kerja dan distribusi/fairness TLS worker untuk analisis. Tidak mengubah scheduler, pembagian tugas, jumlah worker, prioritas, atau perilaku transfer. |
+| **R68-D** | Durasi antrean S2C, TCP_INFO, dan SIOCOUTQNSD | **Direncanakan — diagnostik saja.** Tambahkan pengukuran umur/durasi data di antrean S2C serta snapshot informasi TCP/kernel send queue. Instrumentasi harus menjaga ownership socket dan tidak mengubah mekanisme backpressure. |
+| **R68-E** | Analisis hasil sebelum optimasi | **Belum dilakukan.** Gabungkan hasil B/C/D, identifikasi lokasi bottleneck berdasarkan bukti, lalu tentukan apakah optimasi memang diperlukan. Tidak ada optimasi spekulatif sebelum tahap analisis ini. |
+
+**Aturan R68:** A memperbaiki satuan accounting; B wajib membuktikan lifecycle dan invariant sebelum instrumentasi lanjutan dipakai. C dan D hanya mengumpulkan bukti, bukan tuning performa. E menjadi gerbang keputusan. Tidak ada perubahan cipher, buffer, scheduler, worker, prioritas RX/TX, atau kebijakan backpressure dalam tahapan diagnostik ini.
 
 ## Progress pengerjaan R68
 
