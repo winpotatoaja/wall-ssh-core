@@ -177,11 +177,6 @@ jobs:
            python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r65a_diagnostics.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE"
            test -s "$LIBSSH2_SRC/.passwall-r65a-crypto-diagnostics-patched"
            python3 "$GITHUB_WORKSPACE/tests/r65a_crypto_diagnostics_source_test.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE" | tee "$GITHUB_WORKSPACE/test-results/r65a-crypto-diagnostics-source.log"
-            test-results/r65b-hmac-context-source.log
-            test-results/r65b-hmac-context-test-native.log
-            test-results/r65b-hmac-context-test
-            test-results/r65b-hmac-context-test-file.txt
-            test-results/r65b-hmac-context.sha256
            python3 "$GITHUB_WORKSPACE/tools/apply_libssh2_r65b_hmac_context.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE"
            test -s "$LIBSSH2_SRC/.passwall-r65b-hmac-context-reuse-patched"
            python3 "$GITHUB_WORKSPACE/tests/r65b_hmac_context_source_test.py" "$LIBSSH2_SRC" "$GITHUB_WORKSPACE" | tee "$GITHUB_WORKSPACE/test-results/r65b-hmac-context-source.log"
@@ -440,6 +435,11 @@ jobs:
             test-results/r63-hardening-source.log
             test-results/r64-aes-ctr-source.log
             test-results/r65a-crypto-diagnostics-source.log
+            test-results/r65b-hmac-context-source.log
+            test-results/r65b-hmac-context-test-native.log
+            test-results/r65b-hmac-context-test
+            test-results/r65b-hmac-context-test-file.txt
+            test-results/r65b-hmac-context.sha256
             test-results/r64-aes-ctr-bulk-test-native.log
             test-results/r64-aes-ctr-test
             test-results/r64-aes-ctr-test-file.txt
