@@ -47,8 +47,8 @@ def main():
               "libssh2_diag.ctr_rx_dst_align_mask" in core,
               "PERF-CTR publishes both alignment masks"),
         check("EVP_CipherUpdate(ctx, buffer + pos, &outl," in bench and
-              "EVP_CipherUpdate(ctx, dest + pos, &outl," in bench and
-              "memcpy(dest + pos, source + pos, CHUNK_BYTES)" in bench,
+              "EVP_CipherUpdate(ctx, dst + pos, &outl," in bench and
+              "memcpy(dst + pos, src + pos, CHUNK_BYTES)" in bench,
               "benchmark compares in-place EVP, packet copy and out-of-place EVP"),
         check("#define ALIGN_COUNT 16U" in bench and
               "#define CHUNK_BYTES (16U * 1024U)" in bench and
