@@ -27,6 +27,29 @@ R65-C menghapus copy RX bulk, tetapi total waktu jalur dekripsi sedikit memburuk
 4. Tambahkan benchmark AES-128-CTR standalone dengan 256 pasangan alignment source/destination. Setiap pasangan memakai update 16 KiB, stream 256 KiB, dan lima sampel; dibandingkan median waktu in-place EVP + copy terhadap EVP out-of-place.
 5. Verifikasi plaintext pada kedua metode dan pastikan input ciphertext kandidat out-of-place tidak berubah.
 
+## Hasil R65-D — MT7621 QEMU
+
+Guest menggunakan OpenSSL 3.0.22. Matriks MIPS 16 × 16 selesai: seluruh 256 pasangan alignment lulus verifikasi plaintext dan keutuhan ciphertext sumber.
+
+| Pengukuran median | In-place EVP + copy | Out-of-place EVP | Selisih |
+|---|---:|---:|---:|
+| Semua 256 pasangan | 52,726,548 ns/MiB | 41,650,284 ns/MiB | -21.01% |
+
+Pada semua 256 pasangan, kandidat out-of-place lebih cepat di benchmark terisolasi (rentang delta -7.53% sampai -37.62%). Untuk alignment yang benar-benar terlihat pada transfer SSH, hasil pasangan spesifiknya:
+- Non-ETM, source residue 12 → destination residue 11: -15.29%; ada interval non-ETM lain yang juga mencatat source residue 4 → destination residue 11.
+- ETM, source residue 4 → destination residue 15: -16.04%.
+
+Telemetry PERF-CTR selama transfer mengonfirmasi:
+- Non-ETM: `ctr_rx_src_align_mask=0x1000` (residue 12), kadang `0x1010` (residue 12 dan 4); `ctr_rx_dst_align_mask=0x0800` (residue 11).
+- ETM: `ctr_rx_src_align_mask=0x0010` (residue 4); `ctr_rx_dst_align_mask=0x8000` (residue 15).
+
+Tes transfer end-to-end masing-masing mengunduh 32 MiB dan SHA-256 cocok:
+- Non-ETM: 9.541 MiB/s; total bulk RX 32.055 MiB, EVP 52.44 ms/MiB.
+- ETM: 9.240 MiB/s; total bulk RX 32.041 MiB, EVP 44.95 ms/MiB.
+- Kedua mode mencatat `ctr_rx_copy_calls=0` dan `ctr_rx_copy_bytes=0`.
+
+**Interpretasi:** benchmark mikro MIPS mendukung hipotesis bahwa pasangan pointer/alignment out-of-place dapat menguntungkan, tetapi pengukuran transfer SSH tidak menunjukkan peningkatan EVP/end-to-end yang sejalan. Waktu EVP transfer R65-D praktis setara R65-C; jika dibandingkan dengan total EVP+copy R65-B, hasil ini malah sedikit lebih tinggi. Perbandingan antar-run QEMU belum merupakan A/B terkontrol, sehingga belum cukup untuk mengklaim peningkatan throughput. R65-D tetap investigasi; belum ada perubahan strategi cipher yang dipromosikan.
+
 ## Batas perubahan
 
 - Tidak mengubah R65-C `EVP_CipherUpdate(dest, source)`, R65-B HMAC reuse, cipher TX, ChaCha20-Poly1305, AES-GCM, SSH framing, rekey, atau preferensi cipher.
@@ -38,16 +61,13 @@ R65-C menghapus copy RX bulk, tetapi total waktu jalur dekripsi sedikit memburuk
 
 - [x] Patcher dan source validator lulus pada OpenWrt SDK libssh2 1.11.1.
 - [x] Native benchmark lulus 256 pasangan.
-- [x] Helper dikompilasi sebagai MIPS32r2 little-endian dan checksum artifact diverifikasi.
-- [ ] Helper MIPS belum selesai dijalankan di MT7621 QEMU.
-- [ ] Mask source/destination belum diverifikasi dari record PERF-CTR transfer AES-CTR RX.
-- [ ] AES-CTR non-ETM dan ETM integration QEMU belum selesai.
-- [x] IPK OpenWrt 24.10.7 `mipsel_24kc` berhasil dibangun dan artifact SDK tersedia.
+- [x] Helper MIPS32r2 little-endian lulus di MT7621 QEMU pada 256 pasangan.
+- [x] Mask source/destination terekam pada PERF-CTR transfer AES-CTR RX.
+- [x] AES-CTR non-ETM dan ETM integration QEMU lulus checksum 32 MiB.
+- [x] IPK OpenWrt 24.10.7 `mipsel_24kc` dan helper berasal dari artifact SDK pada run yang sama.
 
 ## Status
 
-R65-C sebagai baseline: SDK dan MT7621 QEMU lulus pada Actions #905.  
+R65-C sebagai baseline: SDK dan MT7621 QEMU lulus pada Actions #905.
 
-R65-D SDK: SUCCESS pada Actions #909 (run `45937284912`), termasuk patcher, source validator, build IPK, dan cross-compile helper MIPS. Native x86 benchmark: 256/256 pasangan lulus; median out-of-place 98,574 ns/MiB vs in-place+copy 119,856 ns/MiB (-17.76%). Angka x86 ini bukan hasil MT7621.
-
-R65-D MT7621 QEMU: masih berjalan pada langkah boot guest; hasil benchmark MIPS, mask alignment runtime, dan tes transfer belum dinyatakan.
+R65-D: SDK dan MT7621 QEMU jobs SUCCESS pada Actions #909 (run `45937284912`). Patcher, source test, build IPK, MIPS helper, matriks alignment 256 pasangan, telemetry runtime, dan transfer AES-CTR non-ETM/ETM lulus. Hasil numerik dan batas interpretasinya dicatat pada bagian Hasil R65-D.
