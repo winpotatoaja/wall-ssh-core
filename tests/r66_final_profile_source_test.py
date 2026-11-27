@@ -62,13 +62,14 @@ def main():
               "EVP_MAC_CTX_dup(state->ctx)" in mac and
               "EVP_MAC_update(ctx, packet, packet_len)" in mac,
               "R65-B per-direction HMAC context reuse remains selected"),
-        check("PKG_RELEASE:=67" in makefile,
-              "OpenWrt package release is exactly r66"),
-        check("experiment/r67-diag" in workflow and
-              "passwall-ssh-core-openwrt-24.10.7-mipsel-r67-diag-ipk" in workflow and
-              "passwall-ssh-core_1.0.0-r67_mipsel_24kc.ipk" in workflow and
-              "Version: 1.0.0-r67" in workflow,
-              "SDK/VM artifact names and embedded IPK metadata target r66"),
+        check("PKG_RELEASE:=68" in makefile,
+              "OpenWrt package release is exactly r68"),
+        check("experiment/r68-queue-accounting" in workflow and
+              "passwall-ssh-core-openwrt-24.10.7-mipsel-r68-queue-accounting-ipk" in workflow and
+              "passwall-ssh-core_1.0.0-r68_mipsel_24kc.ipk" in workflow and
+              "Version: 1.0.0-r68" in workflow and
+              "opkg installed passwall-ssh-core r68-queue-accounting" in workflow,
+              "SDK/VM artifact names and embedded IPK metadata target r68"),
         check("apply_libssh2_r65c_outofplace.py" not in workflow and
               "apply_libssh2_r65d_alignment_diag.py" not in workflow and
               "apply_libssh2_r65e_realistic_rx_diag.py" not in workflow,
