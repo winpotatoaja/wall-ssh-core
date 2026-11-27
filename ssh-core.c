@@ -1564,6 +1564,11 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session,
     long long span_ms = now - g_perf_window_start_ms;
     if (span_ms < 1000) return;
 
+    tls_engine_diag_snapshot_t tls_diag;
+    memset(&tls_diag, 0, sizeof(tls_diag));
+    int tls_diag_valid = upstream && upstream->tls &&
+        tls_engine_diag_snapshot(upstream->tls, &tls_diag, 1) == 0;
+
     LIBSSH2_DIAG_TIMING libssh2_diag;
     memset(&libssh2_diag, 0, sizeof(libssh2_diag));
     if (diag_session)
@@ -1751,6 +1756,47 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session,
             (unsigned long long)libssh2_diag.packet_queue_bytes_peak,
             (unsigned long long)libssh2_diag.packet_queue_enqueued_packets,
             (unsigned long long)libssh2_diag.packet_queue_enqueued_bytes);
+
+    if (tls_diag_valid) {
+        log_raw("[TLSFAIR] span_ms=%lld "
+                "poll_calls=%u poll_wakeups=%u poll_timeouts=%u "
+                "poll_wait_us=%u poll_wait_max_us=%u "
+                "poll_in=%u poll_out=%u poll_both=%u owner_wake=%u "
+                "rx_calls=%u rx_ok=%u rx_bytes=%u rx_service_us=%u "
+                "rx_want_read=%u rx_want_write=%u rx_both_ready=%u rx_while_tx_pending=%u rx_burst_max=%u "
+                "tx_calls=%u tx_ok=%u tx_bytes=%u tx_service_us=%u "
+                "tx_want_read=%u tx_want_write=%u tx_both_ready=%u "
+                "tx_while_rx_buffered=%u tx_burst_max=%u rx_ring_full=%u",
+                span_ms,
+                (unsigned int)tls_diag.poll_calls,
+                (unsigned int)tls_diag.poll_wakeups,
+                (unsigned int)tls_diag.poll_timeouts,
+                (unsigned int)tls_diag.poll_wait_us,
+                (unsigned int)tls_diag.poll_wait_max_us,
+                (unsigned int)tls_diag.poll_socket_in,
+                (unsigned int)tls_diag.poll_socket_out,
+                (unsigned int)tls_diag.poll_socket_both,
+                (unsigned int)tls_diag.poll_owner_event,
+                (unsigned int)tls_diag.rx_calls,
+                (unsigned int)tls_diag.rx_completed,
+                (unsigned int)tls_diag.rx_bytes,
+                (unsigned int)tls_diag.rx_service_us,
+                (unsigned int)tls_diag.rx_want_read,
+                (unsigned int)tls_diag.rx_want_write,
+                (unsigned int)tls_diag.rx_both_ready,
+                (unsigned int)tls_diag.rx_while_tx_pending,
+                (unsigned int)tls_diag.rx_burst_max,
+                (unsigned int)tls_diag.tx_calls,
+                (unsigned int)tls_diag.tx_completed,
+                (unsigned int)tls_diag.tx_bytes,
+                (unsigned int)tls_diag.tx_service_us,
+                (unsigned int)tls_diag.tx_want_read,
+                (unsigned int)tls_diag.tx_want_write,
+                (unsigned int)tls_diag.tx_both_ready,
+                (unsigned int)tls_diag.tx_while_rx_buffered,
+                (unsigned int)tls_diag.tx_burst_max,
+                (unsigned int)tls_diag.rx_ring_full);
+    }
 
     log_raw("[QUEUE] span_ms=%lld transport=%s "
             "up_rxq_valid=%u up_rxq_bytes=%llu up_txq_valid=%u up_txq_bytes=%llu "
@@ -5227,6 +5273,7 @@ static int core_worker_run(int argc, char **argv) {
                 write_marker(NEED_RESTART_FILE, "TLS Engine allocation failed");
                 goto fail_cleanup;
             }
+            tls_engine_diag_enable(engine, g_log_perf);
             int tls_socket_fd = upstream_fd;
             log_blue("[TLS-DIAG] OpenSSL=%s fd=%d verify=%d SNI=%s ALPN=http/1.1 address=%s attempt=%zu/%d",
                      OpenSSL_version(OPENSSL_VERSION), tls_socket_fd,

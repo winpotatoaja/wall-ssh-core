@@ -389,6 +389,7 @@ int main(void)
         perror("tls_engine_create");
         goto done;
     }
+    tls_engine_diag_enable(engine, 1);
     if (tls_engine_start(engine, client_ctx, sockets[0], "localhost",
                          0, 5000) != 0) {
         perror("tls_engine_start");
@@ -512,6 +513,52 @@ int main(void)
         fprintf(stderr, "FAIL: TLS server stage=%d\n", server_args.error);
         goto done;
     }
+
+    tls_engine_diag_snapshot_t telemetry;
+    memset(&telemetry, 0, sizeof(telemetry));
+    if (tls_engine_diag_snapshot(engine, &telemetry, 0) != 0 ||
+        telemetry.poll_calls == 0U || telemetry.poll_wakeups == 0U ||
+        telemetry.rx_calls == 0U || telemetry.tx_calls == 0U ||
+        telemetry.rx_bytes < TLS_TEST_BYTES ||
+        telemetry.tx_bytes < TLS_TEST_BYTES ||
+        telemetry.rx_burst_max == 0U || telemetry.tx_burst_max == 0U) {
+        fprintf(stderr, "FAIL: TLS worker telemetry incomplete "
+                        "poll=%u wake=%u rx=%u/%u tx=%u/%u bursts=%u/%u\n",
+                telemetry.poll_calls, telemetry.poll_wakeups,
+                telemetry.rx_calls, telemetry.rx_bytes,
+                telemetry.tx_calls, telemetry.tx_bytes,
+                telemetry.rx_burst_max, telemetry.tx_burst_max);
+        goto done;
+    }
+    printf("PASS: TLS worker interval telemetry poll=%u rx_bytes=%u tx_bytes=%u "
+           "rx_burst_max=%u tx_burst_max=%u\n",
+           telemetry.poll_calls, telemetry.rx_bytes, telemetry.tx_bytes,
+           telemetry.rx_burst_max, telemetry.tx_burst_max);
+
+    tls_engine_diag_snapshot_t cleared;
+    tls_engine_diag_snapshot_t empty;
+    memset(&cleared, 0, sizeof(cleared));
+    memset(&empty, 0, sizeof(empty));
+    if (tls_engine_diag_snapshot(engine, &cleared, 1) != 0 ||
+        cleared.rx_bytes < TLS_TEST_BYTES || cleared.tx_bytes < TLS_TEST_BYTES ||
+        tls_engine_diag_snapshot(engine, &empty, 0) != 0 ||
+        empty.poll_calls != 0U || empty.rx_calls != 0U || empty.rx_bytes != 0U ||
+        empty.tx_calls != 0U || empty.tx_bytes != 0U ||
+        empty.rx_burst_max != 0U || empty.tx_burst_max != 0U) {
+        fprintf(stderr, "FAIL: TLS fairness snapshot reset did not start an empty interval\n");
+        goto done;
+    }
+    errno = 0;
+    if (tls_engine_diag_snapshot(NULL, &empty, 0) != -1 || errno != EINVAL) {
+        fprintf(stderr, "FAIL: NULL TLS Engine fairness snapshot must return EINVAL\n");
+        goto done;
+    }
+    errno = 0;
+    if (tls_engine_diag_snapshot(engine, NULL, 0) != -1 || errno != EINVAL) {
+        fprintf(stderr, "FAIL: NULL TLS fairness output must return EINVAL\n");
+        goto done;
+    }
+    puts("PASS: TLS fairness snapshot reset and NULL-argument invariants");
 
     printf("PASS: TLS Engine owner-thread duplex transfer %u bytes; "
            "close_notify and graceful shutdown\n", TLS_TEST_BYTES);

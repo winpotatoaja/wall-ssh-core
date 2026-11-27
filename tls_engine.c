@@ -54,6 +54,8 @@ struct tls_engine {
     int rx_terminal_error;
     int tx_terminal_error;
     int stop_requested;
+    int diagnostics_enabled;
+    tls_engine_diag_snapshot_t diagnostics;
 };
 
 /* All state exchanged across threads uses compiler atomics. */
@@ -91,6 +93,43 @@ static int ring_free(const spsc_rb_t *q)
 {
     int used = ring_used(q);
     return used >= (int)q->capacity ? 0 : (int)q->capacity - used;
+}
+
+static int tls_diag_active(const tls_engine_t *engine)
+{
+    return engine && __atomic_load_n(&engine->diagnostics_enabled,
+                                     __ATOMIC_ACQUIRE);
+}
+
+static uint64_t tls_diag_now_ns(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) +
+           (uint64_t)ts.tv_nsec;
+}
+
+static uint32_t tls_diag_elapsed_us(uint64_t started_ns)
+{
+    uint64_t ended_ns = tls_diag_now_ns();
+    if (!started_ns || ended_ns < started_ns) return 0;
+    uint64_t elapsed = (ended_ns - started_ns) / 1000U;
+    return elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
+}
+
+static void tls_diag_add(uint32_t *counter, uint32_t amount)
+{
+    (void)__atomic_fetch_add(counter, amount, __ATOMIC_RELAXED);
+}
+
+static void tls_diag_max(uint32_t *counter, uint32_t value)
+{
+    uint32_t current = __atomic_load_n(counter, __ATOMIC_RELAXED);
+    while (current < value &&
+           !__atomic_compare_exchange_n(counter, &current, value, 1,
+                                        __ATOMIC_RELAXED,
+                                        __ATOMIC_RELAXED)) {
+    }
 }
 
 static void ssl_prepare_io(void)
@@ -266,8 +305,9 @@ static void publish_terminal(tls_engine_t *engine, int error)
 static int engine_try_write(tls_engine_t *engine, SSL *ssl,
                             int *pending, uint32_t *ticket,
                             size_t *pinned_length, int *want_events,
-                            int *fatal_error)
+                            int *fatal_error, size_t *transferred_out)
 {
+    if (transferred_out) *transferred_out = 0;
     size_t available = 0;
     uint32_t current_ticket = 0;
     const uint8_t *data = NULL;
@@ -300,6 +340,7 @@ static int engine_try_write(tls_engine_t *engine, SSL *ssl,
         *pending = 0;
         *want_events = 0;
         *pinned_length = 0;
+        if (transferred_out) *transferred_out = (size_t)rc;
         signal_eventfd(engine->owner_event_fd);
         return 1;
     }
@@ -330,8 +371,10 @@ static int engine_try_write(tls_engine_t *engine, SSL *ssl,
 static int engine_try_read(tls_engine_t *engine, SSL *ssl,
                            int *pending, uint8_t **pinned_buffer,
                            uint32_t *ticket, size_t *pinned_length,
-                           int *want_events, int *fatal_error)
+                           int *want_events, int *fatal_error,
+                           size_t *transferred_out)
 {
+    if (transferred_out) *transferred_out = 0;
     size_t available = 0;
     uint32_t current_ticket = 0;
     uint8_t *buffer = NULL;
@@ -361,6 +404,7 @@ static int engine_try_read(tls_engine_t *engine, SSL *ssl,
         *pinned_buffer = NULL;
         *pinned_length = 0;
         *want_events = 0;
+        if (transferred_out) *transferred_out = (size_t)rc;
         signal_eventfd(engine->owner_event_fd);
         return 1;
     }
@@ -401,6 +445,86 @@ static int engine_try_read(tls_engine_t *engine, SSL *ssl,
     *fatal_error = ssl_error_to_errno(error, saved_errno);
     if (*fatal_error == 0) *fatal_error = EIO;
     return -1;
+}
+
+/*
+ * The TLS owner is the sole writer of service/burst metrics. The SSH Owner
+ * reads them with 32-bit atomics, which remain native-width on mipsel_24kc.
+ */
+static int engine_try_read_measured(tls_engine_t *engine, SSL *ssl,
+                                    int *pending, uint8_t **pinned_buffer,
+                                    uint32_t *ticket, size_t *pinned_length,
+                                    int *want_events, int *fatal_error,
+                                    uint32_t *rx_burst, uint32_t *tx_burst,
+                                    int both_ready)
+{
+    int enabled = tls_diag_active(engine);
+    int tx_before = enabled ? ring_used(&engine->ssh_to_tls) : 0;
+    uint64_t started = enabled ? tls_diag_now_ns() : 0;
+    size_t transferred = 0;
+    int rc = engine_try_read(engine, ssl, pending, pinned_buffer, ticket,
+                             pinned_length, want_events, fatal_error,
+                             &transferred);
+    if (enabled) {
+        tls_diag_add(&engine->diagnostics.rx_calls, 1U);
+        tls_diag_add(&engine->diagnostics.rx_service_us,
+                     tls_diag_elapsed_us(started));
+        if (tx_before > 0)
+            tls_diag_add(&engine->diagnostics.rx_while_tx_pending, 1U);
+        if (both_ready)
+            tls_diag_add(&engine->diagnostics.rx_both_ready, 1U);
+        if (rc == 0 && !*pending && *want_events == POLLIN)
+            tls_diag_add(&engine->diagnostics.rx_want_read, 1U);
+        if (*pending && *want_events == POLLOUT)
+            tls_diag_add(&engine->diagnostics.rx_want_write, 1U);
+        if (rc > 0 && transferred > 0) {
+            tls_diag_add(&engine->diagnostics.rx_completed, 1U);
+            tls_diag_add(&engine->diagnostics.rx_bytes,
+                         transferred > UINT32_MAX ? UINT32_MAX :
+                                                   (uint32_t)transferred);
+            (*rx_burst)++;
+            *tx_burst = 0;
+            tls_diag_max(&engine->diagnostics.rx_burst_max, *rx_burst);
+        }
+    }
+    return rc;
+}
+
+static int engine_try_write_measured(tls_engine_t *engine, SSL *ssl,
+                                     int *pending, uint32_t *ticket,
+                                     size_t *pinned_length, int *want_events,
+                                     int *fatal_error, uint32_t *rx_burst,
+                                     uint32_t *tx_burst, int both_ready)
+{
+    int enabled = tls_diag_active(engine);
+    int rx_before = enabled ? ring_used(&engine->tls_to_ssh) : 0;
+    uint64_t started = enabled ? tls_diag_now_ns() : 0;
+    size_t transferred = 0;
+    int rc = engine_try_write(engine, ssl, pending, ticket, pinned_length,
+                              want_events, fatal_error, &transferred);
+    if (enabled) {
+        tls_diag_add(&engine->diagnostics.tx_calls, 1U);
+        tls_diag_add(&engine->diagnostics.tx_service_us,
+                     tls_diag_elapsed_us(started));
+        if (rx_before > 0)
+            tls_diag_add(&engine->diagnostics.tx_while_rx_buffered, 1U);
+        if (both_ready)
+            tls_diag_add(&engine->diagnostics.tx_both_ready, 1U);
+        if (*pending && *want_events == POLLIN)
+            tls_diag_add(&engine->diagnostics.tx_want_read, 1U);
+        if (*pending && *want_events == POLLOUT)
+            tls_diag_add(&engine->diagnostics.tx_want_write, 1U);
+        if (rc > 0 && transferred > 0) {
+            tls_diag_add(&engine->diagnostics.tx_completed, 1U);
+            tls_diag_add(&engine->diagnostics.tx_bytes,
+                         transferred > UINT32_MAX ? UINT32_MAX :
+                                                   (uint32_t)transferred);
+            (*tx_burst)++;
+            *rx_burst = 0;
+            tls_diag_max(&engine->diagnostics.tx_burst_max, *tx_burst);
+        }
+    }
+    return rc;
 }
 
 static int tls_shutdown_bounded(SSL *ssl, int fd, int timeout_ms)
@@ -465,6 +589,8 @@ static void *tls_engine_thread(void *opaque)
     int rx_closed = 0;
     int fatal_error = 0;
     long long graceful_deadline_ms = 0;
+    uint32_t diag_rx_burst = 0;
+    uint32_t diag_tx_burst = 0;
 #ifdef TLS_ENGINE_DIAGNOSTICS
     uint64_t stat_write_calls = 0;
     uint64_t stat_read_calls = 0;
@@ -523,9 +649,10 @@ static void *tls_engine_thread(void *opaque)
 #ifdef TLS_ENGINE_DIAGNOSTICS
             int before = ring_used(&engine->tls_to_ssh);
 #endif
-            int rc = engine_try_read(engine, ssl, &read_pending,
-                                     &read_buffer, &read_ticket, &read_length,
-                                     &read_want, &fatal_error);
+            int rc = engine_try_read_measured(engine, ssl, &read_pending,
+                                          &read_buffer, &read_ticket, &read_length,
+                                          &read_want, &fatal_error, &diag_rx_burst,
+                                          &diag_tx_burst, 0);
 #ifdef TLS_ENGINE_DIAGNOSTICS
             stat_read_calls++;
             if (rc > 0)
@@ -557,10 +684,22 @@ static void *tls_engine_thread(void *opaque)
 #ifdef TLS_ENGINE_DIAGNOSTICS
         stat_poll_calls++;
 #endif
+        int diag_poll_enabled = tls_diag_active(engine);
+        uint64_t diag_poll_started = diag_poll_enabled ? tls_diag_now_ns() : 0;
         int pr;
         do {
             pr = poll(pfds, 2, stopping ? 100 : 1000);
         } while (pr < 0 && errno == EINTR);
+        if (diag_poll_enabled) {
+            uint32_t waited_us = tls_diag_elapsed_us(diag_poll_started);
+            tls_diag_add(&engine->diagnostics.poll_calls, 1U);
+            tls_diag_add(&engine->diagnostics.poll_wait_us, waited_us);
+            tls_diag_max(&engine->diagnostics.poll_wait_max_us, waited_us);
+            if (pr > 0)
+                tls_diag_add(&engine->diagnostics.poll_wakeups, 1U);
+            else if (pr == 0)
+                tls_diag_add(&engine->diagnostics.poll_timeouts, 1U);
+        }
         if (pr < 0) {
             fatal_error = errno ? errno : EIO;
             break;
@@ -570,6 +709,19 @@ static void *tls_engine_thread(void *opaque)
 #ifdef TLS_ENGINE_DIAGNOSTICS
             stat_poll_owner_event++;
 #endif
+            if (diag_poll_enabled)
+                tls_diag_add(&engine->diagnostics.poll_owner_event, 1U);
+        }
+        if (diag_poll_enabled) {
+            if (pfds[0].revents & POLLIN)
+                tls_diag_add(&engine->diagnostics.poll_socket_in, 1U);
+            if (pfds[0].revents & POLLOUT)
+                tls_diag_add(&engine->diagnostics.poll_socket_out, 1U);
+            if ((pfds[0].revents & (POLLIN | POLLHUP)) &&
+                (pfds[0].revents & POLLOUT))
+                tls_diag_add(&engine->diagnostics.poll_socket_both, 1U);
+            if (!rx_closed && ring_free(&engine->tls_to_ssh) == 0)
+                tls_diag_add(&engine->diagnostics.rx_ring_full, 1U);
         }
 #ifdef TLS_ENGINE_DIAGNOSTICS
         if (pfds[0].revents & POLLIN) stat_poll_socket_in++;
@@ -598,9 +750,12 @@ static void *tls_engine_thread(void *opaque)
 #ifdef TLS_ENGINE_DIAGNOSTICS
                 int before = ring_used(&engine->ssh_to_tls);
 #endif
-                int rc = engine_try_write(engine, ssl, &write_pending,
-                                          &write_ticket, &write_length,
-                                          &write_want, &fatal_error);
+                int rc = engine_try_write_measured(engine, ssl, &write_pending,
+                                           &write_ticket, &write_length,
+                                           &write_want, &fatal_error,
+                                           &diag_rx_burst, &diag_tx_burst,
+                                           (pfds[0].revents & (POLLIN | POLLHUP)) &&
+                                           (pfds[0].revents & POLLOUT));
 #ifdef TLS_ENGINE_DIAGNOSTICS
                 stat_write_calls++;
                 if (rc > 0)
@@ -621,9 +776,11 @@ static void *tls_engine_thread(void *opaque)
 #ifdef TLS_ENGINE_DIAGNOSTICS
                 int before = ring_used(&engine->tls_to_ssh);
 #endif
-                int rc = engine_try_read(engine, ssl, &read_pending,
-                                         &read_buffer, &read_ticket, &read_length,
-                                         &read_want, &fatal_error);
+                int rc = engine_try_read_measured(engine, ssl, &read_pending,
+                                          &read_buffer, &read_ticket, &read_length,
+                                          &read_want, &fatal_error, &diag_rx_burst,
+                                          &diag_tx_burst, (pfds[0].revents & (POLLIN | POLLHUP)) &&
+                                          (pfds[0].revents & POLLOUT));
 #ifdef TLS_ENGINE_DIAGNOSTICS
                 stat_read_calls++;
                 if (rc > 0)
@@ -646,9 +803,11 @@ static void *tls_engine_thread(void *opaque)
 #ifdef TLS_ENGINE_DIAGNOSTICS
             int before = ring_used(&engine->tls_to_ssh);
 #endif
-            int rc = engine_try_read(engine, ssl, &read_pending,
-                                     &read_buffer, &read_ticket, &read_length,
-                                     &read_want, &fatal_error);
+            int rc = engine_try_read_measured(engine, ssl, &read_pending,
+                                          &read_buffer, &read_ticket, &read_length,
+                                          &read_want, &fatal_error, &diag_rx_burst,
+                                          &diag_tx_burst, (pfds[0].revents & (POLLIN | POLLHUP)) &&
+                                          (pfds[0].revents & POLLOUT));
 #ifdef TLS_ENGINE_DIAGNOSTICS
             stat_read_calls++;
             if (rc > 0)
@@ -666,9 +825,12 @@ static void *tls_engine_thread(void *opaque)
 #ifdef TLS_ENGINE_DIAGNOSTICS
             int before = ring_used(&engine->ssh_to_tls);
 #endif
-            int rc = engine_try_write(engine, ssl, &write_pending,
-                                      &write_ticket, &write_length,
-                                      &write_want, &fatal_error);
+            int rc = engine_try_write_measured(engine, ssl, &write_pending,
+                                           &write_ticket, &write_length,
+                                           &write_want, &fatal_error,
+                                           &diag_rx_burst, &diag_tx_burst,
+                                           (pfds[0].revents & (POLLIN | POLLHUP)) &&
+                                           (pfds[0].revents & POLLOUT));
 #ifdef TLS_ENGINE_DIAGNOSTICS
             stat_write_calls++;
             if (rc > 0)
@@ -951,6 +1113,64 @@ int tls_engine_rx_pending(const tls_engine_t *engine)
 int tls_engine_tx_pending(const tls_engine_t *engine)
 {
     return engine ? ring_used(&engine->ssh_to_tls) : 0;
+}
+
+static uint32_t tls_diag_take(uint32_t *counter, int reset)
+{
+    return reset
+        ? __atomic_exchange_n(counter, 0U, __ATOMIC_ACQ_REL)
+        : __atomic_load_n(counter, __ATOMIC_ACQUIRE);
+}
+
+void tls_engine_diag_enable(tls_engine_t *engine, int enabled)
+{
+    if (!engine) return;
+    __atomic_store_n(&engine->diagnostics_enabled, 0, __ATOMIC_RELEASE);
+    tls_engine_diag_snapshot_t ignored;
+    (void)tls_engine_diag_snapshot(engine, &ignored, 1);
+    __atomic_store_n(&engine->diagnostics_enabled, enabled != 0,
+                     __ATOMIC_RELEASE);
+}
+
+int tls_engine_diag_snapshot(tls_engine_t *engine,
+                             tls_engine_diag_snapshot_t *snapshot,
+                             int reset)
+{
+    if (!engine || !snapshot) {
+        errno = EINVAL;
+        return -1;
+    }
+#define TLS_DIAG_TAKE(field) snapshot->field = tls_diag_take(&engine->diagnostics.field, reset)
+    TLS_DIAG_TAKE(poll_calls);
+    TLS_DIAG_TAKE(poll_wakeups);
+    TLS_DIAG_TAKE(poll_timeouts);
+    TLS_DIAG_TAKE(poll_wait_us);
+    TLS_DIAG_TAKE(poll_wait_max_us);
+    TLS_DIAG_TAKE(poll_socket_in);
+    TLS_DIAG_TAKE(poll_socket_out);
+    TLS_DIAG_TAKE(poll_socket_both);
+    TLS_DIAG_TAKE(poll_owner_event);
+    TLS_DIAG_TAKE(rx_calls);
+    TLS_DIAG_TAKE(rx_completed);
+    TLS_DIAG_TAKE(rx_bytes);
+    TLS_DIAG_TAKE(rx_service_us);
+    TLS_DIAG_TAKE(rx_want_read);
+    TLS_DIAG_TAKE(rx_want_write);
+    TLS_DIAG_TAKE(rx_both_ready);
+    TLS_DIAG_TAKE(rx_while_tx_pending);
+    TLS_DIAG_TAKE(rx_burst_max);
+    TLS_DIAG_TAKE(tx_calls);
+    TLS_DIAG_TAKE(tx_completed);
+    TLS_DIAG_TAKE(tx_bytes);
+    TLS_DIAG_TAKE(tx_service_us);
+    TLS_DIAG_TAKE(tx_want_read);
+    TLS_DIAG_TAKE(tx_want_write);
+    TLS_DIAG_TAKE(tx_both_ready);
+    TLS_DIAG_TAKE(tx_while_rx_buffered);
+    TLS_DIAG_TAKE(tx_burst_max);
+    TLS_DIAG_TAKE(rx_ring_full);
+#undef TLS_DIAG_TAKE
+    return 0;
 }
 
 int tls_engine_queue_snapshot(const tls_engine_t *engine,

@@ -15,9 +15,9 @@ R68 memulai perbaikan diagnostik antrean yang ditemukan saat audit R67:
 - Jalur partial read mengurangi byte yang benar-benar dikonsumsi; packet-ask dan channel-flush mengurangi payload yang tersisa saat node dihapus.
 - Baseline saat diagnostics diaktifkan tetap dihitung dari `data_len - data_head`, sehingga konsisten dengan accounting setelah enable.
 
-Regression test R68 mengekstrak helper C dari template patch R43, mengompilasinya, lalu menguji satuan payload dan jalur enqueue/consume/dequeue. Pada Actions #934, test dijalankan dalam dua mode: helper native dan source libssh2 1.11.1 hasil patch; keduanya lulus. Build IPK R68, pemeriksaan metadata/checksum, instalasi di guest, dan integrasi runtime MT7621 QEMU juga lulus.
+Regression R68-A/B menguji satuan payload serta lifecycle enqueue/consume/dequeue dan invariant snapshot/reset. Pada Actions #935, native regression, generated-source libssh2 1.11.1, build SDK/IPK, serta integrasi runtime MT7621 QEMU lulus; kedua job SUCCESS dan guest melaporkan `MIPS TEST STATUS: 0`.
 
-Tidak ada perubahan pada jalur transfer, cipher, buffer, worker, atau prioritas RX/TX. R68-A sudah tervalidasi pada source, SDK, dan QEMU. Namun R68-B belum selesai: regression saat ini belum menguji seluruh invariant snapshot/reset secara eksplisit. Build log juga mencatat warning GCC non-fatal `-Winline` pada helper dequeue di beberapa callsite; kompilasi tetap sukses dan warning tersebut belum dijadikan dasar perubahan performa.
+R68-A dan R68-B selesai. R68-C menambahkan telemetry observasional pada TLS Engine yang hanya aktif dengan `-log-perf 1`: interval poll wait/wakeup, readiness dua arah, service RX/TX, byte, WANT_READ/WANT_WRITE, burst, dan kondisi antrean silang. Perubahan ini tidak mengubah scheduler, urutan operasi TLS, cipher, kapasitas buffer, atau perilaku transfer. Validasi C sedang disiapkan; status PASS/FAIL baru ditetapkan setelah hasil Actions diperiksa.
 
 ## Roadmap pengerjaan R68-A sampai R68-E
 
@@ -26,8 +26,8 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | Tahap | Pekerjaan | Status / keputusan |
 |---|---|---|
 | **R68-A** | Koreksi counter libssh2 yang sebelumnya memasukkan header 9 byte (CHANNEL_DATA) dan 13 byte (EXTENDED_DATA) ke hitungan payload | **Selesai dan tervalidasi.** Bug accounting diperbaiki; helper native dan source libssh2 1.11.1 hasil patch lulus, IPK r68 berhasil dibangun, dan integrasi MT7621 QEMU lulus. |
-| **R68-B** | Uji seluruh lifecycle packet dan invariant snapshot | **Lulus native, generated-source, dan SDK CI.** Helper dan API enable/snapshot aktual dari template patch dikompilasi dan diuji; source libssh2 1.11.1 hasil patch mengandung callsite/API yang sama. QEMU job #935 masih booting dan dicatat terpisah. |
-| **R68-C** | Telemetry kondisi dan fairness TLS worker | **Direncanakan — diagnostik saja.** Catat kondisi kerja dan distribusi/fairness TLS worker untuk analisis. Tidak mengubah scheduler, pembagian tugas, jumlah worker, prioritas, atau perilaku transfer. |
+| **R68-B** | Uji seluruh lifecycle packet dan invariant snapshot | **Lulus native, generated-source, SDK, dan MT7621 QEMU.** Actions #935: kedua job SUCCESS; guest `MIPS TEST STATUS: 0`. |
+| **R68-C** | Telemetry kondisi dan fairness TLS worker | **Implementasi selesai; menunggu Actions.** Snapshot interval read-only `[TLSFAIR]`; aktif hanya pada `-log-perf 1`, tanpa mengubah scheduler atau alur TLS. |
 | **R68-D** | Durasi antrean S2C, TCP_INFO, dan SIOCOUTQNSD | **Direncanakan — diagnostik saja.** Tambahkan pengukuran umur/durasi data di antrean S2C serta snapshot informasi TCP/kernel send queue. Instrumentasi harus menjaga ownership socket dan tidak mengubah mekanisme backpressure. |
 | **R68-E** | Analisis hasil sebelum optimasi | **Belum dilakukan.** Gabungkan hasil B/C/D, identifikasi lokasi bottleneck berdasarkan bukti, lalu tentukan apakah optimasi memang diperlukan. Tidak ada optimasi spekulatif sebelum tahap analisis ini. |
 
@@ -45,12 +45,12 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | R68-A: integrasi source libssh2 1.11.1 hasil patch | Lulus | Semua assertion R68 source-level lulus untuk packet.c, channel.c, session.c, dan libssh2_priv.h |
 | R68-B: lifecycle packet yang sudah dicakup | Lulus untuk kasus saat ini | Enqueue, partial read, packet-ask, channel-flush, DATA 9-byte header, EXTENDED_DATA 13-byte header, control packet, cumulative bytes, dan peak |
 | R68-B: regression snapshot/lifecycle | **Lulus native + generated source + SDK** | Semua case enable baseline, snapshot reset=0/1, reset kosong/nonkosong, peak rebase ke current, re-enable, disable, NULL arguments, underflow, dan packet drain setelah reset lulus di Actions #935 |
-| R68-C: telemetry TLS worker fairness | Belum dimulai | Diagnostik saja; tidak mengubah scheduling atau transfer |
+| R68-C: telemetry TLS worker fairness | **Diimplementasikan; menunggu Actions** | Poll wait/wakeup, RX/TX calls/bytes/service time, WANT states, simultaneous readiness, cross-direction buffering, burst maksimum, RX ring full; snapshot 32-bit atomik per interval |
 | R68-D: umur antrean S2C + TCP_INFO + SIOCOUTQNSD | Belum dimulai | Diagnostik saja; tidak mengubah backpressure atau ownership socket |
 | R68-E: analisis sebelum optimasi | Belum dilakukan | Menunggu bukti dari B/C/D; optimasi belum boleh diasumsikan perlu |
 | Source gate profil crypto final + identitas paket R68 | Lulus | Profil R64/R65-B/R66 tetap dijaga; ekspektasi release/artifact disesuaikan ke r68 |
-| Build package SDK OpenWrt 24.10.7 / IPK R68 | **Lulus** | Actions #934; IPK `1.0.0-r68`, metadata dan checksum diverifikasi |
-| QEMU MT7621 | **Lulus** | Actions #934; IPK r68 terpasang di guest, seluruh runtime integration checks selesai, `MIPS TEST STATUS: 0` |
+| Build package SDK OpenWrt 24.10.7 / IPK R68 | **Lulus** | Actions #934 dan #935; IPK `1.0.0-r68`, metadata dan checksum diverifikasi |
+| QEMU MT7621 | **Lulus** | Actions #934 dan #935; #935 kedua job SUCCESS, guest `MIPS TEST STATUS: 0`, TCP/TLS duplex, half-close, multi-client dan checksum checks lulus |
 | Benchmark throughput / Datapacket Internet benchmark | Belum dijalankan | Tidak ada benchmark bandwidth opsional dan tidak ada tuning performa R68 |
 
 ### Detail kegagalan Actions #933
@@ -105,7 +105,19 @@ Bukti R68-B yang sudah lulus:
 - Generated source libssh2 1.11.1 diverifikasi: enqueue, partial read, packet unlink, packet-ask, flush, enable baseline, dan API snapshot sesuai template yang diuji.
 - SDK OpenWrt 24.10.7 / mipsel_24kc berhasil membangun OpenSSL, libssh2, dan IPK R68; source gate final crypto tetap lulus.
 
-**Status QEMU pada run yang sama:** job SDK sukses dan job VM sedang pada step boot guest MT7621. QEMU belum dinyatakan pass/fail. Ini adalah validasi runtime tambahan; hasil source-level R68-B di atas sudah lulus.
+**Status QEMU Actions #935: PASS.** Job SDK dan VM sama-sama berakhir SUCCESS. Guest memasang IPK `1.0.0-r68` pada `mipsel_24kc`, melewati regression TCP/TLS multi-client, ChaCha default, AES-CTR, half-close dan full-duplex dengan verifikasi checksum, lalu melaporkan `MIPS TEST STATUS: 0`. Ini adalah validasi MT7621 QEMU, bukan pengujian router fisik.
+
+### R68-C — telemetry fairness TLS Engine
+
+R68-C mempertahankan TLS Engine sebagai satu pemilik `SSL*` dan tidak mengubah urutan operasi. Ketika `-log-perf 1` aktif, SSH Owner mengambil snapshot interval atomik dan menulis satu baris `[TLSFAIR]` untuk koneksi TLS. Metrik mencakup:
+
+- Poll activity: jumlah poll, wakeup/timeout, akumulasi dan maksimum waktu menunggu, readiness socket RX/TX sekaligus, serta wakeup dari SSH Owner.
+- RX/TX service: percobaan dan operasi sukses, byte yang benar-benar diproses SSL, waktu service, WANT_READ/WANT_WRITE, dan burst operasi maksimum per arah.
+- Cross-direction pressure: RX yang dilayani ketika ring TX masih berisi, TX ketika ring RX masih berisi, dan frekuensi ring RX penuh.
+
+Counter menggunakan atomic 32-bit agar pembacaan interval tetap sesuai lebar native MT7621/mipsel. Snapshot `reset=1` mengosongkan interval sebelumnya; pembacaan tidak melakukan socket I/O maupun operasi SSL. Regression native memverifikasi aktivitas duplex, reset interval dan argumen NULL; source gate memeriksa integrasi LOG_PERF; runtime verifier memerlukan `[TLSFAIR]` valid dari log TLS guest.
+
+**Status R68-C:** implementasi dan regression sudah disiapkan; validasi Actions masih menunggu hasil. Telemetry ini bersifat diagnostik, bukan optimasi performa.
 
 ### Hasil validasi berhasil — Actions #934
 
@@ -223,4 +235,4 @@ Tujuan diagnostik adalah membedakan penumpukan pada socket upstream, ring buffer
 
 ## Status
 
-**R68-A selesai dan tervalidasi pada SDK/QEMU. R68-B regression lulus pada native C, source libssh2 hasil patch, dan SDK MIPS. QEMU run #935 masih booting; C/D belum dimulai dan E belum dilakukan.**
+**R68-A dan R68-B selesai serta tervalidasi pada native/source/SDK/MT7621 QEMU (Actions #935). R68-C sudah diimplementasikan; menunggu validasi Actions. R68-D belum dimulai dan R68-E menunggu bukti dari tahap diagnostik.**

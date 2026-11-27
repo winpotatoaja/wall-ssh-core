@@ -17,6 +17,9 @@ def main():
     a0 = tls_c.find("int tls_engine_queue_snapshot(")
     a1 = tls_c.find("\nint tls_engine_rx_terminal", a0)
     api = tls_c[a0:a1] if a0 >= 0 and a1 > a0 else ""
+    d0 = tls_c.find("int tls_engine_diag_snapshot(")
+    d1 = tls_c.find("\nint tls_engine_queue_snapshot", d0)
+    diag_api = tls_c[d0:d1] if d0 >= 0 and d1 > d0 else ""
     checks = [
         check("#include <sys/ioctl.h>" in ssh and "#include <linux/sockios.h>" in ssh, "ssh-core includes Linux TCP queue ioctl declarations"),
         check("perf_socket_queue_bytes(c->fd, SIOCINQ" in perf and "perf_socket_queue_bytes(c->fd, SIOCOUTQ" in perf, "active SOCKS sockets expose both kernel queues"),
@@ -28,9 +31,15 @@ def main():
         check("ring_used(&engine->tls_to_ssh)" in api and "ring_used(&engine->ssh_to_tls)" in api and "ioctl(fd, SIOCINQ" in api and "ioctl(fd, SIOCOUTQ" in api, "TLS API reports ring occupancy and upstream kernel queues"),
         check("pthread_mutex_lock(&mutable_engine->mutex)" in api and "tls_engine_close_owned_socket(engine);" in tls_c, "TLS ioctl sampling is serialized against final socket close"),
         check("recv(" not in api and "send(" not in api and "SSL_read(" not in api and "SSL_write(" not in api, "snapshot performs no socket or TLS I/O"),
+        check("tls_engine_diag_snapshot_t" in tls_h and "rx_want_read" in tls_h and "rx_burst_max" in tls_h and "tx_burst_max" in tls_h, "TLS fairness API exposes RX/TX wait and burst metrics"),
+        check("tls_engine_diag_enable(engine, g_log_perf);" in ssh and ssh.find("tls_engine_diag_enable(engine, g_log_perf);") < ssh.find("tls_engine_start(engine, ssl_ctx"), "TLS telemetry configured before worker start"),
+        check("tls_engine_diag_snapshot(upstream->tls, &tls_diag, 1)" in perf and 'log_raw("[TLSFAIR] span_ms=%lld' in perf, "TLS fairness snapshot is reset and emitted per LOG_PERF interval"),
+        check("engine_try_read_measured" in tls_c and "engine_try_write_measured" in tls_c and "rx_while_tx_pending" in tls_c and "tx_while_rx_buffered" in tls_c, "TLS worker measures RX/TX service and cross-direction backlog"),
+        check("poll_wait_us" in tls_c and "poll_socket_both" in tls_c and "rx_ring_full" in tls_c, "TLS worker records wait time, simultaneous readiness and RX ring pressure"),
+        check("SSL_read(" not in diag_api and "SSL_write(" not in diag_api and "poll(" not in diag_api, "fairness snapshot reads counters only and performs no I/O"),
     ]
     if not all(checks): return 1
-    print("PASS: R67-DIAG queue instrumentation is read-only and LOG_PERF-gated")
+    print("PASS: R67 queue and R68-C TLS fairness diagnostics are read-only and LOG_PERF-gated")
     return 0
 
 if __name__ == "__main__":

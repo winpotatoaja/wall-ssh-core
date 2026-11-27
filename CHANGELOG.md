@@ -10,11 +10,12 @@
 - Expand the R68 regression harness to compile the actual enable/snapshot API templates and verify existing-queue baseline, non-reset snapshots, empty/non-empty reset semantics, peak rebasing to current, re-enable/disable, NULL arguments, and saturating underflow behavior.
 - Verify generated `session.c` contains the exact enable/snapshot API template used by the native lifecycle test.
 - R68-B native lifecycle/snapshot regression: **PASS** (Actions #935); generated libssh2 1.11.1 source integration: **PASS**; OpenWrt 24.10.7 SDK/IPK: **PASS**.
-- MT7621 QEMU job in Actions #935: boot step still in progress at documentation update; runtime result not yet claimed.
+- MT7621 QEMU integration in Actions #935: **PASS**; SDK and VM jobs both completed successfully, guest reported `MIPS TEST STATUS: 0`, and TCP/TLS multi-client, half-close, full-duplex and checksum regressions passed.
 - SDK OpenWrt 24.10.7 / mipsel_24kc: **PASS** (Actions #934, source `2f2af74b7db68c9cd13e569ecb577fae302f19e7`).
 - MT7621 QEMU integration: **PASS**; guest installed `1.0.0-r68`, and runtime integration finished with `MIPS TEST STATUS: 0`.
 - IPK SHA-256: `cbcb8dfbcd5b1d2c686cd5d7c6370754323917194f8bac9616932fd721940563`.
-- R68-B snapshot/reset invariants remain incomplete; R68-C/D diagnostics and R68-E analysis have not started.
+- R68-B packet lifecycle and snapshot/reset invariants: **PASS** on native regression, generated-source integration, OpenWrt SDK/IPK and MT7621 QEMU (Actions #935).
+- Start R68-C TLS Engine fairness telemetry: runtime-gated interval snapshots for poll wait/wakeup, simultaneous RX/TX readiness, RX/TX service calls/bytes/time, WANT states, cross-direction buffering, burst maxima and RX-ring pressure. The native duplex test checks non-zero activity and reset semantics; source and guest runtime verifiers check `[TLSFAIR]` wiring and records. Actions validation is pending; R68-D/E are not started.
 
 ---
 

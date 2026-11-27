@@ -58,6 +58,27 @@ typedef struct {
 int tls_engine_queue_snapshot(const tls_engine_t *engine,
                               tls_engine_queue_snapshot_t *snapshot);
 
+/*
+ * Runtime-gated TLS Engine interval telemetry. Enable before tls_engine_start().
+ * Snapshot reads counters only; reset atomically starts a new interval.
+ */
+typedef struct {
+    uint32_t poll_calls, poll_wakeups, poll_timeouts;
+    uint32_t poll_wait_us, poll_wait_max_us;
+    uint32_t poll_socket_in, poll_socket_out, poll_socket_both, poll_owner_event;
+    uint32_t rx_calls, rx_completed, rx_bytes, rx_service_us;
+    uint32_t rx_want_read, rx_want_write, rx_both_ready, rx_while_tx_pending, rx_burst_max;
+    uint32_t tx_calls, tx_completed, tx_bytes, tx_service_us;
+    uint32_t tx_want_read, tx_want_write, tx_both_ready;
+    uint32_t tx_while_rx_buffered, tx_burst_max;
+    uint32_t rx_ring_full;
+} tls_engine_diag_snapshot_t;
+
+void tls_engine_diag_enable(tls_engine_t *engine, int enabled);
+int tls_engine_diag_snapshot(tls_engine_t *engine,
+                             tls_engine_diag_snapshot_t *snapshot,
+                             int reset);
+
 /* Returns 1 when receive-side TLS EOF/error is published, otherwise 0. */
 int tls_engine_rx_terminal(const tls_engine_t *engine, int *error_out);
 int tls_engine_tx_terminal(const tls_engine_t *engine, int *error_out);
