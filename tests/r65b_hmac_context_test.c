@@ -161,7 +161,6 @@ static int test_init_and_final_failures(void)
     OSSL_PARAM missing_key[3];
     size_t outlen = 0;
     unsigned int i;
-    int ok;
 
     for(i = 0; i < sizeof(key); i++)
         key[i] = (unsigned char)(0x53U + i);
