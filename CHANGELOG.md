@@ -1,3 +1,12 @@
+## R65-C implementation — 2026-11-27
+
+- Created isolated branch `experiment/r65c-rx-outofplace` from the R65-A/B benchmark baseline (`23263ee00b604f078909d3ab3bf61dec804e84ec`).
+- Added the internal `_libssh2_ctr_bulk_crypt_outofplace()` bridge and OpenSSL 3 backend `_libssh2_openssl_ctr_bulk_crypt()`. The bridge is limited to `session->remote.crypt_abstract`, RX (`encrypt == 0`), and `_libssh2_cipher_aes128ctr`; the backend accepts only AES-128-CTR and aligned 16-byte fragments, validates `INT_MAX`, pointer-range overflow and partial overlap, and permits exact in-place operation.
+- Replaced only the R65-A/B `CTR_BULK` RX implementation in `decrypt_impl()`: the EVP update now writes to `dest` from `source`, and the follow-up `memcpy()` and its timing increments are removed. `ctr_rx_evp_us` measures the new EVP call; existing `ctr_rx_copy_*` fields remain ABI-compatible and must report zero. FIRST_BLOCK, non-bulk fallback, TX, HMAC R65-B, ChaCha, AES-GCM and cipher preference are unchanged.
+- Added a source validator and AES-128-CTR differential test covering input/output offsets 0–3, lengths including 34,992 and 35,008 bytes, a 35,000-byte invalid length, low-counter wrap, split EVP state, exact in-place reference, 16-byte reference, partial-overlap rejection, pointer arithmetic overflow, wrong-cipher rejection and rejected-call state preservation.
+- Extended the OpenWrt 24.10.7 MIPS SDK/MT7621 QEMU workflow to run the source patch after R65-B, native ASan/UBSan tests, a MIPS EVP helper, and forced AES-128-CTR non-ETM/ETM transfers under the existing 1 MiB rekey limit. The QEMU runtime gate now requires `ctr_rx_copy_calls=0` and `ctr_rx_copy_bytes=0`.
+- SDK/QEMU validation is queued from this commit. No correctness pass, throughput improvement or physical MT7621A speedup is claimed until the workflow and subsequent profiling complete.
+
 ## R65-A/B benchmark results and post-processing fixes — 2026-11-27
 
 - Analyzed Actions run #2 (`45924267200`), artifact `15165389241`, using the raw QEMU guest logs. The QEMU boot, 3 algorithm-pinned SSH endpoints, 12 throughput runs, log collection, and host-authentication-count verification all passed. Every throughput run transferred 100,000,000 bytes via direct and SOCKS5, HTTP 200, equal byte counts, the intended negotiated cipher/MAC, and exactly one authentication/key establishment. The workflow's final result was failure only in the analysis step.
@@ -6,7 +15,7 @@
 - R65-B `ctx_allocs` and `key_inits` were zero in the profiling interval because the benchmark enables libssh2 diagnostic timing only after SSH session keys are established; KEX-time context allocation/key initialization is outside that measurement window. This is not evidence that context creation failed: R65-B Actions #901 separately passed runtime assertions for these counters on forced AES-CTR traffic. The profiling gate has been corrected to check the measured evidence (`reuse_resets > 0`, `setup_calls = 0`).
 - R65-A/B analyzer defects fixed: each throughput table now filters by the current cipher profile (previously all six runs were pooled into each table); paired deltas also filter by profile; WAN RX parsing now selects `wan(default)_rx` rather than the first interface; direct endpoint IPs are separated from curl's SOCKS peer address (`127.0.0.1`).
 - R65-A/B crypto bottleneck observations: in the HMAC profiling intervals, AES-CTR RX EVP time was 85–103 ms/MiB, while the following destination copy was 3.7–4.0 ms/MiB. HMAC time per MiB reduced about 33–36%, but AES-CTR EVP time did not improve. Owner CPU averaged about 95–97% in AES-CTR/HMAC runs, while the three ChaCha decrypt workers were each active around 17–18% and Owner around 51%. This indicates the next investigation should prioritize the AES-CTR RX EVP path; do not assume copy elimination alone will create a large speed gain.
-- QEMU-only result; no physical MT7621A throughput claim. R65-C implementation is not started and should be redesigned after reviewing the EVP timing evidence.
+- QEMU-only result; no physical MT7621A throughput claim. R65-C is now a separate implementation experiment based on the reviewed EVP timing and MIPS alignment risks; its validation and performance gates are recorded above.
 
 ## R65 A/B benchmark preparation — 2026-11-27
 
