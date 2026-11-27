@@ -44,6 +44,20 @@ void tls_engine_drain_notify(tls_engine_t *engine);
 int tls_engine_rx_pending(const tls_engine_t *engine);
 int tls_engine_tx_pending(const tls_engine_t *engine);
 
+/* Read-only queue snapshot; ioctl validity is reported independently. */
+typedef struct {
+    uint32_t rx_buffered_bytes;
+    uint32_t tx_buffered_bytes;
+    uint32_t capacity_bytes;
+    int socket_rxq_bytes;
+    int socket_txq_bytes;
+    int socket_rxq_valid;
+    int socket_txq_valid;
+} tls_engine_queue_snapshot_t;
+
+int tls_engine_queue_snapshot(const tls_engine_t *engine,
+                              tls_engine_queue_snapshot_t *snapshot);
+
 /* Returns 1 when receive-side TLS EOF/error is published, otherwise 0. */
 int tls_engine_rx_terminal(const tls_engine_t *engine, int *error_out);
 int tls_engine_tx_terminal(const tls_engine_t *engine, int *error_out);
