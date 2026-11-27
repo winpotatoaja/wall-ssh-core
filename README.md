@@ -29,7 +29,7 @@ Urutan ini memisahkan koreksi accounting, pembuktian invariant, instrumentasi ta
 | **R68-B** | Uji seluruh lifecycle packet dan invariant snapshot | **Lulus native, generated-source, SDK, dan MT7621 QEMU.** Actions #935: kedua job SUCCESS; guest `MIPS TEST STATUS: 0`. |
 | **R68-C** | Telemetry kondisi dan fairness TLS worker | **Lulus native, source, SDK, dan MT7621 QEMU (Actions #949).** `[TLSFAIR]` runtime tervalidasi; ditemukan pola RX-preferred saat dua arah siap dan antrean TLS RX/S2C yang perlu ditelusuri di R68-D. |
 | **R68-D** | Durasi antrean S2C, TCP_INFO, dan SIOCOUTQNSD | **Lulus native/source, SDK, dan MT7621 QEMU (Actions #951).** `[S2CAGE]` dan `[TCPINFO]` tervalidasi; SIOCOUTQNSD tersedia pada guest dan sampel active-backpressure menunjukkan antrean kernel not-sent. Diagnostik saja. |
-| **R68-E** | Analisis hasil sebelum optimasi | **Belum dilakukan.** Gabungkan hasil B/C/D, identifikasi lokasi bottleneck berdasarkan bukti, lalu tentukan apakah optimasi memang diperlukan. Tidak ada optimasi spekulatif sebelum tahap analisis ini. |
+| **R68-E** | Analisis hasil sebelum optimasi | **Belum dilakukan.** Gabungkan hasil A/B/C/D, identifikasi lokasi bottleneck berdasarkan bukti, lalu tentukan apakah optimasi memang diperlukan. Tidak ada optimasi spekulatif sebelum tahap analisis ini. |
 
 **Aturan R68:** A memperbaiki satuan accounting; B wajib membuktikan lifecycle dan invariant sebelum instrumentasi lanjutan dipakai. C dan D hanya mengumpulkan bukti, bukan tuning performa. E menjadi gerbang keputusan. Tidak ada perubahan cipher, buffer, scheduler, worker, prioritas RX/TX, atau kebijakan backpressure dalam tahapan diagnostik ini.
 
