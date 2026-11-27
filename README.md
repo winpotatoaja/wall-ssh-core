@@ -19,6 +19,23 @@ Regression test R68 mengekstrak helper C yang benar-benar dihasilkan template pa
 
 Tidak ada perubahan pada jalur transfer, cipher, buffer, worker, atau prioritas RX/TX. R68 saat ini merupakan koreksi accounting diagnostik; validasi SDK dan QEMU belum dijalankan.
 
+## Progress pengerjaan R68
+
+**Update: 2026-11-27**
+
+| Tahap | Status | Catatan |
+|---|---|---|
+| Branch R68 dari R67-DIAG | Selesai | `experiment/r68-queue-accounting` |
+| Koreksi satuan byte enqueue | Selesai | Enqueue kini menambahkan `data_len - data_head`, konsisten dengan konsumsi, dequeue, dan baseline |
+| Regression helper C | Lulus lokal | 16 assertion; dikompilasi dengan GCC `-Wall -Wextra -Werror`, termasuk DATA, EXTENDED_DATA, partial read, packet removal, flush, dan control packet |
+| Sintaks regression Python | Lulus lokal | Salinan test harness berhasil melalui `py_compile` |
+| Integrasi regression terhadap source libssh2 hasil patch | Menunggu SDK | Workflow memeriksa `packet.c`, `channel.c`, `session.c`, dan `libssh2_priv.h` hasil patch |
+| SDK OpenWrt 24.10.7 / IPK R68 | Menunggu | Belum dijalankan |
+| QEMU MT7621 | Menunggu | Belum dijalankan |
+| Benchmark throughput | Menunggu | Tidak ada tuning performa pada R68-A |
+
+**Batas validasi lokal:** helper C dan skenario accounting sudah diuji secara native. Pemeriksaan terhadap hasil patch libssh2 yang dibuat dari source OpenWrt serta build target MIPS32 tetap menunggu job SDK. Status ini tidak boleh dianggap sebagai SDK/QEMU pass.
+
 ## Profil crypto final
 
 R66 mengunci kombinasi yang paling kuat didukung hasil pengujian MT7621 QEMU:
