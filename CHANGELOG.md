@@ -1,4 +1,17 @@
-# R67-DIAG — Changelog
+# R68 — Changelog
+
+## 2026-11-27 — libssh2 packet queue payload accounting
+
+- Correct the R43 diagnostic enqueue hook to add `data_len - data_head`, so current and cumulative queue-byte counters measure unread payload rather than SSH framing headers.
+- Keep the existing partial-read, packet-ask, and channel-flush subtraction paths; they now share the same payload-byte unit as enqueue and the enable-time queue baseline.
+- Add a regression test that compiles the actual inline accounting helpers extracted from the R43 patch template and exercises CHANNEL_DATA, EXTENDED_DATA, partial reads, packet removal, flush, and control packets.
+- Preserve relay behavior, crypto profile, socket I/O, buffers, and worker topology. This is a diagnostic-accounting correction only.
+- Package release: `1.0.0-r68`.
+- SDK/QEMU validation: pending.
+
+---
+
+## R67-DIAG — Historical baseline
 
 ## 2026-11-27 — R67-DIAG queue telemetry (based on R66)
 

@@ -1,10 +1,23 @@
-# R67-DIAG — Passwall SSH Core
+# R68 — Passwall SSH Core Queue Accounting
 
 Tanggal: 2026-11-27  
-Branch: **experiment/r67-diag**  
-Commit final: \`41b101378ebda17e211d03be7ea7e7709f04f0ab\`  
-Basis crypto: R65-B commit \`dc0454d93a93afc94e8024f6346b54eb3ccd07d7\`  
-Paket: **1.0.0-r67**
+Branch: **experiment/r68-queue-accounting**  
+Basis source: R67-DIAG commit `b12970a1095169447a7ce358e4a5c642dbf7d95c`  
+Basis crypto: R65-B commit `dc0454d93a93afc94e8024f6346b54eb3ccd07d7`  
+Paket: **1.0.0-r68**
+
+## R68 — koreksi accounting antrean libssh2
+
+R68 memulai perbaikan diagnostik antrean yang ditemukan saat audit R67:
+
+- `packet_queue_bytes_current` dan `packet_queue_enqueued_bytes` memakai satuan payload yang belum dikonsumsi, bukan ukuran paket termasuk header SSH.
+- Hook enqueue memakai `packet->data_len - packet->data_head`. Untuk CHANNEL_DATA ini mengecualikan 9 byte framing; untuk EXTENDED_DATA mengecualikan 13 byte. Paket kontrol dengan `data_head == 0` tetap dihitung seluruhnya.
+- Jalur partial read mengurangi byte yang benar-benar dikonsumsi; packet-ask dan channel-flush mengurangi payload yang tersisa saat node dihapus.
+- Baseline saat diagnostics diaktifkan tetap dihitung dari `data_len - data_head`, sehingga konsisten dengan accounting setelah enable.
+
+Regression test R68 mengekstrak helper C yang benar-benar dihasilkan template patch R43, mengompilasinya, lalu menguji lifecycle payload. Pemeriksaan terhadap source libssh2 hasil patch juga disiapkan untuk tahap SDK.
+
+Tidak ada perubahan pada jalur transfer, cipher, buffer, worker, atau prioritas RX/TX. R68 saat ini merupakan koreksi accounting diagnostik; validasi SDK dan QEMU belum dijalankan.
 
 ## Profil crypto final
 
@@ -93,4 +106,4 @@ Tujuan diagnostik adalah membedakan penumpukan pada socket upstream, ring buffer
 
 ## Status
 
-**R67-DIAG — SDK/QEMU validation pending.**
+**R68 — native packet-queue helper regression is prepared; SDK/QEMU validation pending.**

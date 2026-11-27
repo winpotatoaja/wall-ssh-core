@@ -81,17 +81,18 @@ _libssh2_diag_now_ns(void)
            (unsigned long long)ts.tv_nsec;
 }
 
+/* Queue byte counters track unread payload, excluding SSH framing headers. */
 static inline void
-_libssh2_diag_packet_enqueued(LIBSSH2_SESSION *session, size_t data_len)
+_libssh2_diag_packet_enqueued(LIBSSH2_SESSION *session, size_t payload_bytes)
 {
     if(!session->passwall_diag.enabled)
         return;
     session->passwall_diag.packet_queue_packets_current++;
     session->passwall_diag.packet_queue_bytes_current +=
-        (unsigned long long)data_len;
+        (unsigned long long)payload_bytes;
     session->passwall_diag.packet_queue_enqueued_packets++;
     session->passwall_diag.packet_queue_enqueued_bytes +=
-        (unsigned long long)data_len;
+        (unsigned long long)payload_bytes;
     if(session->passwall_diag.packet_queue_packets_current >
        session->passwall_diag.packet_queue_packets_peak)
         session->passwall_diag.packet_queue_packets_peak =
@@ -133,7 +134,8 @@ _libssh2_diag_packet_dequeued(LIBSSH2_SESSION *session, size_t remaining_bytes)
 
         session->packAdd_state = libssh2_NB_state_sent1;""",
 """        _libssh2_list_add(&session->packets, &packetp->node);
-        _libssh2_diag_packet_enqueued(session, datalen);
+        _libssh2_diag_packet_enqueued(
+            session, packetp->data_len - packetp->data_head);
 
         session->packAdd_state = libssh2_NB_state_sent1;""", "packet enqueue accounting")
     replace_once(packet,
