@@ -25,7 +25,9 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/epoll.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <linux/sockios.h>
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/types.h>
@@ -1533,13 +1535,27 @@ static uint64_t perf_now_ns(void) {
            (uint64_t)ts.tv_nsec;
 }
 
+static int perf_socket_queue_bytes(int fd, unsigned long request,
+                                    uint64_t *bytes_out)
+{
+    if (fd < 0 || !bytes_out) {
+        errno = EINVAL;
+        return -1;
+    }
+    int queued = 0;
+    if (ioctl(fd, request, &queued) < 0 || queued < 0) return -1;
+    *bytes_out = (uint64_t)(unsigned int)queued;
+    return 0;
+}
+
 static void perf_begin(long long now) {
     if (!g_log_perf) return;
     memset(&g_perf_stats, 0, sizeof(g_perf_stats));
     g_perf_window_start_ms = now;
 }
 
-static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
+static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session,
+                              const upstream_ctx_t *upstream) {
     if (!g_log_perf) return;
     if (g_perf_window_start_ms <= 0) {
         perf_begin(now);
@@ -1574,6 +1590,10 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
     unsigned int ssh_eof_c2s_pending = 0;
     size_t s2c_used_sum = 0, s2c_used_max = 0;
     size_t c2s_used_sum = 0, c2s_used_max = 0;
+    uint64_t socks_rxq_sum = 0, socks_rxq_max = 0;
+    uint64_t socks_txq_sum = 0, socks_txq_max = 0;
+    unsigned int socks_rxq_samples = 0, socks_txq_samples = 0;
+    unsigned int socks_rxq_fail = 0, socks_txq_fail = 0;
     for (const client_conn_t *c = g_clients; c; c = c->next) {
         if (c->state != ST_RELAY) continue;
         relay_clients++;
@@ -1595,6 +1615,45 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
                 s2c_epollout_missing++;
             }
         }
+        if (c->fd >= 0) {
+            uint64_t queued = 0;
+            if (perf_socket_queue_bytes(c->fd, SIOCINQ, &queued) == 0) {
+                socks_rxq_sum += queued;
+                if (queued > socks_rxq_max) socks_rxq_max = queued;
+                socks_rxq_samples++;
+            } else socks_rxq_fail++;
+            queued = 0;
+            if (perf_socket_queue_bytes(c->fd, SIOCOUTQ, &queued) == 0) {
+                socks_txq_sum += queued;
+                if (queued > socks_txq_max) socks_txq_max = queued;
+                socks_txq_samples++;
+            } else socks_txq_fail++;
+        }
+    }
+
+    uint64_t upstream_rxq = 0, upstream_txq = 0;
+    unsigned int upstream_rxq_valid = 0, upstream_txq_valid = 0;
+    uint32_t tls_rx_buffered = 0, tls_tx_buffered = 0, tls_queue_capacity = 0;
+    if (upstream && upstream->tls) {
+        tls_engine_queue_snapshot_t snapshot;
+        if (tls_engine_queue_snapshot(upstream->tls, &snapshot) == 0) {
+            tls_rx_buffered = snapshot.rx_buffered_bytes;
+            tls_tx_buffered = snapshot.tx_buffered_bytes;
+            tls_queue_capacity = snapshot.capacity_bytes;
+            if (snapshot.socket_rxq_valid) {
+                upstream_rxq = (uint64_t)(unsigned int)snapshot.socket_rxq_bytes;
+                upstream_rxq_valid = 1;
+            }
+            if (snapshot.socket_txq_valid) {
+                upstream_txq = (uint64_t)(unsigned int)snapshot.socket_txq_bytes;
+                upstream_txq_valid = 1;
+            }
+        }
+    } else if (upstream && upstream->fd >= 0) {
+        if (perf_socket_queue_bytes(upstream->fd, SIOCINQ, &upstream_rxq) == 0)
+            upstream_rxq_valid = 1;
+        if (perf_socket_queue_bytes(upstream->fd, SIOCOUTQ, &upstream_txq) == 0)
+            upstream_txq_valid = 1;
     }
 
     uint64_t s2c_internal_ns =
@@ -1692,6 +1751,22 @@ static void perf_log_interval(long long now, LIBSSH2_SESSION *diag_session) {
             (unsigned long long)libssh2_diag.packet_queue_bytes_peak,
             (unsigned long long)libssh2_diag.packet_queue_enqueued_packets,
             (unsigned long long)libssh2_diag.packet_queue_enqueued_bytes);
+
+    log_raw("[QUEUE] span_ms=%lld transport=%s "
+            "up_rxq_valid=%u up_rxq_bytes=%llu up_txq_valid=%u up_txq_bytes=%llu "
+            "tls_rx_buffered_bytes=%u tls_tx_buffered_bytes=%u tls_queue_capacity_bytes=%u "
+            "socks_clients=%u socks_rxq_samples=%u socks_rxq_bytes_sum=%llu socks_rxq_bytes_max=%llu socks_rxq_fail=%u "
+            "socks_txq_samples=%u socks_txq_bytes_sum=%llu socks_txq_bytes_max=%llu socks_txq_fail=%u "
+            "c2s_ring_bytes_sum=%zu c2s_ring_bytes_max=%zu s2c_ring_bytes_sum=%zu s2c_ring_bytes_max=%zu",
+            span_ms, upstream && upstream->tls ? "TLS" : "TCP",
+            upstream_rxq_valid, (unsigned long long)upstream_rxq,
+            upstream_txq_valid, (unsigned long long)upstream_txq,
+            tls_rx_buffered, tls_tx_buffered, tls_queue_capacity,
+            relay_clients, socks_rxq_samples,
+            (unsigned long long)socks_rxq_sum, (unsigned long long)socks_rxq_max, socks_rxq_fail,
+            socks_txq_samples, (unsigned long long)socks_txq_sum,
+            (unsigned long long)socks_txq_max, socks_txq_fail,
+            c2s_used_sum, c2s_used_max, s2c_used_sum, s2c_used_max);
 
     log_raw("[PERF-CHACHA] span_ms=%lld "
             "libssh2_chacha_workers_requested=%u libssh2_chacha_workers_active=%u "
@@ -5957,7 +6032,7 @@ static int core_worker_run(int argc, char **argv) {
         if (!uctx.upstream_epoll_detached)
             update_epoll(epfd, upstream_watch_fd, &g_upstream_tag, &upstream_ev, want_up);
 
-        perf_log_interval(now_ms(), session);
+        perf_log_interval(now_ms(), session, &uctx);
     }
 
     log_blue("Worker %d/%d stopping; accepted_total=%llu",
