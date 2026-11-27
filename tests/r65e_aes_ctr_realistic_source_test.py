@@ -77,8 +77,10 @@ def main():
               "memcpy(dst + pos, buffer + pos, amount);" in bench and
               "checksum64(cipher, total) != cipher_hash" in bench,
               "baseline reproduces packet-by-packet in-place EVP then memcpy; candidate checks immutable source"),
-        check("decrypt_impl" not in patcher and "EVP_CipherUpdate" not in patcher,
-              "R65-E is diagnostic/benchmark-only; production decrypt operation unchanged"),
+        check("decrypt_impl" not in patcher and
+              patcher.count("ret = EVP_CipherUpdate(evp_ctx, dest, &outl, source, (int)len);") == 2 and
+              "return (ret == 1 && outl == (int)len) ? 0 : 1;" in patcher,
+              "R65-E wraps the unchanged production EVP update with diagnostic timing only"),
     ]
     if not all(checks):
         return 1
