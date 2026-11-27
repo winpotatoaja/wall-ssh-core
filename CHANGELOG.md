@@ -15,7 +15,10 @@
 - MT7621 QEMU integration: **PASS**; guest installed `1.0.0-r68`, and runtime integration finished with `MIPS TEST STATUS: 0`.
 - IPK SHA-256: `cbcb8dfbcd5b1d2c686cd5d7c6370754323917194f8bac9616932fd721940563`.
 - R68-B packet lifecycle and snapshot/reset invariants: **PASS** on native regression, generated-source integration, OpenWrt SDK/IPK and MT7621 QEMU (Actions #935).
-- Start R68-C TLS Engine fairness telemetry: runtime-gated interval snapshots for poll wait/wakeup, simultaneous RX/TX readiness, RX/TX service calls/bytes/time, WANT states, cross-direction buffering, burst maxima and RX-ring pressure. The native duplex test checks non-zero activity and reset semantics; source and guest runtime verifiers check `[TLSFAIR]` wiring and records. Actions validation is pending; R68-D/E are not started.
+- R68-C TLS Engine fairness telemetry: **PASS** on native regression, source gate, OpenWrt 24.10.7 SDK/IPK, and MT7621 QEMU (Actions #949). Native duplex transfer measured 4 MiB each direction; snapshot reset and NULL-argument invariants passed; guest `[TLSFAIR]` runtime verifier passed and guest reported `MIPS TEST STATUS: 0`.
+- Runtime analysis: on a representative 4-client TLS/SNI download interval (1,098 ms), TLS RX processed 17,709,104 bytes and TX 3,312 bytes; RX/TX service times were 564,865/24,719 us. `poll_both=183`, `rx_both_ready=183`, `tx_both_ready=0` reflects the existing RX-first service order when both socket directions are ready; TX still progresses on subsequent writable events.
+- Queue evidence: in that interval the TLS RX ring was full at 262,144 bytes and upstream kernel Recv-Q was 301,351 bytes. A full-duplex interval recorded TLS RX/TX 1,544,704/8,936,060 bytes, S2C ring maximum 262,144 bytes, and SOCKS kernel Send-Q 2,556,032 bytes. This indicates queue pressure requiring age/TCP context; it is not by itself proof of loss or deadlock.
+- R68-C is diagnostic only, not throughput tuning. No Datapacket Internet bandwidth benchmark was run. R68-D should add S2C queue age plus `TCP_INFO`/`SIOCOUTQNSD` before any scheduling change; R68-E analysis remains pending.
 
 ---
 
