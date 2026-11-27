@@ -1,5 +1,20 @@
 # R68 — Changelog
 
+## 2026-11-27 — R68-E combined queue evidence and optimization gate
+
+- Synthesize R68-A/B/C/D packet accounting, TLS fairness, queue occupancy, S2C episode age, and TCP_INFO/SIOCOUTQNSD evidence.
+- R68-A/B confirms the libssh2 current queue-byte counter measures unread payload, excluding the 9-byte CHANNEL_DATA and 13-byte EXTENDED_DATA framing headers; lifecycle and reset invariants pass.
+- R68-C TLS/SNI multi-client download evidence: 17,709,104 RX bytes in 1,098 ms, RX service elapsed time 564,865 us, TLS RX ring full at 262,144 bytes, 100 full-ring observations, and upstream kernel Recv-Q 301,351 bytes.
+- Interpret `poll_both=183`, `rx_both_ready=183`, and `tx_both_ready=0` in light of the source's explicit RX-first loop. Successful RX service returns to the event loop before a TX attempt; TX still completed 90 calls / 3,312 bytes, including 90 calls while RX data was buffered. The counters do not prove persistent TX starvation.
+- A separate TCP interval recorded 409,600 bytes / 17 packets in the libssh2 unread-payload queue. Do not merge this TCP snapshot with the TLS download interval into one causal timeline.
+- R68-D controlled slow-receiver fixture: S2C ring 262,144 bytes; active non-empty episode 1,503,966 us (TCP) / 1,429,447 us (TLS); SOCKS Send-Q and SIOCOUTQNSD both 2,556,032 bytes; active TCP_INFO snapshots showed zero unacked segments and zero retransmissions.
+- Decision: these results identify ingress TLS handoff pressure in one QEMU download scenario and downstream client-socket backpressure in a separate deliberate slow-receiver fixture. They do not establish one production root cause, crypto saturation, packet loss, or permanent TLS TX starvation.
+- No runtime code, scheduler, cipher, buffer, worker topology, backpressure policy, or package version changed. Package remains `1.0.0-r68`.
+- Next evidence step before R69 optimization: reproduce the user's one-client download stall on physical MT7621 hardware with R68 and correlate `[PERF]`, `[TLSFAIR]`, `[QUEUE]`, `[S2CAGE]`, and `[TCPINFO]` by interval. If needed, R69 may add TLS RX ring and libssh2 packet-queue residence age, with MIPS 32-bit-safe cross-thread publication.
+- Documentation-only update; no SDK/QEMU Actions run was triggered.
+
+---
+
 ## 2026-11-27 — libssh2 packet queue payload accounting
 
 - Correct the R43 diagnostic enqueue hook to add `data_len - data_head`, so current and cumulative queue-byte counters measure unread payload rather than SSH framing headers.
