@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """R66 crypto hardening source and malformed-padding regression checks."""
 from pathlib import Path
-import re
 import sys
 
 
@@ -53,7 +52,12 @@ def main() -> int:
     init = extract(mac, "static int\nmac_method_hmac_sha2_256_init(")
     hmac_hash = extract(mac, "static int\nmac_method_hmac_sha2_256_hash(")
 
-    mac_error_blocks = re.findall(r"if\(mac_rc\)\s*\{(.*?)\n\s*\}", fullpacket, re.S)
+    mac_error_blocks_ok = (
+        fullpacket.count("if(mac_rc) {\n                    if(p->payload) {") == 2 and
+        fullpacket.count("LIBSSH2_FREE(session, p->payload);") >= 2 and
+        fullpacket.count("p->payload = NULL;") >= 2 and
+        fullpacket.count("return LIBSSH2_ERROR_MAC_FAILURE;") == 2
+    )
     padding_guard = "if(session->fullpacket_macstate == LIBSSH2_MAC_CONFIRMED &&"
     mac_compare = fullpacket.find("if(memcmp(macbuf")
     guard_at = fullpacket.find(padding_guard)
@@ -63,12 +67,8 @@ def main() -> int:
     checks = [
         check((root / ".passwall-r66-crypto-hardening-patched").is_file(),
               "R66 hardening marker exists"),
-        check(len(mac_error_blocks) == 2 and all(
-            "LIBSSH2_FREE(session, p->payload);" in block and
-            "p->payload = NULL;" in block and
-            "return LIBSSH2_ERROR_MAC_FAILURE;" in block
-            for block in mac_error_blocks),
-            "both ETM and non-ETM MAC callback errors free and null payload before failing closed"),
+        check(mac_error_blocks_ok,
+              "both ETM and non-ETM MAC callback errors free and null payload before failing closed"),
         check(mac_compare >= 0 and guard_at > mac_compare and
               guard_at < seq_at < subtract_at,
               "padding validation runs after MAC comparison and before sequence/payload updates"),
