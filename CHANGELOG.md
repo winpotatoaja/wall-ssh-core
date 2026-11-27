@@ -20,6 +20,15 @@
 - Queue evidence: in that interval the TLS RX ring was full at 262,144 bytes and upstream kernel Recv-Q was 301,351 bytes. A full-duplex interval recorded TLS RX/TX 1,544,704/8,936,060 bytes, S2C ring maximum 262,144 bytes, and SOCKS kernel Send-Q 2,556,032 bytes. This indicates queue pressure requiring age/TCP context; it is not by itself proof of loss or deadlock.
 - R68-C is diagnostic only, not throughput tuning. No Datapacket Internet bandwidth benchmark was run. R68-D should add S2C queue age plus `TCP_INFO`/`SIOCOUTQNSD` before any scheduling change; R68-E analysis remains pending.
 
+- R68-D: add per-client S2C non-empty episode age tracking on both channel-read enqueue paths and the single client flush path; report [S2CAGE] interval values in microseconds.
+- R68-D: add owner-thread TCP_INFO snapshots (RTT, RTT variance, unacked, congestion window, retransmissions) with returned-structure length validation.
+- R68-D: add compile-time guarded SIOCOUTQNSD not-yet-sent byte sampling with support/sample/failure fields, separate from the existing SIOCOUTQ total send queue.
+- Keep all R68-D instrumentation read-only and gated by -log-perf 1; no changes to socket send/receive behavior, backpressure, ring capacities, scheduling, cipher, or worker topology.
+- Native/source regression and runtime parsers for [S2CAGE] and [TCPINFO]: PASS. OpenWrt 24.10.7 SDK/IPK and MT7621 QEMU (Actions #951): PASS; guest MIPS TEST STATUS: 0.
+- Runtime evidence under the intentional QEMU backpressure fixture: S2C ring 262,144 bytes, active episode age 1,503,966 us (TCP) / 1,429,447 us (TLS), SOCKS Send-Q and SIOCOUTQNSD both 2,556,032 bytes. Corresponding TCP_INFO RTT was 9,623 us / 7,804 us; active snapshots showed zero unacked segments and zero retransmissions.
+- IPK passwall-ssh-core_1.0.0-r68_mipsel_24kc.ipk, SHA-256 60cc28ddb9943bac9d689a1b7a97bda58cb450b73a7d5ced77ea20cf76668956. QEMU validates the fixture only, not physical MT7621 hardware or Internet throughput.
+- R68-E remains pending: synthesize R68-A/B/C/D evidence before selecting any optimization.
+
 ---
 
 ## R67-DIAG — Historical baseline
